@@ -269,10 +269,41 @@ class TestTenureShortfall(unittest.TestCase):
         assert res is not None
         self.assertIn("currently in this location", res.value.lower())
 
-    def test_non_home_no_relocate_falls_back(self):
-        """No relocate option: here-claim still carries the (true) Yes."""
+    def test_non_home_no_relocate_reviews(self):
+        """No relocate option for a non-home job: the here-claim is a FALSE
+        statement of presence, not a Yes-carrier (run 539: claimed current
+        location for Delhi and Pune jobs from Bengaluru). Must fall through
+        to review, never resolve."""
         res = _engine().resolve(ScreeningQuestion(
             text="The location of this job will be Delhi. Are you okay with this?",
+            kind="radio",
+            options=["I am currently in this location and okay with it", "No"]))
+        self.assertIsNone(res)
+
+    def test_non_home_single_here_claim_reviews(self):
+        """Sole here-claim option for a foreign place: quarantine empties the
+        list and must NOT fall back to a bare Yes fit."""
+        res = _engine().resolve(ScreeningQuestion(
+            text="The location of this job will be Pune. Are you okay with this?",
+            kind="radio",
+            options=["I am currently in this location and okay with it"]))
+        self.assertIsNone(res)
+
+    def test_non_home_relocate_still_wins(self):
+        """The truthful relocate option still resolves when present."""
+        res = _engine().resolve(ScreeningQuestion(
+            text="The location of this job will be Delhi. Are you okay with this?",
+            kind="radio",
+            options=["I am currently in this location and okay with it",
+                     "I am willing to relocate to this location"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertIn("relocate", res.value.lower())
+
+    def test_home_here_claim_kept(self):
+        """Bengaluru job: the here-claim is true and still resolves."""
+        res = _engine().resolve(ScreeningQuestion(
+            text="The location of this job will be Bengaluru. Are you okay with this?",
             kind="radio",
             options=["I am currently in this location and okay with it", "No"]))
         self.assertIsNotNone(res)

@@ -25,7 +25,6 @@ class JobTiming:
     total_s: float = 0.0
 
     def summary_line(self, index: int) -> str:
-        short_title = (self.title[:35] + "...") if len(self.title) > 38 else self.title
         return (
             f"  Job {index:<2} ({self.job_id:<14}) "
             f"goto:{self.goto_s:4.1f}s | ready:{self.readiness_s:4.1f}s | btn:{self.btn_detect_s:4.1f}s | "

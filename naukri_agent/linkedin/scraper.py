@@ -22,7 +22,6 @@ from .analyzer import (
     ZERO_TECH_REJECT_REGEX,
     classify_role,
     extract_company,
-    extract_first_name,
     extract_poster,
     extract_recruiter_emails,
     has_profile_skill_overlap,

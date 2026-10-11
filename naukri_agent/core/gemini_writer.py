@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -476,13 +475,6 @@ class GeminiWriter:
         company_name = " ".join(str(company_name or "").splitlines()).strip()[:150]
         job_description = " ".join(str(job_description or "").splitlines()).strip()[:2500]
 
-        links_parts = []
-        if who.github:
-            links_parts.append(f"GitHub: {who.github}")
-        if who.linkedin:
-            links_parts.append(f"LinkedIn: {who.linkedin}")
-        links_block = "\n".join(links_parts)
-        links_line = f"\n{links_block}" if links_block else ""
         recipient_name = clean_first_name(recipient_name)
         if recipient_name:
             salutation = f"Hi {recipient_name},"

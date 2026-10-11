@@ -2276,6 +2276,127 @@ class TestCityAndBasedQuestions(unittest.TestCase):
         self.assertIsNone(r2)
 
 
+class TestCutshortTextareaAttribution(unittest.IsolatedAsyncioTestCase):
+    """Run 539: a compensation label from a NEIGHBORING question leaked into
+    a demo-testing box, pasting CTC boilerplate as its answer."""
+
+    def _bot(self):
+        from unittest.mock import MagicMock
+
+        from naukri_agent.core.answers import AnswerEngine
+        from naukri_agent.platforms.cutshort import CutshortChatbot
+
+        answers = AnswerEngine(
+            kb=[],
+            profile_answers={"current ctc": "4", "expected ctc": "7",
+                             "notice period": "0 days"},
+            strict=True,
+        )
+        return CutshortChatbot(MagicMock(), answers, max_questions=1)
+
+    def _form_page(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        ta = MagicMock()
+        ta.is_visible = AsyncMock(return_value=True)
+        ta.input_value = AsyncMock(return_value="")
+        ta.fill = AsyncMock()
+        ta.dispatch_event = AsyncMock()
+        ta.scroll_into_view_if_needed = AsyncMock()
+
+        label_first = MagicMock()
+        label_first.count = AsyncMock(return_value=1)
+        li_inner = MagicMock()
+        li_inner.count = AsyncMock(return_value=1)
+        li_inner.count = AsyncMock(return_value=1)
+
+        def _ta_locator(sel):
+            if sel == "xpath=ancestor::li[1]":
+                return MagicMock(first=li_inner)
+            if "label" in sel:
+                return MagicMock(first=label_first)
+            empty = MagicMock()
+            empty.count = AsyncMock(return_value=0)
+            empty.all = AsyncMock(return_value=[])
+            empty.first = MagicMock()
+            return empty
+
+        ta.locator = MagicMock(side_effect=_ta_locator)
+
+        form = MagicMock()
+        form.count = AsyncMock(return_value=1)
+        form.is_visible = AsyncMock(return_value=True)
+        form.first = form
+        form.locator = MagicMock(side_effect=lambda sel: MagicMock(
+            all=AsyncMock(return_value=[ta]),
+            count=AsyncMock(return_value=1),
+            first=ta,
+        ) if "textarea" in sel else MagicMock(
+            all=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+            first=MagicMock(),
+        ))
+
+        page = MagicMock()
+        page.locator = MagicMock(side_effect=lambda sel: form if sel.startswith("form:has") else MagicMock(
+            all=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+            first=MagicMock(),
+        ))
+        return page, ta, label_first, li_inner
+
+    async def _run_with_texts(self, label_text, li_text):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        page, ta, label_first, li_inner = self._form_page()
+
+        async def fake_safe_text(loc):
+            if loc is label_first:
+                return label_text
+            if loc is li_inner:
+                return li_text
+            return ""
+
+        bot = self._bot()
+        bot.page = page
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(side_effect=fake_safe_text)), \
+             patch.object(cs_mod, "human_pause", new=AsyncMock()), \
+             patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            await bot.run()
+        return bot, ta
+
+    async def test_neighbor_label_discarded_and_queued(self):
+        bot, ta = await self._run_with_texts(
+            "What compensation do you expect, with currency and pay period?",
+            "What can break in your demo? How did you test loading states?",
+        )
+        ta.fill.assert_not_called()
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertIn("demo", bot.unanswered[0]["text"].lower())
+        self.assertEqual(bot.unanswered[0]["kind"], "text")
+
+    async def test_own_label_still_fills(self):
+        bot, ta = await self._run_with_texts(
+            "What compensation do you expect, with currency and pay period?",
+            "What compensation do you expect, with currency and pay period? CTC range here.",
+        )
+        ta.fill.assert_called_once()
+        filled = ta.fill.await_args.args[0]
+        self.assertIn("Current CTC: 4", filled)
+        self.assertEqual(bot.unanswered, [])
+
+    def test_primary_topic_window(self):
+        from naukri_agent.platforms.cutshort import _primary_topic
+
+        self.assertTrue(_primary_topic("What compensation do you expect?", ["compensation"]))
+        self.assertTrue(_primary_topic("Phone number for contact", ["phone"]))
+        # Buried past the window: attribution noise, not a pay question.
+        self.assertFalse(_primary_topic("x" * 200 + " compensation", ["compensation"]))
+        self.assertFalse(_primary_topic("Describe your demo", ["ctc", "salary"]))
+
+
 class TestWalkinDetection(unittest.IsolatedAsyncioTestCase):
     """Run 498: a walk-in page recorded FAILED (no apply machinery found).
     Walk-ins must classify as clean SKIPPED under skip_walkin policy."""

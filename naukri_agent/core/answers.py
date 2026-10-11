@@ -15,7 +15,7 @@ Design decisions
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
 from ..core.models import ScreeningQuestion
@@ -146,6 +146,27 @@ def _contains_word(haystack: str, needle: str) -> bool:
     if not needle:
         return False
     return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
+
+
+_HOME_PLACE_MARKERS = (
+    "bengaluru", "bangalore", "remote", "work from home", "hybrid", "anywhere",
+)
+
+
+def _job_place_is_home(text: str) -> bool:
+    """True when a Cutshort-style location question names home/remote — or
+    names no place at all (fail-open: unknown never rejects).
+
+    Only False on an explicitly named elsewhere (Delhi, Pune, ...), which
+    is exactly when "I am currently in this location" would be a lie.
+    Expects normalised (lowercased) text. Pure.
+    """
+    m = re.search(
+        r"location of this job will be ([a-z0-9][a-z0-9\s().,&\-]{0,60})", text or ""
+    )
+    if not m or not m.group(1):
+        return True
+    return any(h in m.group(1) for h in _HOME_PLACE_MARKERS)
 
 
 def _format_years(value: float) -> str:
@@ -397,10 +418,29 @@ class AnswerEngine:
         ):
             return None
 
-        # Location-aware and multi-choice willingness handling
-        if question.options:
+        # Location-aware and multi-choice willingness handling.
+        # Presence-claim quarantine (run 539): for a known-foreign place,
+        # "I am currently in this location" asserts a falsehood no matter
+        # which matcher below reaches it — substring, polarity, fallback,
+        # or the final Yes-fit. Quarantine once up front so the question
+        # falls through to review instead of a lie. Willingness is not
+        # presence; a false here-claim is misrepresentation.
+        _opts = list(question.options or [])
+        if _opts and not _job_place_is_home(text):
+            _kept = [o for o in _opts if "currently in this location" not in o.lower()]
+            if len(_kept) != len(_opts):
+                log.info("answers.here_claim_quarantined", question=question.text[:100],
+                         dropped=len(_opts) - len(_kept))
+                _opts = _kept
+                if not _opts:
+                    # Nothing truthful left to pick: a bare "Yes" fit below
+                    # would still satisfy the run. Route to review instead.
+                    log.info("answers.here_claim_quarantine_emptied",
+                             question=question.text[:100])
+                    return None
+        if _opts:
             # 1. Check for preferred locations (Bengaluru, Remote, Hybrid)
-            for opt in question.options:
+            for opt in _opts:
                 if self._polarity(_normalise(opt)) is False:
                     continue
                 opt_low = opt.strip().lower()
@@ -408,23 +448,12 @@ class AnswerEngine:
                     return ResolvedAnswer(opt, "intent:willingness_location_preferred", "intent-map")
 
             # 2. Check for Cutshort-style affirmative presence / relocation options.
-            # Place-aware (run 480): "I am currently in this location" is only
-            # true for home (Bengaluru) or remote. For any other named place
-            # an explicit relocate option is strictly more truthful — take it
-            # first. With no relocate option present, the here-claim stays as
-            # the Yes-carrier (intent is correct: candidate IS relocate-willing).
-            m_place = re.search(
-                r"location of this job will be ([a-z0-9][a-z0-9\s().,&\-]{0,60})", text
-            )
-            place = m_place.group(1) if m_place else ""
-            is_home = (not place) or any(
-                h in place
-                for h in ("bengaluru", "bangalore", "remote", "work from home", "hybrid", "anywhere")
-            )
-            opt_lows = [(opt, opt.strip().lower()) for opt in question.options]
-            has_relocate_opt = any(
-                "can relocate" in low or "willing to relocate" in low for _, low in opt_lows
-            )
+            # Place-aware (run 480, hardened run 539): "I am currently in
+            # this location" is only true for home (Bengaluru) or remote —
+            # foreign instances are quarantined above, so anything reaching
+            # here is answerable. Explicit relocate options still win.
+            is_home = _job_place_is_home(text)
+            opt_lows = [(opt, opt.strip().lower()) for opt in _opts]
             if not is_home:
                 for opt, opt_low in opt_lows:
                     if self._polarity(_normalise(opt)) is False:
@@ -439,14 +468,12 @@ class AnswerEngine:
                 if any(neg in opt_low for neg in ("not", "unwilling", "cannot", "none", "neither", "no")):
                     continue
                 if "currently in this location" in opt_low or "okay with it" in opt_low:
-                    if not is_home and has_relocate_opt:
-                        continue
                     return ResolvedAnswer(opt, "intent:willingness_current_location", "intent-map")
                 if "can relocate" in opt_low or "willing to relocate" in opt_low:
                     return ResolvedAnswer(opt, "intent:willingness_can_relocate", "intent-map")
 
             # 3. Check for explicit affirmative tokens (Yes, Willing, Agree, Acceptable)
-            for opt in question.options:
+            for opt in _opts:
                 if self._polarity(_normalise(opt)) is True:
                     return ResolvedAnswer(opt, "intent:willingness_affirmative", "intent-map")
 
@@ -459,7 +486,7 @@ class AnswerEngine:
                 "not", "unwilling", "cannot", "can't", "cant", "none",
                 "neither", "no", "never", "nope", "false",
             }
-            for opt in question.options:
+            for opt in _opts:
                 if self._polarity(_normalise(opt)) is False:
                     continue
                 if _tokenise(opt) & _reloc_neg:
@@ -471,7 +498,9 @@ class AnswerEngine:
             # question routes to human review via the strict gate below.
 
         log.info("answers.willingness_intent", question=question.text[:100])
-        return self._fit_to_options("Yes", question, "intent:willingness", "intent-map")
+        return self._fit_to_options(
+            "Yes", replace(question, options=_opts) if _opts != list(question.options or []) else question,
+            "intent:willingness", "intent-map")
 
     def _best_entry(self, text: str) -> _Entry | None:
         question_tokens = _tokenise(text)

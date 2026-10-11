@@ -720,11 +720,39 @@ class Orchestrator:
                         try:
                             sweep_page = await browser.new_page()
                             m_platform.page = sweep_page
+                            sweep_unanswered: list = []
                             try:
-                                await m_platform.handle_messages()
+                                sweep_unanswered = await m_platform.handle_messages() or []
                             finally:
                                 if not sweep_page.is_closed():
                                     await sweep_page.close()
+                            # Persist sweep leftovers for training: Cutshort
+                            # questionnaires answered nothing for these (run
+                            # 539: Figma/React/workflow essays vanished). Cap
+                            # the burst; upsert dedupes repeats by
+                            # (profile, question).
+                            if sweep_unanswered and self.repo is not None:
+                                try:
+                                    sweep_profile = self.config.get_unified_cutshort_profile().name
+                                except Exception:
+                                    sweep_profile = ""
+                                if sweep_profile:
+                                    for _uq in (sweep_unanswered or [])[:15]:
+                                        try:
+                                            _qt = str(_uq.get("text", "")).strip()[:1000]
+                                            if not _qt:
+                                                continue
+                                            await self.repo.queue_question_for_review(
+                                                profile=sweep_profile,
+                                                question=_qt,
+                                                kind=str(_uq.get("kind", "unknown")),
+                                                options=list(_uq.get("options", []) or []),
+                                            )
+                                        except Exception:
+                                            continue
+                                    log.info("run.questionnaire_sweep.queued",
+                                             platform=m_platform.platform_name,
+                                             count=min(len(sweep_unanswered), 15))
                         except Exception as exc:
                             log.warning(
                                 "run.questionnaire_sweep.platform_failed",

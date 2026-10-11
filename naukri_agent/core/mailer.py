@@ -119,7 +119,6 @@ class ColdEmailer:
             name = (AgentConfig.load().applicant_name or "").strip()
 
         if ml_track:
-            stack = "Python, FastAPI, PyTorch, and ML pipelines"
             proof = (
                 f"Over the past {who.experience_label}, I have focused on building and deploying production AI systems, "
                 "scalable Python backends, and cloud-based ML pipelines."
@@ -127,7 +126,6 @@ class ColdEmailer:
             skills = "Python, FastAPI, PyTorch, LangChain, Vector Search, AWS, Docker"
             domain_label = "Machine Learning & AI Engineering"
         elif ai_track:
-            stack = "Python, FastAPI, LLMs and RAG pipelines"
             proof = (
                 f"Over the past {who.experience_label}, I have focused on production GenAI "
                 "workflows—building low-latency FastAPI services, RAG retrieval pipelines, and scalable cloud microservices."
@@ -135,7 +133,6 @@ class ColdEmailer:
             skills = "Python, FastAPI, LangChain, RAG, PyTorch, AWS, PostgreSQL"
             domain_label = "AI & Backend Development"
         else:
-            stack = "React, Node.js and TypeScript"
             proof = (
                 f"Over the past {who.experience_label}, I have worked across the full stack—building "
                 "responsive React frontends, robust Node.js/TypeScript backend services, and scalable REST APIs backed by PostgreSQL."
@@ -251,7 +248,6 @@ Best regards,
             name = (config.applicant_name or "").strip()
 
             clean_role = " ".join(str(role_name or "").splitlines()).strip()[:150]
-            clean_company = " ".join(str(company_name or "").splitlines()).strip()[:150]
             clean_target = str(target_email or "").strip()
             if "@" not in clean_target or len(str(target_email or "").splitlines()) > 1:
                 log.warning("mailer.invalid_recipient", to=clean_target[:60])

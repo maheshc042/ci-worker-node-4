@@ -65,7 +65,6 @@ CUTSHORT_UNIFIED_SKILLS: list[str | tuple[str, str]] = list(
     dict.fromkeys(CUTSHORT_AI_SKILLS + CUTSHORT_FULLSTACK_SKILLS)
 )
 
-
 async def _safe_click(loc) -> bool:
     """Click-or-JS-click without raising: questionnaire controls are best
     effort; callers decide what a missed click means."""
@@ -86,6 +85,17 @@ async def _safe_click(loc) -> bool:
         return False
 
 
+def _primary_topic(q_label: str, keywords: list[str], window: int = 120) -> bool:
+    """True when a money/identity keyword leads the label (pure).
+
+    Labels lead with their topic; container dumps bury it. A compensation
+    keyword at position 400 of a 600-char dump is attribution noise, not a
+    pay question (run 539: CTC boilerplate pasted into a demo-testing box).
+    """
+    head = (q_label or "")[:window].lower()
+    return any(k in head for k in keywords)
+
+
 class CutshortChatbot:
     """Handles recruiter screening questions and quick-reply options in Cutshort messages."""
 
@@ -93,6 +103,21 @@ class CutshortChatbot:
         self.page = page
         self.answers = answers
         self.max_questions = max_questions
+        # Questions this run could not answer (populated during run(),
+        # drained by the caller into the review queue). Bounded: same
+        # question re-queues only bump times_seen via upsert.
+        self.unanswered: list[dict] = []
+
+    def _queue_unanswered(self, text: str, kind: str, options: list) -> None:
+        """Record an unanswerable question for human review (bounded)."""
+        text = (text or "").strip()[:500]
+        if not text:
+            return
+        if len(self.unanswered) >= 20:
+            return
+        if any(u.get("text") == text for u in self.unanswered):
+            return
+        self.unanswered.append({"text": text, "kind": kind, "options": list(options or [])[:12]})
 
     def _match_chip(self, chip_text: str, resolved_val: str) -> bool:
         """Fuzzy matches a quick-reply chip against the resolved answer."""
@@ -187,6 +212,7 @@ class CutshortChatbot:
         answered = 0
         last_question = ""
         stagnant_rounds = 0
+        self.unanswered = []
 
         for _ in range(self.max_questions):
             await human_pause(1200, 2000)
@@ -221,6 +247,28 @@ class CutshortChatbot:
                         except Exception:
                             pass
 
+                    # Label-attribution guard (run 539: a compensation label
+                    # from a NEIGHBORING question leaked into the demo-testing
+                    # box, pasting CTC boilerplate as its answer). A label
+                    # taken from outside the textarea's own list item is
+                    # discarded; the container text becomes the question so the
+                    # item still trains via review instead of vanishing. Money
+                    # branches stay off for unattributed text (a container dump
+                    # may name other questions' pay bands).
+                    _label_trusted = True
+                    if q_label:
+                        try:
+                            _li = ta.locator("xpath=ancestor::li[1]").first
+                            if await _li.count() > 0:
+                                _li_text = (await safe_text(_li)).strip()
+                                if q_label[:40] not in _li_text:
+                                    log.info("cutshort.chatbot.label_misattributed",
+                                             question=q_label[:80])
+                                    q_label = _li_text[:500]
+                                    _label_trusted = False
+                        except Exception:
+                            pass
+
                     q_label_low = q_label.lower()
 
                     if any(k in q_label_low for k in ["hardest", "challenging", "complex problem", "technical problem", "problems you have worked on"]):
@@ -233,11 +281,11 @@ class CutshortChatbot:
                         # hard-coded skill/tenure claim.
                         _stren = self.answers.resolve(ScreeningQuestion(text=q_label[:200], kind="text"))
                         ta_ans = str(_stren.value) if _stren and _stren.value else ""
-                    elif any(k in q_label_low for k in ["phone", "mobile", "contact number", "contact no", "whatsapp", "call you"]):
+                    elif _primary_topic(q_label, ["phone", "mobile", "contact number", "contact no", "whatsapp", "call you"]) and _label_trusted:
                         ta_ans = (AgentConfig.load().applicant_phone or "").strip()
-                    elif any(k in q_label_low for k in ["email", "mail id", "email address", "mail address"]):
+                    elif _primary_topic(q_label, ["email", "mail id", "email address", "mail address"]) and _label_trusted:
                         ta_ans = (AgentConfig.load().applicant_email or "").strip()
-                    elif any(k in q_label_low for k in ["ctc", "salary", "fixed", "variable", "in hand", "in-hand", "annual ctc", "compensation"]):
+                    elif _primary_topic(q_label, ["ctc", "salary", "fixed", "variable", "in hand", "in-hand", "annual ctc", "compensation"]) and _label_trusted:
                         ctc_parts = []
                         for q_text, label in (("current ctc", "Current CTC"), ("expected ctc", "Expected CTC"), ("notice period", "Notice Period")):
                             part = self.answers.resolve(ScreeningQuestion(text=q_text, kind="text"))
@@ -249,10 +297,10 @@ class CutshortChatbot:
                         # hard-coded tenure claim.
                         _dock = self.answers.resolve(ScreeningQuestion(text=q_label[:200], kind="text"))
                         ta_ans = str(_dock.value) if _dock and _dock.value else ""
-                    elif any(k in q_label_low for k in ["notice", "how soon", "when can you join", "joining date", "availability"]):
+                    elif _primary_topic(q_label, ["notice", "how soon", "when can you join", "joining date", "availability"]) and _label_trusted:
                         notice_res = self.answers.resolve(ScreeningQuestion(text="notice period", kind="text"))
                         ta_ans = notice_res.value if notice_res and notice_res.value else ""
-                    elif any(k in q_label_low for k in ["location", "relocate", "relocation", "bangalore", "bengaluru", "mumbai", "hyderabad"]):
+                    elif _primary_topic(q_label, ["location", "relocate", "relocation", "bangalore", "bengaluru", "mumbai", "hyderabad"]) and _label_trusted:
                         loc_res = self.answers.resolve(ScreeningQuestion(text=q_label[:200], kind="text"))
                         ta_ans = loc_res.value if loc_res and loc_res.value else ""
                     else:
@@ -264,8 +312,10 @@ class CutshortChatbot:
 
                     if not (ta_ans or "").strip():
                         # Config holds no answer for this question: fail closed
-                        # instead of submitting a guessed or literal response.
+                        # instead of submitting a guessed or literal response,
+                        # and record it for review so it trains once.
                         log.debug("cutshort.chatbot.no_config_answer", question=q_label[:60])
+                        self._queue_unanswered(q_label, "text", [])
                         continue
                     try:
                         await ta.scroll_into_view_if_needed()
@@ -386,9 +436,11 @@ class CutshortChatbot:
                     resolved = self.answers.resolve(ScreeningQuestion(text=q_text, kind="radio", options=opt_texts))
                     target_val = resolved.value if resolved else ""
 
+                    matched_opt = False
                     for opt in options:
                         opt_text = (await safe_text(opt)).strip()
                         if target_val and (self._match_chip(opt_text, target_val) or opt_text.lower() == target_val.lower()):
+                            matched_opt = True
                             try:
                                 await opt.scroll_into_view_if_needed()
                                 await opt.click(force=True, timeout=1000)
@@ -401,6 +453,10 @@ class CutshortChatbot:
                             await human_pause(200, 400)
                             answered += 1
                             break
+                    if not matched_opt:
+                        # No option matched (or nothing resolved): record for
+                        # review instead of silently skipping every run.
+                        self._queue_unanswered(q_text, "radio", opt_texts)
 
             # 1C. Audio Questionnaire Challenge (e.g. "Tell us about a difficult project... Pick from 1 saved audios")
             audio_btn = await first_visible(
@@ -1603,6 +1659,21 @@ class CutshortPlatform(BaseJobPlatform):
         if company_match:
             actual_company = company_match.group(1).strip()
 
+        # Clean formal entity suffixes (Private Limited, Pvt Ltd, LLP, Inc, etc.)
+        clean_company = re.sub(
+            r",?\s*(?:Private\s+Limited|Pvt\.?\s*Ltd\.?|LLP|Inc\.?|L\.?L\.?C\.?|Corp\.?|Corporation)\b.*$",
+            "",
+            actual_company,
+            flags=re.IGNORECASE,
+        ).strip() or actual_company
+        # Shorter conversational company name for body/closing
+        short_company = re.sub(
+            r"\s+(?:Careers|Technologies|Solutions|Services|Labs|Software|Consulting)$",
+            "",
+            clean_company,
+            flags=re.IGNORECASE,
+        ).strip() or clean_company
+
         # Dynamic tech stack, specialty, and achievement tailored to the role
         text_for_skills = f"{actual_title} {modal_text} {job.description}".lower()
         if any(k in text_for_skills for k in ["ai", "llm", "genai", "gpt", "machine learning", "rag", "agent", "prompt"]):
@@ -1617,14 +1688,22 @@ class CutshortPlatform(BaseJobPlatform):
             key_tech_stack = "Docker, Kubernetes, AWS, and CI/CD pipelines"
             core_specialty = "scalable cloud infrastructure and containerized deployments"
             specific_achievement = "automated zero-downtime deployment workflows"
-        elif any(k in text_for_skills for k in ["frontend", "fullstack", "full stack", "react", "next", "node"]):
-            key_tech_stack = "React, Node.js, TypeScript, and Python"
+        elif "python" in text_for_skills and any(k in text_for_skills for k in ["fullstack", "full stack"]):
+            key_tech_stack = "Python (FastAPI/Django), React, and TypeScript"
             core_specialty = "scalable full-stack web applications and robust microservices"
             specific_achievement = "high-performance full-stack architectures with a 60% API latency reduction"
         elif any(k in text_for_skills for k in ["backend", "python", "fastapi", "django"]):
             key_tech_stack = "Python, FastAPI, Django, and PostgreSQL"
             core_specialty = "high-concurrency backend services and database architectures"
             specific_achievement = "scalable, low-latency microservices with <150ms p95 response times"
+        elif any(k in text_for_skills for k in ["frontend", "react", "next"]):
+            key_tech_stack = "React, Next.js, and TypeScript"
+            core_specialty = "responsive web applications and performant frontend architectures"
+            specific_achievement = "high-performance web apps with clean component architectures"
+        elif any(k in text_for_skills for k in ["fullstack", "full stack", "node"]):
+            key_tech_stack = "React, Node.js, TypeScript, and Python"
+            core_specialty = "scalable full-stack web applications and robust microservices"
+            specific_achievement = "high-performance full-stack architectures with a 60% API latency reduction"
         else:
             key_tech_stack = "Python, Node.js, React, and modern web architectures"
             core_specialty = "scalable backend and full-stack software systems"
@@ -1632,7 +1711,15 @@ class CutshortPlatform(BaseJobPlatform):
 
         from ..core.gemini_writer import applicant_snapshot
         who = applicant_snapshot()
-        applicant_name = who.name if who.name != "a Software Engineer" else (AgentConfig.load().applicant_name or "").strip()
+        cfg = AgentConfig.load()
+        applicant_name = who.name if who.name != "a Software Engineer" else (cfg.applicant_name or "").strip()
+
+        links = []
+        if cfg.applicant_github:
+            links.append(cfg.applicant_github)
+        if cfg.applicant_linkedin:
+            links.append(cfg.applicant_linkedin)
+        links_block = f"\n{' | '.join(links)}" if links else ""
 
         modal_scope = modal or self.page
         textarea = await first_visible(
@@ -1656,12 +1743,12 @@ class CutshortPlatform(BaseJobPlatform):
         if textarea:
             pitch = (
                 f"Hi {recruiter_name},\n\n"
-                f"I noticed the {actual_title} opening at {actual_company} and wanted to reach out directly.\n\n"
+                f"I noticed the {actual_title} opening at {clean_company} and wanted to reach out directly.\n\n"
                 f"With {who.experience_label} of hands-on experience in {key_tech_stack}, I specialize in building {core_specialty}—recently delivering {specific_achievement}.\n\n"
-                f"My technical stack aligns closely with your requirements, and I am available to join immediately.\n\n"
-                f"I'd be glad to discuss how my background can support {actual_company}'s engineering goals—let me know when you have a few minutes to connect.\n\n"
+                f"My technical stack aligns closely with your requirements, and I am available to join immediately (0-day notice).\n\n"
+                f"I'd be glad to discuss how my background can support {short_company}'s engineering goals—let me know when you have a few minutes to connect.\n\n"
                 f"Best,\n"
-                f"{applicant_name}"
+                f"{applicant_name}{links_block}"
             )
             try:
                 await textarea.scroll_into_view_if_needed(timeout=1000)
@@ -1900,7 +1987,7 @@ class CutshortPlatform(BaseJobPlatform):
         "button:has-text('Close')",
     ]
 
-    async def handle_messages(self) -> None:
+    async def handle_messages(self) -> list[dict]:
         """
         Questionnaire sweep — runs once after ALL applications are sent.
 
@@ -1910,10 +1997,14 @@ class CutshortPlatform(BaseJobPlatform):
         with rows inside <div role="tabpanel" id="tabpanel-awaiting">. The
         default/unread stages render "( '.' ) No conversations here." even when
         questionnaires are pending, which is why earlier sweeps found nothing.
+
+        Returns unanswered questions (each {text, kind, options}) for the
+        review queue; the orchestrator persists them under the sweep profile.
         """
         self.require_mutation("messages.answer_flow")
         log.info("cutshort.messages.start")
         processed: set[str] = set()
+        unanswered: list[dict] = []
 
         # Source A (primary): Pending / awaiting stage
         try:
@@ -1923,7 +2014,7 @@ class CutshortPlatform(BaseJobPlatform):
             )
             await human_pause(2500, 4000)
             await self._open_awaiting_tab()
-            await self._process_questionnaire_rows(processed)
+            unanswered.extend(await self._process_questionnaire_rows(processed))
         except Exception as exc:
             log.error("cutshort.messages.awaiting_error", error=str(exc)[:150])
 
@@ -1934,7 +2025,7 @@ class CutshortPlatform(BaseJobPlatform):
                 "https://cutshort.io/profile/candidate-conversations", wait_until="domcontentloaded"
             )
             await human_pause(2500, 4000)
-            await self._process_inbox_threads(processed)
+            unanswered.extend(await self._process_inbox_threads(processed))
         except Exception as exc:
             log.error("cutshort.messages.inbox_error", error=str(exc)[:150])
 
@@ -1944,7 +2035,9 @@ class CutshortPlatform(BaseJobPlatform):
         except Exception:
             pass
 
-        log.info("cutshort.messages.done", processed=len(processed))
+        log.info("cutshort.messages.done", processed=len(processed),
+                 unanswered=len(unanswered))
+        return unanswered
 
     async def _open_awaiting_tab(self) -> None:
         """Focuses the Pending tab if it isn't already active."""
@@ -1958,8 +2051,11 @@ class CutshortPlatform(BaseJobPlatform):
         except Exception as exc:
             log.debug("cutshort.messages.tab_click_failed", error=str(exc))
 
-    async def _answer_current_chat(self, key: str, index: int) -> None:
-        """Dumps the opened thread and runs the chatbot against it."""
+    async def _answer_current_chat(self, key: str, index: int) -> list[dict]:
+        """Dumps the opened thread and runs the chatbot against it.
+
+        Returns unanswered questions for the review queue (possibly empty).
+        """
         try:
             dump_path = self.artifacts.dir / f"cutshort-thread-{index}.html"
             dump_path.write_text(await self.page.content(), encoding="utf-8")
@@ -1972,6 +2068,7 @@ class CutshortPlatform(BaseJobPlatform):
             log.info("cutshort.messages.success", thread=key[:60], answered=answered)
         elif not success:
             log.debug("cutshort.messages.no_action_needed", thread=key[:60], reason=(error_msg or "")[:100])
+        return list(chatbot.unanswered)
 
     async def _close_chat_overlay(self) -> None:
         """Closes an opened chat panel/overlay, or escapes back to the list."""
@@ -2018,9 +2115,10 @@ class CutshortPlatform(BaseJobPlatform):
             return True
         return False
 
-    async def _process_questionnaire_rows(self, processed: set[str]) -> None:
+    async def _process_questionnaire_rows(self, processed: set[str]) -> list[dict]:
         """Opens every fresh [Questionnaire] row under the Pending (#tabpanel-awaiting) tab."""
         cfg = AgentConfig.load()
+        unanswered: list[dict] = []
         max_rounds = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
 
         for _round in range(max_rounds):  # Dynamic cap matching Cutshort limit
@@ -2087,7 +2185,11 @@ class CutshortPlatform(BaseJobPlatform):
             try:
                 await target.click()
                 await human_pause(2000, 3500)
-                await self._answer_current_chat(key, len(processed))
+                for _uq in await self._answer_current_chat(key, len(processed)):
+                    if _uq.get("text") and all(
+                        _uq.get("text") != _seen.get("text") for _seen in unanswered
+                    ):
+                        unanswered.append(_uq)
             except Exception as exc:
                 log.error("cutshort.messages.row_error", item=key[:60], error=str(exc)[:120])
             finally:
@@ -2101,10 +2203,12 @@ class CutshortPlatform(BaseJobPlatform):
                         break
                 else:
                     await self._close_chat_overlay()
+        return unanswered
 
-    async def _process_inbox_threads(self, processed: set[str]) -> None:
+    async def _process_inbox_threads(self, processed: set[str]) -> list[dict]:
         """Opens every fresh conversation thread in the (unfiltered) inbox list."""
         cfg = AgentConfig.load()
+        unanswered: list[dict] = []
         max_rounds = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
 
         thread_selector = (
@@ -2144,7 +2248,11 @@ class CutshortPlatform(BaseJobPlatform):
             try:
                 await target.click()
                 await human_pause(2000, 3500)
-                await self._answer_current_chat(key, len(processed))
+                for _uq in await self._answer_current_chat(key, len(processed)):
+                    if _uq.get("text") and all(
+                        _uq.get("text") != _seen.get("text") for _seen in unanswered
+                    ):
+                        unanswered.append(_uq)
             except Exception as exc:
                 log.error("cutshort.messages.thread_error", thread=key[:60], error=str(exc)[:120])
             finally:
@@ -2156,3 +2264,4 @@ class CutshortPlatform(BaseJobPlatform):
                         break
                 else:
                     await self._close_chat_overlay()
+        return unanswered
