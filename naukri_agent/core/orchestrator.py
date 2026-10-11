@@ -1235,6 +1235,7 @@ class Orchestrator:
             eligible=s.eligible_count,
             selected=s.selected_count,
             dry_run=self.dry_run,
+            reasons=dict(s.rejection_reasons),
         )
         print(report_text)
 

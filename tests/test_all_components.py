@@ -55,6 +55,38 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
+    def test_ai_profile_rejects_analyst_and_support_titles(self):
+        """Run 543 applied to a Data Analyst as AI/Python: analyst and
+        support families must not be in the AI profile's include list."""
+        engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        for title in [
+            "Data Analyst",
+            "Technical Support Engineer",
+            "Product Support Executive",
+            "Customer Success Engineer",
+        ]:
+            job = Job(
+                job_id=f"test-ai-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            decision = engine.evaluate_card(job)
+            self.assertFalse(decision.passed, f"{title!r} must not pass the AI profile")
+        for title in ["AI Engineer", "Python Developer", "Data Engineer"]:
+            job = Job(
+                job_id=f"test-ai-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            decision = engine.evaluate_card(job)
+            self.assertTrue(decision.passed, f"{title!r} must still pass: {decision.reason}")
+
     def test_disjoint_specialization_blocks(self):
         """Verify that strictly non-relevant roles remain blocked."""
         engine = FilterEngine(self.fs_profile.filters_for("recommended"))
