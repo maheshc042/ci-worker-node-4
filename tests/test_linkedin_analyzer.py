@@ -420,8 +420,6 @@ class TestHumanScroll(unittest.IsolatedAsyncioTestCase):
     async def _scroll(self, page, **kw):
         from unittest.mock import AsyncMock, patch
 
-        import asyncio as _aio
-
         from naukri_agent.linkedin import scraper as sc_mod
 
         kw.setdefault("wall_check", None)
@@ -483,9 +481,7 @@ class TestHumanScroll(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["exit"], "dead")
 
     async def test_jitter_bounds(self):
-        from unittest.mock import AsyncMock, patch
-
-        import asyncio as _aio
+        from unittest.mock import patch
 
         from naukri_agent.linkedin import scraper as sc_mod
 

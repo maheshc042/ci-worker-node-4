@@ -475,7 +475,68 @@ class LinkedInPlatform(BaseJobPlatform):
             )
         return modal
 
+    _FALLBACK_ADVANCE_LABELS = (
+        "continue", "submit", "done", "finish", "send", "confirm",
+        "apply", "save", "ok", "next", "review",
+    )
+    _FALLBACK_EXCLUDE_LABELS = (
+        "dismiss", "close", "back", "cancel", "exit", "later",
+        "save and exit", "save & exit",
+    )
+
     @staticmethod
+    async def _modal_button_labels(modal, limit: int = 12) -> list[str]:
+        """Visible button labels inside the modal for diagnostics. Never raises."""
+        try:
+            out: list[str] = []
+            for btn in await modal.locator("button").all():
+                try:
+                    if not await btn.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    text = ((await btn.inner_text(timeout=1000)) or "").strip()
+                except Exception:
+                    continue
+                if text and text not in out:
+                    out.append(text)
+                if len(out) >= limit:
+                    break
+            return out
+        except Exception:
+            return []
+
+    @classmethod
+    async def _fallback_action_button(cls, modal):
+        """Broader advancer sweep when the standard Next/Review lookup misses.
+
+        Run 543: Easy Apply steps died with inputs:0 and an empty modal while
+        the advancer wore a non-standard label. Only exact allowlist labels
+        qualify, and anything reading as abandon/navigation (Back, Dismiss,
+        Save and exit...) is excluded. Modal-scoped, first visible match.
+        Never raises; None when nothing safe qualifies.
+        """
+        try:
+            for btn in await modal.locator("button").all():
+                try:
+                    if not await btn.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    text = ((await btn.inner_text(timeout=1000)) or "").strip()
+                except Exception:
+                    continue
+                low = text.lower()
+                if not low or any(x in low for x in cls._FALLBACK_EXCLUDE_LABELS):
+                    continue
+                if low in cls._FALLBACK_ADVANCE_LABELS:
+                    return btn
+        except Exception:
+            pass
+        return None
+
     async def _extract_blocked_question(modal, form_text: str) -> dict | None:
         """Build a review-queue question from a stuck Easy Apply step.
 
@@ -1367,6 +1428,14 @@ class LinkedInPlatform(BaseJobPlatform):
             # Check if modal advanced (inspecting actual input counts and modal body text)
             form_text = (await safe_text(modal)).strip()
             input_count = await modal.locator("input, select, textarea").count()
+            if input_count == 0 and not form_text:
+                # Unloaded step (loading skeleton / slow render, run 543):
+                # one grace window before it starts consuming stuck budget.
+                await human_pause(2500, 3500)
+                form_text = (await safe_text(modal)).strip()
+                input_count = await modal.locator("input, select, textarea").count()
+                if input_count > 0 or form_text:
+                    log.info("linkedin.apply.step_empty_reloaded", step=step)
             step_sig = f"inputs:{input_count}::{form_text[:250]}"
 
             if step > 1 and step_sig == prev_step_signature:
@@ -1377,7 +1446,8 @@ class LinkedInPlatform(BaseJobPlatform):
                 if stuck_count >= 3:
                     error_el = await first_visible(modal, [".artdeco-inline-feedback--error", "p.artdeco-inline-feedback", "[data-test-form-builder-error]"], timeout_ms=800)
                     err_txt = (await safe_text(error_el)).strip() if error_el else "Required field unfilled"
-                    log.warning("linkedin.apply.step_stuck", step=step, error=err_txt)
+                    btn_labels = await self._modal_button_labels(modal)
+                    log.warning("linkedin.apply.step_stuck", step=step, error=err_txt, buttons=btn_labels)
                     await self._dismiss_modal()
                     _record_timing()
                     # Convert to review instead of a dead end: the extracted
@@ -1386,7 +1456,8 @@ class LinkedInPlatform(BaseJobPlatform):
                     # application. Falls back to FAILED when unextractable.
                     blocked_q = await self._extract_blocked_question(modal, form_text)
                     if blocked_q is None:
-                        return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}")
+                        btn_detail = f" buttons={btn_labels}" if btn_labels else ""
+                        return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}{btn_detail}")
                     return ApplyOutcome(
                         status=ApplicationStatus.NEEDS_REVIEW,
                         reason=SkipReason.UNANSWERED_QUESTION,
@@ -1427,6 +1498,18 @@ class LinkedInPlatform(BaseJobPlatform):
                     except Exception:
                         pass
             else:
+                # Standard Next/Review lookup missed: try the broader
+                # modal-scoped sweep once (label drift, run 543) instead of
+                # declaring the flow stuck.
+                fallback_btn = await self._fallback_action_button(modal)
+                if fallback_btn is not None:
+                    try:
+                        log.info("linkedin.apply.fallback_advance", step=step)
+                        await fallback_btn.click(force=True, timeout=3000)
+                        await human_pause(1500, 2500)
+                        continue
+                    except Exception as exc:
+                        log.warning("linkedin.apply.fallback_click_failed", error=str(exc))
                 break
 
         await self._dismiss_modal()

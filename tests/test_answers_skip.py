@@ -300,6 +300,32 @@ class TestTenureShortfall(unittest.TestCase):
         assert res is not None
         self.assertIn("relocate", res.value.lower())
 
+    def test_non_home_negated_presence_relocate_resolves(self):
+        """Review #57/#58 verbatim: "I am not in this location but can
+        relocate" — its "not" negates presence, not willingness. The
+        polarity/negation gates must not screen out the truthful answer."""
+        for place in ("Delhi", "Pune"):
+            res = _engine().resolve(ScreeningQuestion(
+                text=f"The location of this job will be {place}. Are you okay with this?",
+                kind="radio",
+                options=["I am currently in this location and okay with it",
+                         "I am not in this location but can relocate",
+                         "I am not okay with this location"]))
+            self.assertIsNotNone(res)
+            assert res is not None
+            self.assertIn("can relocate", res.value.lower())
+
+    def test_non_home_relocate_refusal_reviews(self):
+        """"I am not willing to relocate" is a genuine refusal: the
+        carve-out must not match it, and nothing else may either."""
+        res = _engine().resolve(ScreeningQuestion(
+            text="The location of this job will be Delhi. Are you okay with this?",
+            kind="radio",
+            options=["I am currently in this location and okay with it",
+                     "I am not willing to relocate",
+                     "I am not okay with this location"]))
+        self.assertIsNone(res)
+
     def test_home_here_claim_kept(self):
         """Bengaluru job: the here-claim is true and still resolves."""
         res = _engine().resolve(ScreeningQuestion(

@@ -456,8 +456,6 @@ class TestHiringCafeUnifiedConfiguration(unittest.TestCase):
     def test_search_terms_persona_balanced(self):
         """Interleaved title keywords keep the platform's [:8] search-term
         slice balanced across AI and Full-Stack personas."""
-        from naukri_agent.platforms.hiringcafe import HiringCafePlatform
-
         terms = self.unified_profile.title_keywords[:8]
         ai_markers = ("ai", "python", "llm", "genai", "ml")
         fs_markers = ("full stack", "fullstack", "react", "node", "mern", "sdet", "qa")
@@ -663,7 +661,6 @@ class TestGeminiBreaker(unittest.TestCase):
 
     def test_success_resets_503_count(self):
         """A success between failures must reset the consecutive count."""
-        import io
         import json
         from unittest.mock import patch
 
@@ -769,7 +766,6 @@ class TestMailerTrackRouting(unittest.TestCase):
         self.assertNotIn("Acme", build(role="AI Engineer", name="Mahesh Chitakoti"))
 
     def test_prompt_has_verified_inventory(self):
-        import io
         import json
         from unittest.mock import patch
 
@@ -908,7 +904,6 @@ class TestMailerTrackRouting(unittest.TestCase):
 
 class TestGeminiPrompt(unittest.TestCase):
     def _prompt_text(self, role_name: str = "AI Engineer", **kwargs):
-        import io
         import json
         from unittest.mock import patch
 
@@ -1459,7 +1454,6 @@ class TestResumeGate(unittest.IsolatedAsyncioTestCase):
 
     def _orc(self, account):
         from types import SimpleNamespace
-        from unittest.mock import MagicMock
 
         from naukri_agent.core.orchestrator import Orchestrator
 
@@ -1528,8 +1522,6 @@ class TestLinkedInSuitabilityTokens(unittest.TestCase):
     from track_keywords. 52 recovered; bare generics must stay out."""
 
     def _check(self, title, location="Bengaluru, India"):
-        from unittest.mock import MagicMock
-
         from naukri_agent.core.models import Job
         from naukri_agent.platforms.linkedin import LinkedInPlatform
 
@@ -1600,6 +1592,61 @@ class TestLinkedInBlockedStep(unittest.IsolatedAsyncioTestCase):
         modal = MagicMock()
         modal.locator = MagicMock(return_value=locs)
         self.assertIsNone(await LinkedInPlatform._extract_blocked_question(modal, ""))
+
+    def _btn(self, text, visible=True):
+        from unittest.mock import AsyncMock, MagicMock
+
+        btn = MagicMock()
+        btn.is_visible = AsyncMock(return_value=visible)
+        btn.inner_text = AsyncMock(return_value=text)
+        return btn
+
+    def _modal_with_buttons(self, texts):
+        from unittest.mock import AsyncMock, MagicMock
+
+        btns = [self._btn(t) for t in texts]
+        locs = MagicMock()
+        locs.all = AsyncMock(return_value=btns)
+        modal = MagicMock()
+        modal.locator = MagicMock(return_value=locs)
+        return modal
+
+    async def test_fallback_advance_accepts_continue(self):
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        modal = self._modal_with_buttons(["Continue"])
+        btn = await LinkedInPlatform._fallback_action_button(modal)
+        self.assertIsNotNone(btn)
+
+    async def test_fallback_advance_rejects_back_and_dismiss(self):
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        modal = self._modal_with_buttons(["Back", "Dismiss", "Save and exit"])
+        self.assertIsNone(await LinkedInPlatform._fallback_action_button(modal))
+
+    async def test_fallback_advance_rejects_save_and_exit_over_save(self):
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        # "Save and exit" contains "save" but is an abandon path.
+        modal = self._modal_with_buttons(["Save and exit"])
+        self.assertIsNone(await LinkedInPlatform._fallback_action_button(modal))
+
+    async def test_modal_button_labels_collects_visible(self):
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        modal = self._modal_with_buttons(["Next", "Back"])
+        labels = await LinkedInPlatform._modal_button_labels(modal)
+        self.assertEqual(labels, ["Next", "Back"])
+
+    async def test_modal_button_labels_never_raises(self):
+        from unittest.mock import MagicMock
+
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        bad = MagicMock()
+        bad.locator = MagicMock(side_effect=RuntimeError("detached"))
+        self.assertEqual(await LinkedInPlatform._modal_button_labels(bad), [])
+        self.assertIsNone(await LinkedInPlatform._fallback_action_button(bad))
 
     async def test_modal_visible_never_raises(self):
         from unittest.mock import AsyncMock, MagicMock
@@ -1924,7 +1971,7 @@ class TestVerifiedClick(unittest.IsolatedAsyncioTestCase):
                            policy=RunPolicy(dry_run=False, side_effects_enabled=True))
 
     async def test_effect_cases(self):
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         page = MagicMock()
         page.url = "https://www.naukri.com/job-listings-1"

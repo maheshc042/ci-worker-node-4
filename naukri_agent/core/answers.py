@@ -455,6 +455,19 @@ class AnswerEngine:
             is_home = _job_place_is_home(text)
             opt_lows = [(opt, opt.strip().lower()) for opt in _opts]
             if not is_home:
+                # Relocate-intent carve-out (run 544 / review #57/#58):
+                # "I am not in this location but can relocate" is the
+                # truthful Yes for a relocate-willing candidate — its
+                # "not" negates presence, not willingness, so the
+                # polarity/negation gates below must not screen it out.
+                # Genuine relocation refusals still exclude.
+                for opt, opt_low in opt_lows:
+                    if ("can relocate" in opt_low or "willing to relocate" in opt_low) \
+                            and not (_tokenise(opt_low) & {"unwilling", "cannot", "cant", "unable"}) \
+                            and "can't" not in opt_low \
+                            and "not willing" not in opt_low \
+                            and "not able" not in opt_low:
+                        return ResolvedAnswer(opt, "intent:willingness_can_relocate", "intent-map")
                 for opt, opt_low in opt_lows:
                     if self._polarity(_normalise(opt)) is False:
                         continue
