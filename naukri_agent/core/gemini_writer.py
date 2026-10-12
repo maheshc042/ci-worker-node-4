@@ -497,12 +497,22 @@ class GeminiWriter:
                 role_low,
             )
         )
+        backend_track = bool(
+            re.search(
+                r"\b(sde|software engineer|software developer|backend|back end|"
+                r"api developer|microservice|microservices|django|flask)\b",
+                role_low,
+            )
+        )
         if ml_track:
             domain_label = "Machine Learning & AI Engineering"
             stack_example = "Python, PyTorch, LangChain, Vector Search, FastAPI, AWS, Docker"
         elif ai_track:
             domain_label = "AI & Backend Development"
             stack_example = "Python, FastAPI, LangChain, RAG, AWS, Docker"
+        elif backend_track:
+            domain_label = "Backend Development"
+            stack_example = "Python, FastAPI, Django, PostgreSQL, REST APIs, AWS"
         else:
             domain_label = "Full Stack Development"
             stack_example = "JavaScript, TypeScript, React.js, Node.js, Express.js, MongoDB"
@@ -516,6 +526,8 @@ class GeminiWriter:
                 intro_specialty = "building and deploying production AI systems and scalable cloud ML pipelines"
             elif ai_track:
                 intro_specialty = "building scalable Python backends, FastAPI services, and GenAI workflows"
+            elif backend_track:
+                intro_specialty = "building scalable Python backends, REST APIs, and cloud microservices"
             else:
                 intro_specialty = "building production web applications end-to-end"
 

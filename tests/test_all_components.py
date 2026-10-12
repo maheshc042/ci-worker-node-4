@@ -8,9 +8,185 @@ from naukri_agent.config import AgentConfig
 from naukri_agent.core.filters import FilterEngine
 from naukri_agent.core.models import Job
 from naukri_agent.naukri.chatbot import ChatbotHandler
+from naukri_agent.naukri.parser import parse_salary_lpa
 from naukri_agent.platforms.linkedin import (
     LinkedInPlatform,
 )
+
+
+class TestNaukriSalaryParser(unittest.TestCase):
+    def test_documented_formats(self):
+        self.assertEqual(parse_salary_lpa("12-18 Lacs PA"), (12.0, 18.0))
+        self.assertEqual(parse_salary_lpa("Rs 8,00,000 - 12,00,000 PA"), (8.0, 12.0))
+        self.assertEqual(parse_salary_lpa("50,000 - 1,00,000 P.A. monthly"), (6.0, 12.0))
+        self.assertEqual(parse_salary_lpa("Not disclosed"), (None, None))
+        self.assertEqual(parse_salary_lpa("7 LPA"), (7.0, None))
+
+    def test_hourly_rates_fail_open(self):
+        """Hourly rates are never annual salaries: None flows through the
+        salary gate instead of a phantom 500 LPA pass."""
+        self.assertEqual(parse_salary_lpa("Rs 500 per hour"), (None, None))
+        self.assertEqual(parse_salary_lpa("1000/hour"), (None, None))
+
+    def test_markerless_figures_fail_open(self):
+        """Bonus/shares/equity fragments and bare ranges must not invent lakhs:
+        sub-5 figures once wrong-rejected good jobs, large ones phantom-passed."""
+        self.assertEqual(parse_salary_lpa("500 bonus"), (None, None))
+        self.assertEqual(parse_salary_lpa("0.5% equity"), (None, None))
+        self.assertEqual(parse_salary_lpa("6-10"), (None, None))
+        self.assertEqual(parse_salary_lpa("2-5 years experience"), (None, None))
+        self.assertEqual(parse_salary_lpa("10,000 joining bonus"), (None, None))
+
+
+class TestPresubmitButtonGone(unittest.IsolatedAsyncioTestCase):
+    def _engine(self):
+        from unittest.mock import MagicMock
+
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.naukri.apply import ApplyEngine
+
+        page = MagicMock()
+        page.on = MagicMock()
+        return ApplyEngine(
+            page,
+            MagicMock(),
+            MagicMock(),
+            policy=RunPolicy(dry_run=True, side_effects_enabled=False),
+        )
+
+    async def test_gone_when_no_button(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.naukri import apply as apply_mod
+
+        engine = self._engine()
+        with patch.object(apply_mod, "first_visible", new=AsyncMock(return_value=None)):
+            self.assertTrue(await engine._presubmit_button_gone())
+
+    async def test_present_when_button_lingers(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from naukri_agent.naukri import apply as apply_mod
+
+        engine = self._engine()
+        with patch.object(
+            apply_mod, "first_visible", new=AsyncMock(return_value=MagicMock())
+        ):
+            self.assertFalse(await engine._presubmit_button_gone())
+
+    async def test_exception_fails_closed(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.naukri import apply as apply_mod
+
+        engine = self._engine()
+        with patch.object(
+            apply_mod,
+            "first_visible",
+            new=AsyncMock(side_effect=RuntimeError("detached")),
+        ):
+            self.assertFalse(await engine._presubmit_button_gone())
+
+
+class TestJdExperienceExtractor(unittest.TestCase):
+    def test_bands(self):
+        from naukri_agent.naukri.parser import extract_jd_experience as e
+
+        self.assertEqual(
+            e("We need 6-8 years of experience in Python.\nGood team."), (6.0, 8.0))
+        self.assertEqual(e("Experience: 2-4 Yrs\nLocation: Bangalore"), (2.0, 4.0))
+        self.assertEqual(e("5+ years of experience required"), (5.0, None))
+
+    def test_traps(self):
+        from naukri_agent.naukri.parser import extract_jd_experience as e
+
+        # Establishment year is not tenure; headcount is not tenure.
+        self.assertEqual(
+            e("Year of establishment: 2019\nWe need 2 years experience"), (2.0, 2.0))
+        self.assertEqual(e("We have 8-10 openings across teams"), (None, None))
+        self.assertEqual(e("Great culture, free lunch"), (None, None))
+        self.assertEqual(e(""), (None, None))
+
+
+class TestRoleHeadCheck(unittest.TestCase):
+    def _decision(self, title):
+        cfg = AgentConfig.load()
+        ai_profile = next(p for p in cfg.profiles if "AI" in p.name)
+        engine = FilterEngine(ai_profile.filters_for("recommended"))
+        return engine.evaluate_card(Job(
+            job_id="t", title=title, company="C", location="Bengaluru",
+            url="http://test.com", platform="naukri"))
+
+    def test_non_tech_head_with_garnish_blocked(self):
+        for title in ["HR Analyst (Python)", "Operations Executive (SQL)",
+                      "Marketing Specialist (Python)"]:
+            self.assertFalse(self._decision(title).passed, title)
+
+    def test_breadth_heads_untouched(self):
+        # Breadth policy: analyst heads pass with or without garnish.
+        for title in ["Business Analyst (Python)", "Data Analyst",
+                      "AI Engineer", "AI Engineer (Python, Remote)"]:
+            decision = self._decision(title)
+            self.assertTrue(decision.passed, f"{title}: {decision.reason}")
+
+
+class TestDetailStageRegate(unittest.TestCase):
+    def _engine(self):
+        cfg = AgentConfig.load()
+        ai_profile = next(p for p in cfg.profiles if "AI" in p.name)
+        return FilterEngine(
+            ai_profile.filters_for("recommended"),
+            candidate=ai_profile.to_candidate_profile(cfg))
+
+    def _job(self, title, description, min_exp, max_exp):
+        return Job(
+            job_id="t", title=title, company="C", location="Bengaluru",
+            url="http://test.com", platform="naukri", description=description,
+            min_experience=min_exp, max_experience=max_exp,
+            experience_imputed=False)
+
+    def test_jd_senior_band_regates(self):
+        # Card said junior, JD demands senior: detail stage must reject so
+        # the slot is not spent on a guaranteed recruiter reject.
+        job = self._job("Python Developer", "We need 6-8 years of experience.",
+                        2.0, 4.0)
+        job.min_experience, job.max_experience = 6.0, 8.0
+        decision = FilterEngine._experience_verdict(
+            self._engine(), job, job.title.lower())
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.passed)
+
+    def test_unchanged_numbers_idempotent(self):
+        # Same numbers as card phase: verdict must reproduce the card pass.
+        engine = self._engine()
+        job = self._job("Python Developer", "We need 2-4 years of experience.",
+                        2.0, 4.0)
+        self.assertTrue(engine.evaluate_card(job).passed)
+        self.assertTrue(engine.evaluate_detail(job).passed)
+
+
+class TestChatbotBlindExit(unittest.IsolatedAsyncioTestCase):
+    async def test_drawer_open_no_question_sets_error(self):
+        """Blind exit with the drawer still open must carry a diagnostic
+        error, not a silent break that surfaces as generic 'no submission
+        confirmation' downstream."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.naukri import chatbot as cb_mod
+
+        page = MagicMock()
+        handler = cb_mod.ChatbotHandler(
+            page, MagicMock(), RunPolicy(dry_run=True, side_effects_enabled=False))
+        handler._current_question = AsyncMock(return_value=None)
+        handler.is_open = AsyncMock(return_value=True)
+        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=None)):
+            with patch.object(cb_mod, "dismiss_overlays", new=AsyncMock()):
+                result = await handler.run()
+        self.assertFalse(result.completed)
+        self.assertIsNotNone(result.error)
+        self.assertIn("unknown widget", result.error)
+        self.assertEqual(result.unanswered, [])
 
 
 class TestFilterEngine(unittest.TestCase):
@@ -55,9 +231,11 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
-    def test_ai_profile_rejects_analyst_and_support_titles(self):
-        """Run 543 applied to a Data Analyst as AI/Python: analyst and
-        support families must not be in the AI profile's include list."""
+    def test_ai_profile_breadth_policy(self):
+        """Product policy (owner call): the AI profile is breadth-first for
+        interviews — analyst/support families PASS (Python transfers, details
+        get sorted at interview); core-ML titles are EXCLUDED to save daily
+        window (recruiter would reject an applied-AI background anyway)."""
         engine = FilterEngine(self.ai_profile.filters_for("recommended"))
         for title in [
             "Data Analyst",
@@ -74,7 +252,18 @@ class TestFilterEngine(unittest.TestCase):
                 platform="naukri",
             )
             decision = engine.evaluate_card(job)
-            self.assertFalse(decision.passed, f"{title!r} must not pass the AI profile")
+            self.assertTrue(decision.passed, f"{title!r} must pass the AI profile: {decision.reason}")
+        for title in ["Machine Learning Engineer", "Senior Machine Learning Engineer"]:
+            job = Job(
+                job_id=f"test-ai-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            decision = engine.evaluate_card(job)
+            self.assertFalse(decision.passed, f"{title!r} must be excluded as core-ML")
         for title in ["AI Engineer", "Python Developer", "Data Engineer"]:
             job = Job(
                 job_id=f"test-ai-{title}",
@@ -737,6 +926,24 @@ class TestMailerTrackRouting(unittest.TestCase):
             self.assertIn("React, Node.js", mailer._generate_body("Retail Associate", "", "Co"))
             self.assertIn("React, Node.js", mailer._generate_body("Training Manager", "", "Co"))
             self.assertIn("React, Node.js", mailer._generate_body("Full Stack Developer", "", "Co"))
+
+    def test_backend_track_routing(self):
+        """Generic software/backend titles get a Python-backend pitch, not a
+        React-frontend one: SDE/Backend/Software roles carry no AI token."""
+        from unittest.mock import patch
+
+        from naukri_agent.core.mailer import ColdEmailer
+
+        mailer = ColdEmailer(sender_email="a@b.com", app_password="x")
+        with patch(
+            "naukri_agent.core.gemini_writer.GeminiWriter.generate_email_body",
+            return_value=None,
+        ):
+            for title in ("SDE", "SDE-II", "Software Engineer", "Backend Engineer"):
+                body = mailer._generate_body(title, "", "Co")
+                self.assertIn("Python, FastAPI, Django", body, title)
+                self.assertIn("Backend Development", body, title)
+                self.assertNotIn("React frontends", body, title)
 
     def test_handle_names_cleaned(self):
         """Alphanumeric poster handles still produce a human salutation."""
@@ -2710,6 +2917,82 @@ class TestWellfoundPaySignal(unittest.TestCase):
         self.assertTrue(_has_pay_signal("₹12-18 Lacs PA Bangalore"))
         self.assertTrue(_has_pay_signal("Salary: 10-15 LPA"))
         self.assertTrue(_has_pay_signal("CTC 8L"))
+
+
+class TestQuarantineGeneralization(unittest.TestCase):
+    def _eng(self):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        return AnswerEngine(kb=[(k, v) for k, v in cfg.answers.items()],
+                            profile_answers={}, strict=True)
+
+    def test_non_cutshort_phrasing_quarantined(self):
+        """'Are you currently in Pune?' quarantines the here-claim and the
+        apply proceeds via the truthful relocate option — interview kept."""
+        from naukri_agent.core.answers import _job_place_is_home
+
+        self.assertFalse(_job_place_is_home("are you currently in pune?"))
+        self.assertTrue(_job_place_is_home("are you currently in bengaluru?"))
+        self.assertTrue(_job_place_is_home("are you willing to relocate?"))
+
+    def test_pune_question_resolves_relocate(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._eng()
+        res = eng.resolve(ScreeningQuestion(
+            text="Are you currently in Pune? Are you okay with this?",
+            kind="radio",
+            options=["I am currently in this location and okay with it",
+                     "I am not in this location but can relocate", "No"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertIn("relocate", res.value.lower())
+
+
+class TestDegreeGuard(unittest.TestCase):
+    def _eng(self):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        return AnswerEngine(kb=[(k, v) for k, v in cfg.answers.items()],
+                            profile_answers={}, strict=True)
+
+    def test_master_level_resolves_no(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._eng()
+        for text in ["Have you completed your MBA?",
+                     "Have you completed your Masters degree?"]:
+            res = eng.resolve(ScreeningQuestion(
+                text=text, kind="radio", options=["Yes", "No"]))
+            self.assertIsNotNone(res)
+            assert res is not None
+            self.assertEqual(res.value, "No")
+
+    def test_bachelor_and_generic_resolve_yes(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._eng()
+        for text in ["Have you completed your B.Tech?",
+                     "Have you completed your degree?"]:
+            res = eng.resolve(ScreeningQuestion(
+                text=text, kind="radio", options=["Yes", "No"]))
+            self.assertIsNotNone(res)
+            assert res is not None
+            self.assertEqual(res.value, "Yes")
+
+
+class TestWordBoundaryMatching(unittest.TestCase):
+    def test_no_never_matches_noida(self):
+        from naukri_agent.naukri.chatbot import ChatbotHandler
+
+        m = ChatbotHandler._match_option_text
+        self.assertFalse(m("Noida", "No"))
+        self.assertFalse(m("Notice period 0 days", "not applicable"))
+        self.assertTrue(m("Yes, willing to relocate", "Yes"))
+        self.assertTrue(m("Bengaluru", "bengaluru"))
+        self.assertTrue(m("3 years experience", "3 years"))
 
 
 if __name__ == "__main__":

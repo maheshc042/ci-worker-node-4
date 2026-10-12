@@ -28,6 +28,7 @@ from ..core.runtime_metrics import JobTiming, RuntimeMetrics
 from ..logging_setup import get_logger
 from . import selectors as S
 from .chatbot import ChatbotHandler
+from .parser import extract_jd_experience
 
 log = get_logger(__name__)
 
@@ -206,6 +207,18 @@ class ApplyEngine:
         description = await safe_text(await first_visible(self.page, S.JD_DESCRIPTION, timeout_ms=3_000))
         if description:
             job.description = description[:12_000]
+            # JD statements outrank card numbers: a card saying "2-4 Yrs"
+            # whose JD demands "6-8 years" is a guaranteed recruiter reject.
+            # Overwrite only on a stated band (elsewhere keep card numbers);
+            # a JD statement is recruiter-written, so it reads as trusted,
+            # not imputed. The detail-stage filter re-gates on these.
+            jd_min, jd_max = extract_jd_experience(description)
+            if jd_min is not None or jd_max is not None:
+                job.min_experience, job.max_experience = jd_min, jd_max
+                job.experience_imputed = False
+                log.info("job.jd_experience", job_id=job.job_id,
+                         min_exp=jd_min, max_exp=jd_max,
+                         title=job.title[:60])
             form_links = re.findall(
                 r"(https?://(?:forms\.gle|docs\.google\.com/forms|forms\.office\.com|typeform\.com)[^\s\"'>]+)",
                 description,
@@ -390,6 +403,22 @@ class ApplyEngine:
                 continue
         return False
 
+    async def _presubmit_button_gone(self) -> bool:
+        """True when the pre-submit Apply button is no longer visible.
+
+        Generic APPLY_SUCCESS tails also match a PRE-SUBMIT disabled
+        "Applied" button, which the span-based JD_ALREADY_APPLIED misses.
+        A genuine submit removes or transforms the button, so its continued
+        presence means an unordered success hit is untrustworthy — the
+        caller falls through to the ordered verify flow (title/URL/reload),
+        which still catches real success. Never loses an apply, only a
+        detour. Unknown state (exception) reads as present: fail closed.
+        """
+        try:
+            return await first_visible(self.page, S.JD_APPLY_BUTTON, timeout_ms=800) is None
+        except Exception:
+            return False
+
     async def _wait_for_post_apply_event(self) -> str:
         extended_success = S.APPLY_SUCCESS + [
             "div:has-text('Application sent')",
@@ -534,8 +563,12 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        # Instant check for genuine success banner
-        if event_type == "success" or await self._fast_check(S.APPLY_SUCCESS):
+        # Instant check for genuine success banner. Guarded: an unordered
+        # success hit is only trusted once the pre-submit button is gone —
+        # a lingering button means fall through to the verify flow below,
+        # which still catches real success via title/URL/reload.
+        if (event_type == "success" or await self._fast_check(S.APPLY_SUCCESS)) \
+                and await self._presubmit_button_gone():
             return ApplyOutcome(
                 status=ApplicationStatus.APPLIED,
                 detail="Naukri submission confirmation observed",
@@ -588,7 +621,10 @@ class ApplyEngine:
         except Exception:
             pass
         if not is_success:
-            is_success = await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=3_000) is not None
+            marker_hit = await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=3_000) is not None
+            # Same pre-submit-button guard as the instant check above: a bare
+            # marker hit with the Apply button still present is untrustworthy.
+            is_success = marker_hit and await self._presubmit_button_gone()
         jt.verify_s += time.perf_counter() - t_ver_0
 
         if is_success:

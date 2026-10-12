@@ -111,6 +111,16 @@ class ColdEmailer:
                 role_low,
             )
         )
+        # Generic software/backend titles carry no AI token but the
+        # candidate's strongest generic story is Python backends, not React
+        # frontends — route them to a backend pitch, not full-stack.
+        backend_track = bool(
+            re.search(
+                r"\b(sde|software engineer|software developer|backend|back end|"
+                r"api developer|microservice|microservices|django|flask)\b",
+                role_low,
+            )
+        )
 
         if who.name != "a Software Engineer":
             name = who.name
@@ -132,6 +142,13 @@ class ColdEmailer:
             )
             skills = "Python, FastAPI, LangChain, RAG, PyTorch, AWS, PostgreSQL"
             domain_label = "AI & Backend Development"
+        elif backend_track:
+            proof = (
+                f"Over the past {who.experience_label}, I have built scalable Python backend "
+                "services—REST APIs with FastAPI/Django, PostgreSQL data models, and cloud microservices."
+            )
+            skills = "Python, FastAPI, Django, PostgreSQL, REST APIs, AWS, Docker"
+            domain_label = "Backend Development"
         else:
             proof = (
                 f"Over the past {who.experience_label}, I have worked across the full stack—building "

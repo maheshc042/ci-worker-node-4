@@ -538,8 +538,8 @@ class JobSearcher:
                 log.info("reco.tab_active", tab=label, verified=True)
                 return True
 
-            log.info("reco.tab_active", tab=label, verified=False)
-            return True
+            log.warning("reco.tab_active_unverified", tab=label)
+            return False
         except Exception as exc:
             log.debug("reco.tab_click_failed", tab=label, error=str(exc)[:150])
             return False

@@ -152,21 +152,35 @@ _HOME_PLACE_MARKERS = (
     "bengaluru", "bangalore", "remote", "work from home", "hybrid", "anywhere",
 )
 
+# Major Indian job hubs outside home. Word-boundary matched (Noida/no lesson).
+_NON_HOME_CITIES = (
+    "delhi", "new delhi", "pune", "mumbai", "bombay", "hyderabad",
+    "chennai", "kolkata", "noida", "gurgaon", "gurugram", "ahmedabad",
+    "kochi", "cochin", "jaipur", "indore", "nagpur", "surat", "lucknow",
+    "chandigarh", "coimbatore", "bhubaneswar", "mysuru", "mysore",
+)
+
 
 def _job_place_is_home(text: str) -> bool:
-    """True when a Cutshort-style location question names home/remote — or
-    names no place at all (fail-open: unknown never rejects).
+    """True when a location question names home/remote — or names no place
+    at all (fail-open: unknown never rejects).
 
     Only False on an explicitly named elsewhere (Delhi, Pune, ...), which
     is exactly when "I am currently in this location" would be a lie.
-    Expects normalised (lowercased) text. Pure.
+    Covers Cutshort phrasing ("location of this job will be X") plus any
+    phrasing naming a known non-home hub ("Are you currently in Pune?").
+    A question naming home/remote anywhere reads as home. Expects
+    normalised (lowercased) text. Pure.
     """
     m = re.search(
         r"location of this job will be ([a-z0-9][a-z0-9\s().,&\-]{0,60})", text or ""
     )
-    if not m or not m.group(1):
+    if m and m.group(1):
+        return any(h in m.group(1) for h in _HOME_PLACE_MARKERS)
+    low = text or ""
+    if any(h in low for h in _HOME_PLACE_MARKERS):
         return True
-    return any(h in m.group(1) for h in _HOME_PLACE_MARKERS)
+    return not any(re.search(rf"\b{re.escape(city)}\b", low) for city in _NON_HOME_CITIES)
 
 
 def _format_years(value: float) -> str:
@@ -871,6 +885,10 @@ class AnswerEngine:
 
         Fires only when the question names a degree AND completion semantics.
         "What university did you attend?" has no completion verb -> review.
+        Master-level degrees (MBA/Masters/M.Tech/PhD) resolve No — the user
+        holds a B.E. only, and a fabricated postgraduate credential fails
+        document verification worse than never applying. Bachelor-level and
+        generic degree questions resolve Yes.
         """
         if not re.search(
             r"\b(bachelor'?s?|master'?s?|mba|b\.?\s*e\b|b\.?\s*tech|m\.?\s*tech|degree|graduat\w+)\b",
@@ -881,6 +899,14 @@ class AnswerEngine:
             r"\b(complet\w*|finish\w*|earn\w*|obtain\w*|hold\w*|passed|have\s+(?:you\s+)?(?:completed|earned|finished))\b",
             text,
         ):
+            return None
+        if re.search(r"\b(mba|master'?s?|m\.?\s*tech|ph\.?\s*d|doctorate)\b", text) and not re.search(
+            r"\b(bachelor'?s?|b\.?\s*e\b|b\.?\s*tech|undergraduate)\b", text
+        ):
+            fitted = self._fit_to_options("No", question, "intent:education_not_held", "intent-map")
+            if fitted is not None:
+                log.info("answers.education_not_held", question=question.text[:100])
+                return fitted
             return None
         fitted = self._fit_to_options("Yes", question, "intent:education_completed", "intent-map")
         if fitted is not None:

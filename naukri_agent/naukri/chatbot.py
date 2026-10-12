@@ -267,26 +267,37 @@ class ChatbotHandler:
 
     @staticmethod
     def _match_option_text(opt_text: str, val_clean: str) -> bool:
-        """Fuzzy matches options, chips, and combobox entries."""
+        """Fuzzy matches options, chips, and combobox entries.
+
+        All comparisons are word-set based, never raw substrings: "no" must
+        not match "Noida", "not" must not match "notice", "me" must not match
+        "M.E." — substring matching manufactured false answers.
+        """
         ct = opt_text.strip().lower()
         rv = val_clean.strip().lower()
         if not ct or not rv:
             return False
-        if ct == rv or rv in ct or ct in rv:
+        if ct == rv:
             return True
-        if rv in ("yes", "true") and any(w in ct for w in ["yes", "agree", "comfortable", "available", "willing", "open", "ready", "works", "sure"]):
+        ct_words = set(re.findall(r"[a-z0-9]+", ct))
+        rv_words = set(re.findall(r"[a-z0-9]+", rv))
+        if rv_words and rv_words <= ct_words:
             return True
-        if rv in ("no", "false") and any(w in ct for w in ["no", "never", "not"]):
+        if ct_words and ct_words <= rv_words:
             return True
-        if any(c in rv for c in ["bengaluru", "bangalore"]):
-            if any(w in ct for w in ["bengaluru", "bangalore", "yes", "willing", "open", "relocate"]):
-                return True
-        if any(c in rv for c in ["mumbai", "bombay"]):
-            if any(w in ct for w in ["mumbai", "bombay", "yes", "willing", "open", "relocate"]):
-                return True
-        if any(c in rv for c in ["hyderabad", "delhi", "noida", "pune", "chennai"]):
-            if any(w in ct for w in [rv, "yes", "willing", "open", "relocate"]):
-                return True
+        if rv in ("yes", "true") and ct_words & {"yes", "agree", "comfortable", "available", "willing", "open", "ready", "works", "sure"}:
+            return True
+        if rv in ("no", "false") and ct_words & {"no", "never", "not", "none", "neither", "cannot", "unwilling"}:
+            return True
+        _CITY_GROUPS = (
+            {"bengaluru", "bangalore"},
+            {"mumbai", "bombay"},
+            {"hyderabad"}, {"delhi"}, {"noida"}, {"pune"}, {"chennai"},
+        )
+        for cities in _CITY_GROUPS:
+            if rv_words & cities:
+                if ct_words & (cities | {"yes", "willing", "open", "relocate"}):
+                    return True
         return False
 
     async def _answer_combobox(self, value: str) -> bool:
@@ -692,7 +703,15 @@ class ChatbotHandler:
                 if stagnant_rounds >= 3:
                     # No question and no completion banner: assume the drawer is
                     # done (Naukri closes it silently on the last answer).
-                    result.completed = not await self.is_open(1_500)
+                    still_open = await self.is_open(1_500)
+                    result.completed = not still_open
+                    if still_open:
+                        # Drawer open with no detectable question: an unknown
+                        # widget, not a success. Label it loudly — the old
+                        # silent break surfaced downstream as a generic
+                        # "no submission confirmation" with no forensics.
+                        result.error = "drawer open but no question detected after 3 checks (unknown widget)"
+                        log.warning("chatbot.blind_exit_drawer_open")
                     break
                 continue
 
@@ -827,6 +846,15 @@ class ChatbotHandler:
             )
             # Drawer gone or confirmation page visible == Naukri accepted the application.
             result.completed = is_confirmed or not await self.is_open(1_500)
+            if not result.completed and result.answered >= self.max_questions:
+                # Hit the question cap with the drawer still open: a tail of
+                # unprocessed questions exists but nothing records it — label
+                # loudly instead of a silent generic failure downstream.
+                result.error = (
+                    f"stopped after {result.answered} answers at the "
+                    f"{self.max_questions}-question cap with the drawer still open"
+                )
+                log.warning("chatbot.truncated_at_cap", answered=result.answered)
 
         await dismiss_overlays(self.page)
         return result

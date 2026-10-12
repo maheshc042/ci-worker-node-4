@@ -111,6 +111,16 @@ DISJOINT_SPECIALIZATIONS = (
     "strategist",
 )
 
+# Role heads that are never tech roles even with a tech parenthetical
+# ("HR Analyst (Python)", "Operations Executive [SQL]"). Only consulted when
+# NOTHING outside the parens matches an include term — "Business Analyst
+# (Python)" and "Data Analyst" pass untouched (breadth policy). Surgical on
+# purpose: adding a head here is a conscious product call.
+NON_TECH_HEADS = (
+    "hr", "human resources", "operations", "sales", "marketing",
+    "recruiter", "recruitment", "business development",
+)
+
 # Hybrid AI titles: full-stack/software markers that promote an AI-titled
 # posting to the general 3y software-tenure gate instead of the 2y pure-AI cap.
 HYBRID_AI_TITLE_MARKERS = (
@@ -224,158 +234,16 @@ class FilterEngine:
         self._norm_blocked_locations = [l.lower() for l in (rules.blocked_locations or [])]
         self._norm_allowed_locations = [l.lower() for l in (rules.allowed_locations or [])]
 
-    # ------------------------------------------------------------ phase one
-    def evaluate_card(self, job: Job) -> FilterDecision:
-        """Runs against listing-card data only. Cheap, no extra page load."""
+    def _experience_verdict(self, job: Job, title: str) -> FilterDecision | None:
+        """Experience gates 7-8 as a reusable verdict (None == pass).
+
+        Runs against whatever numbers the job currently carries: card numbers
+        at collect time, JD-refreshed numbers at detail stage (Naukri
+        enrich() overwrites from JD statements). Unchanged numbers reproduce
+        the card-phase verdict, so re-running is idempotent — only newly
+        stated bands can newly reject.
+        """
         rules = self.rules
-        title = job.title.lower()
-        company = job.company.lower()
-        location = (job.location or "").lower()
-
-        # 0. Check Easy Apply requirement (Card Pre-filter)
-        if rules.require_easy_apply and getattr(job, "is_external", False):
-            return FilterDecision(
-                False, SkipReason.EXTERNAL_APPLY, "apply-on-company-site only (require_easy_apply=True)"
-            )
-
-        # 1. Configured title blocklist (Strict: Zero exceptions for blocked stacks)
-        if rules.title_must_exclude_any:
-            hit = _contains_any(title, rules.title_must_exclude_any)
-            if hit:
-                return FilterDecision(
-                    False, SkipReason.FILTER_TITLE, f"title contains blocked term '{hit}'"
-                )
-
-        # 1.1 Disjoint Specialization Reality Gate
-        # Candidate is a Full-Stack / Software / AI Engineer (FastAPI, Python, React, TypeScript).
-        # Candidate has 0 commercial experience in pure Data Engineering (ETL pipelines, Snowflake, Spark)
-        # or Technical Support / IT helpdesk. Recruiters for these specialized roles immediately reject
-        # candidates without prior domain experience, exhausting daily platform quotas.
-        hit_disjoint = _contains_any(title, DISJOINT_SPECIALIZATIONS)
-        if hit_disjoint:
-            candidate_skills = getattr(self.candidate, "core_skills", []) or []
-            if not any(hit_disjoint in s.lower() for s in candidate_skills):
-                return FilterDecision(
-                    False,
-                    SkipReason.FILTER_TITLE,
-                    f"title contains disjoint specialization '{hit_disjoint}' (candidate lacks requisite experience; recruiter will reject)",
-                )
-
-        # 2. Mandatory Title Role Matching
-        if rules.title_must_include_any:
-            title_variants = [title]
-            tech_norm = _normalize_tech_text(job.title)
-            if tech_norm and tech_norm not in title_variants:
-                title_variants.append(tech_norm)
-            spaced_hyphen = re.sub(r"\s*-\s*", " ", title).strip()
-            if spaced_hyphen and spaced_hyphen not in title_variants:
-                title_variants.append(spaced_hyphen)
-            no_hyphen = re.sub(r"\s*-\s*", "", title).strip()
-            if no_hyphen and no_hyphen not in title_variants:
-                title_variants.append(no_hyphen)
-            if "software development engineer" in title or "software development engineer" in tech_norm:
-                sde_equiv = re.sub(r"\bsoftware development engineer\b", "software engineer", tech_norm)
-                if sde_equiv not in title_variants:
-                    title_variants.append(sde_equiv)
-                title_variants.extend(["sde", "software development engineer", "software engineer"])
-
-            if "/" in job.title:
-                parts = [p.strip().lower() for p in re.split(r"\s*/\s*", job.title) if p.strip()]
-                if len(parts) >= 2:
-                    suffix_match = re.search(r"\b(engineer|developer|specialist|architect|consultant|analyst|lead)\b", parts[-1])
-                    if suffix_match:
-                        suffix = suffix_match.group(0)
-                        for part in parts[:-1]:
-                            title_variants.append(f"{part} {suffix}")
-                    for part in parts:
-                        title_variants.append(part)
-
-            matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
-            if not matched_title_term:
-                return FilterDecision(
-                    False,
-                    SkipReason.FILTER_TITLE,
-                    f"title '{job.title}' lacks required role keywords from title_must_include_any",
-                )
-
-        # 2.1 For broad engineering titles, verify matching core tech stack
-        if self.candidate:
-            broad_generic_titles = {
-                "software engineer", "software developer", "sde", "sde 1", "sde 2",
-                "sde-1", "sde-2", "sde i", "sde ii", "developer", "engineer", "programmer",
-                "member of technical staff", "associate software engineer",
-                "software development engineer", "software development engineer 1", "software development engineer 2",
-            }
-            is_broad_title = any(
-                _contains_any(title, [bt]) for bt in broad_generic_titles
-            )
-            specialized_tech_in_title = _contains_any(
-                title,
-                [
-                    "react", "node", "python", "mern", "frontend", "backend", "full stack",
-                    "fullstack", "ai", "ml", "fastapi", "django", "llm", "genai", "qa",
-                    "automation", "sdet", "devops", "cloud", "database", "sql",
-                ],
-            ) is not None
-            if is_broad_title and not specialized_tech_in_title:
-                # Do NOT reject if description/tags are not loaded (e.g. search cards)
-                # or if the title is explicitly a target software role requested in title_must_include_any
-                has_card_content = bool(job.tags or job.description)
-                is_target_role = any(
-                    _contains_any(title, [tr])
-                    for tr in (
-                        "software engineer", "software developer", "sde", "associate software engineer",
-                        "junior software engineer", "full stack", "backend developer", "frontend developer",
-                        "software development engineer"
-                    )
-                )
-                if has_card_content and not is_target_role:
-                    haystack = _build_searchable_haystack(job)
-                    core_skills = getattr(self.candidate, "core_skills", [])
-                    sec_skills = getattr(self.candidate, "secondary_skills", [])
-                    has_core_match = any(
-                        _exact_word_match(s, haystack)
-                        for s in list(core_skills) + list(sec_skills)
-                    )
-                    if not has_core_match:
-                        return FilterDecision(
-                            False,
-                            SkipReason.FILTER_TITLE,
-                            f"generic title '{job.title}' lacks matching candidate core skills in listing tags",
-                        )
-
-        # 3. Blocked companies
-        if self._norm_blocked_companies:
-            hit = _contains_any(company, self._norm_blocked_companies)
-            if hit:
-                return FilterDecision(
-                    False, SkipReason.FILTER_COMPANY, f"blocked company '{hit}'"
-                )
-
-        # 4. Blocked locations
-        if self._norm_blocked_locations:
-            hit = _contains_any(location, self._norm_blocked_locations)
-            if hit:
-                return FilterDecision(
-                    False, SkipReason.FILTER_LOCATION, f"blocked location '{hit}'"
-                )
-
-        # 5. Allowed locations & remote check
-        if self._norm_allowed_locations:
-            haystack = f"{title} {location} {' '.join(job.tags or [])}".lower()
-            remote_ok = any(kw in haystack for kw in REMOTE_KEYWORDS)
-            if _contains_any(location, self._norm_allowed_locations) is None and not remote_ok:
-                return FilterDecision(
-                    False, SkipReason.FILTER_LOCATION, f"location '{job.location}' not allowed"
-                )
-
-        # 6. Walk-in check (Bangalore/Bengaluru is allowed to apply and alert)
-        if rules.skip_walkin and job.is_walkin:
-            if "bengaluru" in location or "bangalore" in location:
-                pass
-            else:
-                return FilterDecision(False, SkipReason.WALKIN, f"walk-in drive outside Bangalore ({job.location})")
-
         # 7. AI / ML & Data Engineering Recruiter Reality Gate
         # Candidate has 3y total software experience with 2y commercial AI.
         # Recruiters for DEDICATED AI or Data Engineering roles requiring >
@@ -469,6 +337,188 @@ class FilterEngine:
                         SkipReason.FILTER_EXPERIENCE,
                         f"caps at {job.max_experience}y > ceiling {max_ceiling}y (senior requisition)",
                     )
+        return None
+
+    # ------------------------------------------------------------ phase one
+    def evaluate_card(self, job: Job) -> FilterDecision:
+        """Runs against listing-card data only. Cheap, no extra page load."""
+        rules = self.rules
+        title = job.title.lower()
+        company = job.company.lower()
+        location = (job.location or "").lower()
+
+        # 0. Check Easy Apply requirement (Card Pre-filter)
+        if rules.require_easy_apply and getattr(job, "is_external", False):
+            return FilterDecision(
+                False, SkipReason.EXTERNAL_APPLY, "apply-on-company-site only (require_easy_apply=True)"
+            )
+
+        # 1. Configured title blocklist (Strict: Zero exceptions for blocked stacks)
+        if rules.title_must_exclude_any:
+            hit = _contains_any(title, rules.title_must_exclude_any)
+            if hit:
+                return FilterDecision(
+                    False, SkipReason.FILTER_TITLE, f"title contains blocked term '{hit}'"
+                )
+
+        # 1.1 Disjoint Specialization Reality Gate
+        # Candidate is a Full-Stack / Software / AI Engineer (FastAPI, Python, React, TypeScript).
+        # Candidate has 0 commercial experience in pure Data Engineering (ETL pipelines, Snowflake, Spark)
+        # or Technical Support / IT helpdesk. Recruiters for these specialized roles immediately reject
+        # candidates without prior domain experience, exhausting daily platform quotas.
+        hit_disjoint = _contains_any(title, DISJOINT_SPECIALIZATIONS)
+        if hit_disjoint:
+            candidate_skills = getattr(self.candidate, "core_skills", []) or []
+            if not any(hit_disjoint in s.lower() for s in candidate_skills):
+                return FilterDecision(
+                    False,
+                    SkipReason.FILTER_TITLE,
+                    f"title contains disjoint specialization '{hit_disjoint}' (candidate lacks requisite experience; recruiter will reject)",
+                )
+
+        # 2. Mandatory Title Role Matching
+        if rules.title_must_include_any:
+            title_variants = [title]
+            tech_norm = _normalize_tech_text(job.title)
+            if tech_norm and tech_norm not in title_variants:
+                title_variants.append(tech_norm)
+            spaced_hyphen = re.sub(r"\s*-\s*", " ", title).strip()
+            if spaced_hyphen and spaced_hyphen not in title_variants:
+                title_variants.append(spaced_hyphen)
+            no_hyphen = re.sub(r"\s*-\s*", "", title).strip()
+            if no_hyphen and no_hyphen not in title_variants:
+                title_variants.append(no_hyphen)
+            if "software development engineer" in title or "software development engineer" in tech_norm:
+                sde_equiv = re.sub(r"\bsoftware development engineer\b", "software engineer", tech_norm)
+                if sde_equiv not in title_variants:
+                    title_variants.append(sde_equiv)
+                title_variants.extend(["sde", "software development engineer", "software engineer"])
+
+            if "/" in job.title:
+                parts = [p.strip().lower() for p in re.split(r"\s*/\s*", job.title) if p.strip()]
+                if len(parts) >= 2:
+                    suffix_match = re.search(r"\b(engineer|developer|specialist|architect|consultant|analyst|lead)\b", parts[-1])
+                    if suffix_match:
+                        suffix = suffix_match.group(0)
+                        for part in parts[:-1]:
+                            title_variants.append(f"{part} {suffix}")
+                    for part in parts:
+                        title_variants.append(part)
+
+            matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
+            if not matched_title_term:
+                return FilterDecision(
+                    False,
+                    SkipReason.FILTER_TITLE,
+                    f"title '{job.title}' lacks required role keywords from title_must_include_any",
+                )
+            # Role-head check: when the ONLY include match comes from
+            # parenthetical garnish ("HR Analyst – Python", "Operations
+            # Executive (SQL)"), the head decides. A non-tech head
+            # (hr/operations/sales/...) with a tech garnish is not a tech
+            # role. Breadth-safe: heads like "Business Analyst" or
+            # "Data Analyst" are untouched — only listed non-tech heads
+            # block, and only when nothing outside the parens matched.
+            paren_contents = " ".join(
+                part
+                for match in re.findall(r"\(([^()]*)\)|\[([^\[\]]*)\]", job.title)
+                for part in match
+                if part
+            )
+            if paren_contents and _contains_any(paren_contents, rules.title_must_include_any):
+                head = re.sub(r"\([^()]*\)|\[[^\[\]]*\]", " ", job.title)
+                if not _contains_any(head, rules.title_must_include_any):
+                    non_tech_head = _contains_any(head, NON_TECH_HEADS)
+                    if non_tech_head:
+                        return FilterDecision(
+                            False,
+                            SkipReason.FILTER_TITLE,
+                            f"non-tech role head '{non_tech_head}' with tech garnish only ({job.title})",
+                        )
+
+        # 2.1 For broad engineering titles, verify matching core tech stack
+        if self.candidate:
+            broad_generic_titles = {
+                "software engineer", "software developer", "sde", "sde 1", "sde 2",
+                "sde-1", "sde-2", "sde i", "sde ii", "developer", "engineer", "programmer",
+                "member of technical staff", "associate software engineer",
+                "software development engineer", "software development engineer 1", "software development engineer 2",
+            }
+            is_broad_title = any(
+                _contains_any(title, [bt]) for bt in broad_generic_titles
+            )
+            specialized_tech_in_title = _contains_any(
+                title,
+                [
+                    "react", "node", "python", "mern", "frontend", "backend", "full stack",
+                    "fullstack", "ai", "ml", "fastapi", "django", "llm", "genai", "qa",
+                    "automation", "sdet", "devops", "cloud", "database", "sql",
+                ],
+            ) is not None
+            if is_broad_title and not specialized_tech_in_title:
+                # Do NOT reject if description/tags are not loaded (e.g. search cards)
+                # or if the title is explicitly a target software role requested in title_must_include_any
+                has_card_content = bool(job.tags or job.description)
+                is_target_role = any(
+                    _contains_any(title, [tr])
+                    for tr in (
+                        "software engineer", "software developer", "sde", "associate software engineer",
+                        "junior software engineer", "full stack", "backend developer", "frontend developer",
+                        "software development engineer"
+                    )
+                )
+                if has_card_content and not is_target_role:
+                    haystack = _build_searchable_haystack(job)
+                    core_skills = getattr(self.candidate, "core_skills", [])
+                    sec_skills = getattr(self.candidate, "secondary_skills", [])
+                    has_core_match = any(
+                        _exact_word_match(s, haystack)
+                        for s in list(core_skills) + list(sec_skills)
+                    )
+                    if not has_core_match:
+                        return FilterDecision(
+                            False,
+                            SkipReason.FILTER_TITLE,
+                            f"generic title '{job.title}' lacks matching candidate core skills in listing tags",
+                        )
+
+        # 3. Blocked companies
+        if self._norm_blocked_companies:
+            hit = _contains_any(company, self._norm_blocked_companies)
+            if hit:
+                return FilterDecision(
+                    False, SkipReason.FILTER_COMPANY, f"blocked company '{hit}'"
+                )
+
+        # 4. Blocked locations
+        if self._norm_blocked_locations:
+            hit = _contains_any(location, self._norm_blocked_locations)
+            if hit:
+                return FilterDecision(
+                    False, SkipReason.FILTER_LOCATION, f"blocked location '{hit}'"
+                )
+
+        # 5. Allowed locations & remote check
+        if self._norm_allowed_locations:
+            haystack = f"{title} {location} {' '.join(job.tags or [])}".lower()
+            remote_ok = any(kw in haystack for kw in REMOTE_KEYWORDS)
+            if _contains_any(location, self._norm_allowed_locations) is None and not remote_ok:
+                return FilterDecision(
+                    False, SkipReason.FILTER_LOCATION, f"location '{job.location}' not allowed"
+                )
+
+        # 6. Walk-in check (Bangalore/Bengaluru is allowed to apply and alert)
+        if rules.skip_walkin and job.is_walkin:
+            if "bengaluru" in location or "bangalore" in location:
+                pass
+            else:
+                return FilterDecision(False, SkipReason.WALKIN, f"walk-in drive outside Bangalore ({job.location})")
+
+        # 7-8. Experience gates (shared helper: re-run at detail stage on
+        # JD-refreshed numbers — see evaluate_detail).
+        exp_verdict = self._experience_verdict(job, title)
+        if exp_verdict is not None:
+            return exp_verdict
 
         # 9. Salary, freshness, rating
         if rules.min_salary_lpa is not None:
@@ -532,5 +582,15 @@ class FilterEngine:
                 SkipReason.FILTER_DESCRIPTION,
                 "JD lacks any required keyword",
             )
+
+        # Numeric re-gate on JD-refreshed numbers: enrich() overwrites card
+        # numbers from JD statements, so a card that passed (or carried
+        # unknown numbers) can now fail honestly — e.g. card "2-4 Yrs" whose
+        # JD demands "6-8 years" is a guaranteed recruiter reject, not an
+        # application. Unchanged numbers reproduce the card-phase verdict
+        # (idempotent); only newly stated bands can newly reject.
+        exp_verdict = self._experience_verdict(job, job.title.lower())
+        if exp_verdict is not None:
+            return exp_verdict
 
         return FilterDecision(True)
