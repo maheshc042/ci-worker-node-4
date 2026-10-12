@@ -2995,6 +2995,49 @@ class TestWordBoundaryMatching(unittest.TestCase):
         self.assertTrue(m("3 years experience", "3 years"))
 
 
+class TestNonHiringEmailExclusion(unittest.TestCase):
+    def test_compliance_inboxes_dropped(self):
+        """2026-10-12: an application went to Aon's reasonable-accommodation
+        inbox. Compliance/accessibility/no-reply boxes are never recruiters."""
+        from naukri_agent.core.models import extract_description_metadata
+
+        _, emails = extract_description_metadata(
+            "Apply at reasonableaccommodations@aon.com or nandinib@intellicorecg.com "
+            "or legal@company.com or noreply@company.com or hr@startup.io"
+        )
+        self.assertNotIn("reasonableaccommodations@aon.com", emails)
+        self.assertNotIn("legal@company.com", emails)
+        self.assertNotIn("noreply@company.com", emails)
+        self.assertIn("nandinib@intellicorecg.com", emails)
+        self.assertIn("hr@startup.io", emails)
+
+    def test_extractors_share_one_list(self):
+        """The two extractors must not drift apart again."""
+        from naukri_agent.core import models as models_mod
+        from naukri_agent.naukri import apply as apply_mod
+
+        self.assertIs(apply_mod.NON_HIRING_EMAIL_PREFIXES, models_mod.NON_HIRING_EMAIL_PREFIXES)
+        self.assertIn("reasonableaccommodation@", models_mod.NON_HIRING_EMAIL_PREFIXES)
+
+
+class TestParseExperienceSingles(unittest.TestCase):
+    def test_bare_singles_fail_open(self):
+        """Headcount figures are not tenure: unknown flows to ranking."""
+        from naukri_agent.naukri.parser import parse_experience
+
+        self.assertEqual(parse_experience("25 applicants"), (None, None))
+        self.assertEqual(parse_experience("3 openings"), (None, None))
+
+    def test_marked_singles_still_parse(self):
+        from naukri_agent.naukri.parser import parse_experience
+
+        self.assertEqual(parse_experience("3 Years"), (3.0, 3.0))
+        self.assertEqual(parse_experience("Exp: 5"), (5.0, 5.0))
+        self.assertEqual(parse_experience("Fresher"), (0.0, 0.0))
+        self.assertEqual(parse_experience("2-4 Yrs"), (2.0, 4.0))
+        self.assertEqual(parse_experience("5+ years"), (5.0, None))
+
+
 if __name__ == "__main__":
     unittest.main()
 

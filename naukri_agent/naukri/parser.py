@@ -46,6 +46,12 @@ def parse_experience(text: str) -> tuple[float | None, float | None]:
         return float(plus.group(1)), None
     single = re.search(_NUM, cleaned)
     if single:
+        # Bare singles ("25 applicants", "3 openings") are headcount, not
+        # tenure: accept only when the field names a tenure unit. Ranges
+        # ("3-8") and plus-bands ("5+") are self-evidently tenure in an exp
+        # field. Fail open (None) — unknown never rejects downstream.
+        if not re.search(r"yrs?|years?|\bexp\b|fresher", text.lower()):
+            return None, None
         value = float(single.group(1))
         return value, value
     return None, None

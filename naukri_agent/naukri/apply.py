@@ -22,7 +22,7 @@ from ..browser.resilience import (
     safe_text,
 )
 from ..core.answers import AnswerEngine
-from ..core.models import ApplicationStatus, ApplyOutcome, FilterDecision, Job, SkipReason
+from ..core.models import ApplicationStatus, ApplyOutcome, FilterDecision, Job, SkipReason, NON_HIRING_EMAIL_PREFIXES
 from ..core.run_policy import RunPolicy, SideEffectBlocked
 from ..core.runtime_metrics import JobTiming, RuntimeMetrics
 from ..logging_setup import get_logger
@@ -227,14 +227,14 @@ class ApplyEngine:
                 job.form_links = list(dict.fromkeys(form_links))
                 log.info("job.form_links_found", job_id=job.job_id, count=len(job.form_links))
 
-            # Extract Recruiter Emails
+            # Extract Recruiter Emails (shared non-hiring exclusion list:
+            # compliance/accommodation/no-reply boxes are never recruiters).
             raw_emails = re.findall(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", description)
             if raw_emails:
-                ignored_prefixes = ("info@", "support@", "sales@", "contact@", "help@", "admin@", "query@", "feedback@", "hrintern@", "careers@", "jobs@")
                 valid_emails = [
                     e.lower().strip(".")
                     for e in raw_emails
-                    if not e.lower().startswith(ignored_prefixes)
+                    if not e.lower().startswith(NON_HIRING_EMAIL_PREFIXES)
                     and not e.lower().endswith(("naukri.com", "naukrigulf.com", "example.com", "yopmail.com"))
                 ]
                 if valid_emails:

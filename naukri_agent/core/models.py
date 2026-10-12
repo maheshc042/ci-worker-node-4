@@ -270,6 +270,23 @@ class RunStats:
         }
 
 
+# Local-parts that are never a human recruiter: generic role inboxes plus
+# compliance / accommodation / accessibility / legal / privacy / abuse and
+# no-reply boxes. A pitch mailed to one is misdirected (2026-10-12: an
+# application went to Aon's reasonable-accommodation inbox). Prefix tuple
+# for startswith use; shared by models.extract_description_metadata and
+# naukri enrich() so the two extractors cannot drift apart again.
+NON_HIRING_EMAIL_PREFIXES = (
+    "info@", "support@", "sales@", "contact@", "help@", "admin@",
+    "query@", "feedback@", "hrintern@", "careers@", "jobs@",
+    "reasonableaccommodation@", "reasonableaccommodations@",
+    "accommodation@", "accommodations@", "accessibility@",
+    "compliance@", "legal@", "privacy@", "abuse@", "noreply@",
+    "no-reply@", "donotreply@", "do-not-reply@", "enquiry@",
+    "enquiries@",
+)
+
+
 def extract_description_metadata(description_or_job: str | Any) -> tuple[list[str], list[str]]:
     """Extracts form links (Google Forms, Typeform, etc.) and valid recruiter emails from job description text."""
     if not description_or_job:
@@ -291,7 +308,7 @@ def extract_description_metadata(description_or_job: str | Any) -> tuple[list[st
     clean_links = list(dict.fromkeys(form_links))
 
     raw_emails = re.findall(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", description)
-    ignored_prefixes = ("info@", "support@", "sales@", "contact@", "help@", "admin@", "query@", "feedback@", "hrintern@", "careers@", "jobs@")
+    ignored_prefixes = NON_HIRING_EMAIL_PREFIXES
     valid_emails = [
         e.lower().strip(".")
         for e in raw_emails
