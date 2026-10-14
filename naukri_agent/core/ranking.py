@@ -472,7 +472,11 @@ class RankingEngine:
         max_e = float(job.max_experience) if job.max_experience is not None else None
 
         if min_e is None and max_e is None:
-            return round(w.experience_max * 0.75, 2), "✓ Experience requirements open"
+            # Completeness discount: stated numbers outrank silence. An
+            # undisclosed band could be perfect — or senior-only — so it
+            # scores below close fits but above proven mismatches. Ordering
+            # only; never a reject.
+            return round(w.experience_max * 0.5, 2), "○ Experience requirements undisclosed"
 
         min_bound = min_e if min_e is not None else 0.0
         max_bound = max_e if max_e is not None else 99.0
@@ -499,9 +503,9 @@ class RankingEngine:
         w = self.weights
         days = job.posted_days_ago
         if days is None:
-            # Unknown posting date is not "posted today": neutral partial score
-            # with an honest reason instead of full marks.
-            score, reason = round(w.freshness_max * 0.5, 2), "○ Posting date unknown"
+            # Dateless cards sink below dated ones: a missing date is where
+            # stale reposts hide. Ordering only; never a reject.
+            score, reason = round(w.freshness_max * 0.25, 2), "○ Posting date unknown"
         elif days == 0:
             score, reason = w.freshness_max, "✓ Posted today"
         else:
@@ -571,7 +575,7 @@ class RankingEngine:
         target_sal = float(self.candidate.min_acceptable_salary_lpa) if self.candidate.min_acceptable_salary_lpa is not None else None
 
         if sal is None:
-            return round(w.salary_max * 0.75, 2), ""
+            return round(w.salary_max * 0.5, 2), "○ Salary undisclosed"
 
         if target_sal is not None and sal >= target_sal:
             return w.salary_max, f"✓ Disclosed salary meets target ({sal} LPA)"
@@ -583,7 +587,7 @@ class RankingEngine:
         r = float(job.rating) if job.rating is not None else None
 
         if r is None:
-            return round(w.rating_max * 0.75, 2), ""
+            return round(w.rating_max * 0.5, 2), "○ Company rating unknown"
 
         if r >= 4.0:
             return w.rating_max, f"✓ Highly rated company ({r}★)"

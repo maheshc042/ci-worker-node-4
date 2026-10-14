@@ -2818,6 +2818,74 @@ class TestExperienceGates(unittest.TestCase):
         self.assertEqual((j.min_experience, j.max_experience), (5.0, 10.0))
         self.assertTrue(j.experience_imputed)
 
+
+class TestCompletenessDiscount(unittest.TestCase):
+    """Unknown fields sink below stated fits (ordering only, never a
+    reject): stated-good > stated-close > unknown > stated-bad."""
+
+    def _ranker(self):
+        from naukri_agent.core.ranking import CandidateProfile, RankingEngine
+
+        cand = CandidateProfile(
+            title_keywords=[], core_skills=["python"],
+            secondary_skills=[], target_experience_years=3.0,
+            min_acceptable_salary_lpa=5.0,
+        )
+        return RankingEngine(cand)
+
+    def _job(self, **kw):
+        base = dict(job_id="t", title="Python Developer", company="C",
+                    location="Bengaluru", url="http://t", platform="naukri")
+        base.update(kw)
+        return Job(**base)
+
+    def test_unknown_exp_below_close_fit(self):
+        eng = self._ranker()
+        stated, _ = eng._score_experience(self._job(min_experience=2.0, max_experience=4.0))
+        unknown, reason = eng._score_experience(self._job())
+        self.assertLess(unknown, stated)
+        self.assertIn("undisclosed", reason)
+
+    def test_unknown_date_below_dated(self):
+        eng = self._ranker()
+        fresh, _ = eng._score_freshness(self._job(posted_days_ago=0))
+        unknown, _ = eng._score_freshness(self._job())
+        self.assertLess(unknown, fresh)
+
+    def test_unknown_salary_and_rating_below_stated(self):
+        eng = self._ranker()
+        sal_open, _ = eng._score_salary(self._job())
+        sal_met, _ = eng._score_salary(self._job(min_salary_lpa=7.0))
+        self.assertLess(sal_open, sal_met)
+        rate_open, _ = eng._score_rating(self._job())
+        rate_good, _ = eng._score_rating(self._job(rating=4.2))
+        self.assertLess(rate_open, rate_good)
+
+class TestImputationEdges(unittest.TestCase):
+    """Tail of the imputation suite: stated numbers skip filling, levels
+    behave, and imputed seniors then fail the ceiling gate."""
+
+    def _engine(self, profile_name="AI / Python Engineer", years=2.5):
+        from naukri_agent.core.ranking import CandidateProfile
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if profile_name in p.name)
+        cand = CandidateProfile(
+            title_keywords=[], core_skills=[], secondary_skills=[],
+            target_experience_years=years,
+        )
+        return FilterEngine(prof.filters_for("recommended"), candidate=cand)
+
+    def _job(self, title, company="C", min_exp=None, max_exp=None):
+        return Job(
+            job_id="t-%s" % title[:10], title=title, company=company,
+            location="Bengaluru", url="http://t", platform="naukri",
+            min_experience=min_exp, max_experience=max_exp,
+        )
+
+    def test_stated_numbers_skip_imputation(self):
+        from naukri_agent.core.filters import impute_seniority
+
         stated = self._job("SDE 4 - Backend", min_exp=2.0, max_exp=7.0)
         self.assertFalse(impute_seniority(stated))
 
