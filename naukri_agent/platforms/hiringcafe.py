@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from typing import Any
 from urllib.parse import quote, urljoin
@@ -546,6 +547,22 @@ class HiringCafePlatform(BaseJobPlatform):
             await human_pause(2000, 3500)
         return found
 
+    _EXPIRED_DETAIL_RE = re.compile(
+        r"\bexpired\b|no longer accepting|"
+        r"position\s+filled|opening\s+closed|no longer available",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _is_expired_body(body_head: str | None) -> bool:
+        """True when detail text marks the posting dead (pure). Expired
+        postings carry no apply action — skipping before the challenge
+        settle turns a ~30s handshake into a 3s probe."""
+        return bool(
+            body_head
+            and HiringCafePlatform._EXPIRED_DETAIL_RE.search(body_head)
+        )
+
     async def _resolve_detail(self, detail_url: str, card_text: str, term: str,
                               max_days: int) -> Job | None:
         """One detail navigation -> Job with the company ATS link, or None."""
@@ -553,6 +570,18 @@ class HiringCafePlatform(BaseJobPlatform):
             await self.page.goto(detail_url, wait_until="domcontentloaded", timeout=30_000)
         except Exception as exc:
             log.debug("hiringcafe.detail_goto_failed", url=detail_url[:80], error=str(exc)[:120])
+            return None
+        # Expired postings carry no apply action: skip BEFORE the challenge
+        # settle (run 562: every detail re-challenged at ~25s each, all for
+        # dead "Expired Job" pages). A 3s text probe beats a 30s handshake.
+        try:
+            body_head = await self.page.evaluate(
+                "() => (document.body ? document.body.innerText : '').slice(0, 2000)"
+            )
+        except Exception:
+            body_head = ""
+        if HiringCafePlatform._is_expired_body(body_head or ""):
+            log.info("hiringcafe.detail_expired", url=detail_url[:80])
             return None
         challenged, _ = await self._challenge_present()
         if challenged:
@@ -611,9 +640,13 @@ class HiringCafePlatform(BaseJobPlatform):
         seen_jobs: set[str] = set()
         no_apply_links = 0
         prefiltered = 0
+        dead_streak = 0
+        feed_dead = False
         self._walls = 0
         include_terms = list((profile.filters.title_must_include_any or []) if profile.filters else [])
         for term in self._search_terms(profile):
+            if feed_dead:
+                break
             if len(jobs) >= target:
                 break
             log.info("hiringcafe.search", term=term, max_days=max_days, max_exp=max_exp)
@@ -631,7 +664,17 @@ class HiringCafePlatform(BaseJobPlatform):
                 await human_pause(2000, 3500)
                 if job is None:
                     no_apply_links += 1
+                    dead_streak += 1
+                    # Rotten-feed breaker: 25 straight dead details (expired /
+                    # linkless) means the feed is stale, not unlucky — stop
+                    # grinding hundreds of challenge-handshakes for nothing.
+                    if dead_streak >= 25:
+                        log.warning("hiringcafe.feed_stale_breaker",
+                                    consecutive_dead=dead_streak, jobs=len(jobs))
+                        feed_dead = True
+                        break
                     continue
+                dead_streak = 0
                 if job.job_id in exclude_job_ids or job.job_id in seen_jobs:
                     continue
                 seen_jobs.add(job.job_id)

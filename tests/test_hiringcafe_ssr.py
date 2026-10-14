@@ -89,6 +89,21 @@ class TestPostedDays(unittest.TestCase):
         self.assertIsNone(HC._posted_days_from_text("Save Hide"))
 
 
+class TestExpiredDetail(unittest.TestCase):
+    def test_expired_variants_detected(self):
+        # Run 562: the feed served dead "Expired Job" pages with no apply
+        # action — each cost a full ~25s challenge settle before failing.
+        self.assertTrue(HC._is_expired_body("We're sorry, but this job has expired."))
+        self.assertTrue(HC._is_expired_body("This position filled already"))
+        self.assertTrue(HC._is_expired_body("No longer accepting applications"))
+
+    def test_live_pages_pass_through(self):
+        self.assertFalse(HC._is_expired_body("Apply now for this great role"))
+        self.assertFalse(HC._is_expired_body("2y | Python Developer | Gurugram | Onsite"))
+        self.assertFalse(HC._is_expired_body(""))
+        self.assertFalse(HC._is_expired_body(None))
+
+
 class _FakeLocator:
     first = None
 
