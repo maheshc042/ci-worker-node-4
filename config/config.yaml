@@ -32,12 +32,12 @@ platforms:
   linkedin: true
   naukri: true
   wellfound: true
-  # HiringCafe EXPERIMENT (2026-10-14): unpaused for the clean-room context
-  # trial — isolated context, real browser identity, no stealth script, no
-  # interception. If the wall persists, the platform auto-pauses again via
-  # the standard walled path. Safe by construction: read-only feed,
-  # EXTERNAL-only, never APPLIED.
-  hiringcafe: true
+  # HiringCafe PAUSED (2026-10-14, runs 561-563 prove it): wall broken and
+  # collection fixed, but the 3-day feed serves EXPIRED postings (Accenture,
+  # Ford, Mercedes detail pages all "Expired Job") with no ATS links — zero
+  # jobs can reach Sidekick. Auto-retried on cooldown by the pause logic;
+  # unpause only when the feed serves live postings again.
+  hiringcafe: false
 
 # HiringCafe feed (read-only source for the Sidekick handoff).
 # Server-side filters mirror the proven query: fresh, junior, eng/IT/data.
