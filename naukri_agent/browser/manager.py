@@ -199,6 +199,7 @@ class BrowserManager:
         # fingerprint clears Cloudflare Turnstile where bundled Chromium gets
         # loop-trapped, and its navigator.webdriver is natively false.
         self._real_chrome = False
+        self._clean_contexts: list[Any] = []
         # Guards against writing a LOGGED-OUT storage_state back over a good one.
         # `stop()` persists unconditionally, so a run that invalidated the session
         # (expired cookies, OTP challenge) used to save the anonymous state on
@@ -298,6 +299,12 @@ class BrowserManager:
 
     async def stop(self) -> None:
         try:
+            for clean_context in self._clean_contexts:
+                try:
+                    await clean_context.close()
+                except Exception:
+                    pass
+            self._clean_contexts = []
             if self._context is not None:
                 # Only if the session is still believed good — see
                 # `_session_trusted`.
@@ -328,6 +335,43 @@ class BrowserManager:
         page = await self.context.new_page()
         page.set_default_timeout(self.config.default_timeout_ms)
         page.set_default_navigation_timeout(self.config.navigation_timeout_ms)
+        return page
+
+    async def new_hiringcafe_page(self) -> Page:
+        """Isolated clean-room page for the HiringCafe Cloudflare experiment.
+
+        Separate context with the browser's REAL identity (no UA/header
+        overrides unless explicitly configured), NO stealth init script, and
+        NO request interception — every mechanism suspected of tripping
+        Turnstile tamper detection is absent here. Used only when
+        `browser.hiringcafe_clean_context` is on (HiringCafe path only);
+        the shared run context is never modified. Never raises on
+        teardown: contexts are tracked and closed in stop().
+        """
+        if self._browser is None:
+            raise RuntimeError("BrowserManager.start() was not awaited")
+        kwargs: dict[str, Any] = {
+            "viewport": {
+                "width": self.config.viewport_width,
+                "height": self.config.viewport_height,
+            },
+            "locale": self.config.locale,
+            "timezone_id": self.config.timezone,
+            "java_script_enabled": True,
+            "ignore_https_errors": False,
+            "permissions": [],
+        }
+        # Explicit override respected; otherwise omit entirely so the real
+        # browser values flow (consistent version/platform/Client-Hints by
+        # construction — no more Chrome-131-on-155 lies).
+        if self.config.user_agent:
+            kwargs["user_agent"] = self.config.user_agent
+        context = await self._browser.new_context(**kwargs)
+        self._clean_contexts.append(context)
+        page = await context.new_page()
+        page.set_default_timeout(self.config.default_timeout_ms)
+        page.set_default_navigation_timeout(self.config.navigation_timeout_ms)
+        log.info("browser.clean_context_opened", reason="hiringcafe-experiment")
         return page
 
     # --------------------------------------------------------------- session

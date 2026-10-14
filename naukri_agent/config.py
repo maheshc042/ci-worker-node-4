@@ -399,6 +399,12 @@ class BrowserConfig(_Model):
     max_action_delay_ms: int = Field(default=1_400, ge=0)
     block_resources: list[str] = Field(default_factory=list)
     user_agent: str = ""
+    # HiringCafe Cloudflare experiment (default OFF). When True, the
+    # HiringCafe platform gets an isolated clean-room context: real browser
+    # identity (no UA/header overrides), no stealth init script, no request
+    # interception. The shared run context used by Naukri/LinkedIn is
+    # untouched — a paused feed must never risk working platforms.
+    hiringcafe_clean_context: bool = False
 
     @model_validator(mode="after")
     def _ordered_delays(self) -> BrowserConfig:

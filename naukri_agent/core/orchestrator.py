@@ -513,7 +513,10 @@ class Orchestrator:
                             continue
 
                     # Create dedicated, clean browser page for this platform to prevent session/modal bleed
-                    page = await browser.new_page()
+                    if p_name == "hiringcafe" and self.config.browser.hiringcafe_clean_context:
+                        page = await browser.new_hiringcafe_page()
+                    else:
+                        page = await browser.new_page()
                     try:
                         if p_name == "naukri":
                             if answers is None:

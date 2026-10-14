@@ -3194,6 +3194,25 @@ class TestParseExperienceSingles(unittest.TestCase):
         self.assertEqual(parse_experience("5+ years"), (5.0, None))
 
 
+class TestHiringCafeCleanContext(unittest.TestCase):
+    def test_experiment_flag_defaults_off(self):
+        """The clean-room context must never activate unasked: shared-path
+        behavior is byte-identical unless explicitly enabled."""
+        from naukri_agent.config import BrowserConfig
+
+        self.assertFalse(BrowserConfig().hiringcafe_clean_context)
+
+
+class TestHiringCafeCleanPageContract(unittest.IsolatedAsyncioTestCase):
+    async def test_requires_started_browser(self):
+        from naukri_agent.browser.manager import BrowserManager
+        from naukri_agent.config import BrowserConfig
+
+        manager = BrowserManager(BrowserConfig(hiringcafe_clean_context=True))
+        with self.assertRaises(RuntimeError):
+            await manager.new_hiringcafe_page()
+
+
 if __name__ == "__main__":
     unittest.main()
 
