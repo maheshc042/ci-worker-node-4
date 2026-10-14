@@ -48,6 +48,7 @@ from ..core.models import (
     ApplicationStatus,
     ApplyOutcome,
     Job,
+    NON_HIRING_EMAIL_PREFIXES,
     RunStats,
     RunStatus,
     SkipReason,
@@ -1844,6 +1845,14 @@ class Orchestrator:
 
         for target_email in recruiter_emails:
             clean_email = target_email.strip().lower()
+            # Send-time guard (defense in depth — extractors differ per
+            # platform): compliance/accommodation/no-reply boxes are never
+            # recruiters. 2026-10-12: a pitch went to Aon's
+            # reasonable-accommodation inbox.
+            if clean_email.startswith(NON_HIRING_EMAIL_PREFIXES):
+                log.info("cold_email.non_hiring_inbox_skipped", to=clean_email,
+                         job_id=job.job_id)
+                continue
             if await self.repo.has_emailed(clean_email):
                 continue
 

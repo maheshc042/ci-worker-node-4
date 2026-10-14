@@ -1031,6 +1031,10 @@ class AgentConfig(_Model):
             "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
             # PhD / Research
             "phd", "ph.d", "research scientist", "ai researcher",
+            # Core ML: applied-AI background burns slots on these (recruiter
+            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
+            # roles stay eligible; only explicit ML titles block.
+            "machine learning", "ml engineer", "ml developer",
         }
 
         c_skills = [
@@ -1127,6 +1131,10 @@ class AgentConfig(_Model):
             # Pure SRE / Infra (keep DevOps/Cloud, exclude pure SRE/infra)
             "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
             "phd", "ph.d", "research scientist", "ai researcher",
+            # Core ML: applied-AI background burns slots on these (recruiter
+            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
+            # roles stay eligible; only explicit ML titles block.
+            "machine learning", "ml engineer", "ml developer",
         }
 
         c_skills = [
@@ -1312,6 +1320,10 @@ class AgentConfig(_Model):
             "flutter", "swift", "kotlin",
             "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
             "phd", "ph.d", "research scientist", "ai researcher",
+            # Core ML: applied-AI background burns slots on these (recruiter
+            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
+            # roles stay eligible; only explicit ML titles block.
+            "machine learning", "ml engineer", "ml developer",
         }
 
         c_skills = [

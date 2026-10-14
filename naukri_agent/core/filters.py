@@ -51,6 +51,14 @@ def _normalise_str(text: str) -> str:
     low = re.sub(r"\breact[\s.-]?js\b", "react", low)
     low = re.sub(r"\bnode[\s.-]?js\b", "node", low)
     low = re.sub(r"\bnext[\s.-]?js\b", "next", low)
+    # Gig/piecework markers ("AI Engineer | $50/task") canonicalize to
+    # "gig" so the disjoint gate fires: "$50/task" never matches a plain
+    # substring rule (the digit glued to the slash defeats the boundary).
+    low = re.sub(
+        r"\$\s*\d[\d,]*(?:\.\d+)?\s*/\s*task\b|\bper\s+task\b|\bper\s+gig\b|\btask\s+based\b",
+        " gig ",
+        low,
+    )
     return low
 
 
@@ -109,6 +117,17 @@ DISJOINT_SPECIALIZATIONS = (
     # an AI prefix (run 430 applied to an "AI Activation Strategist" individual
     # contributor posting). Surgical token — no engineering title uses it.
     "strategist",
+    # PHP/Ruby stacks: the candidate has 0 commercial experience in either.
+    # Framework names slip past the "php" blocklist ("Laravel Developer/Full
+    # Stack Developer" applied Oct 2026), so the family is named explicitly.
+    # Surgical tokens — no Python/JS title uses them.
+    "laravel", "symfony", "codeigniter", "cakephp", "yii", "zend",
+    "ruby", "rails", "ruby on rails",
+    # Gig/piecework postings ("AI Engineer | $50/task") are not employment:
+    # no career, no salary band, wasted slot. "gig" fires via the
+    # _normalise_str canonicalization above ($/task, per-task forms);
+    # plain-English variants are listed literally. Surgical tokens.
+    "per task", "per gig", "gig",
 )
 
 # Role heads that are never tech roles even with a tech parenthetical
@@ -153,6 +172,11 @@ def _title_suggests_senior(title: str) -> bool:
     low = f" {(title or '').lower()} "
     if any(marker in low for marker in _IMPUTED_SENIORITY_MARKERS):
         return True
+    # Spelled-out levels read the same as abbreviations ("Software
+    # Development Engineer 4" == "SDE-4", which sailed through to an apply
+    # at Flipkart). Normalise before the level check, mirroring Gate 2's
+    # SDE-equivalence.
+    low = re.sub(r"\bsoftware development engineer\b", "sde", low)
     # Leveled bands read senior at 3+: SDE 4 / SDE-III imply a senior
     # requisition while SDE 1/2 stay junior (run 424 applied SDE-4 sight
     # unseen). Bare III/IV tokens behave the same ("Engineer III").

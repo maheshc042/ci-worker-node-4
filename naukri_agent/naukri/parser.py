@@ -40,6 +40,11 @@ def parse_experience(text: str) -> tuple[float | None, float | None]:
         return 0.0, 0.0
     span = re.search(rf"{_NUM}\s*[-–to]+\s*{_NUM}", cleaned)
     if span:
+        # Identical high bands ("24-24", "12-12") are headcount/applicant
+        # artifacts, not tenure — nobody writes a genuine X-X band at 10+.
+        # Fail open so a junior role isn't skipped on a stray number.
+        if float(span.group(1)) == float(span.group(2)) and float(span.group(1)) >= 10:
+            return None, None
         return float(span.group(1)), float(span.group(2))
     plus = re.search(rf"{_NUM}\s*\+", cleaned)
     if plus:
@@ -82,7 +87,8 @@ def extract_jd_experience(text: str) -> tuple[float | None, float | None]:
             lo, hi = float(span.group(1)), float(span.group(2))
             # Sanity: "Year of establishment: 2019" is not tenure. Absurd
             # bands belong to some other number class — skip the line.
-            if lo <= 30 and hi <= 30:
+            # Identical high bands ("24-24 openings") are headcount likewise.
+            if lo <= 30 and hi <= 30 and not (lo == hi and lo >= 10):
                 return lo, hi
             continue
         plus = re.search(rf"{_NUM}\s*\+", cleaned)

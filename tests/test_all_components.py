@@ -107,6 +107,43 @@ class TestJdExperienceExtractor(unittest.TestCase):
         self.assertEqual(e("Great culture, free lunch"), (None, None))
         self.assertEqual(e(""), (None, None))
 
+    def test_identical_high_bands_fail_open(self):
+        from naukri_agent.naukri.parser import extract_jd_experience as e
+        from naukri_agent.naukri.parser import parse_experience as p
+
+        # "24-24" is headcount, never tenure; genuine bands intact.
+        self.assertEqual(p("24-24"), (None, None))
+        self.assertEqual(p("12-12"), (None, None))
+        self.assertEqual(p("3-8 Yrs"), (3.0, 8.0))
+        self.assertEqual(p("12 years"), (12.0, 12.0))
+        self.assertEqual(
+            e("We have 24-24 openings for experienced staff"), (None, None))
+
+
+class TestSpelledOutSeniority(unittest.TestCase):
+    def test_spelled_out_levels_read_senior(self):
+        from naukri_agent.core.filters import _title_suggests_senior
+
+        self.assertTrue(_title_suggests_senior("Software Development Engineer 4"))
+        self.assertFalse(_title_suggests_senior("Software Development Engineer II - Fullstack"))
+        self.assertFalse(_title_suggests_senior("Software Development Engineer in Test"))
+
+    def test_unified_profiles_exclude_core_ml(self):
+        cfg = AgentConfig.load()
+        for meth in ("get_unified_instahyre_profile",
+                     "get_unified_cutshort_profile",
+                     "get_unified_wellfound_profile"):
+            profile = getattr(cfg, meth)()
+            engine = FilterEngine(profile.filters_for("recommended"))
+            blocked = engine.evaluate_card(Job(
+                job_id="t", title="ML Engineer", company="C",
+                location="Bengaluru", url="http://test.com", platform="x"))
+            wanted = engine.evaluate_card(Job(
+                job_id="t", title="AI Engineer", company="C",
+                location="Bengaluru", url="http://test.com", platform="x"))
+            self.assertFalse(blocked.passed, meth)
+            self.assertTrue(wanted.passed, meth)
+
 
 class TestRoleHeadCheck(unittest.TestCase):
     def _decision(self, title):
@@ -2993,6 +3030,57 @@ class TestWordBoundaryMatching(unittest.TestCase):
         self.assertTrue(m("Yes, willing to relocate", "Yes"))
         self.assertTrue(m("Bengaluru", "bengaluru"))
         self.assertTrue(m("3 years experience", "3 years"))
+
+
+class TestGigAndStackDisjoint(unittest.TestCase):
+    def _decision(self, title):
+        cfg = AgentConfig.load()
+        ai_profile = next(p for p in cfg.profiles if "AI" in p.name)
+        engine = FilterEngine(ai_profile.filters_for("recommended"))
+        return engine.evaluate_card(Job(
+            job_id="t", title=title, company="C", location="Bengaluru",
+            url="http://test.com", platform="naukri"))
+
+    def test_gig_postings_blocked(self):
+        for title in ["AI Engineer | $50/task", "Python Developer per task",
+                      "React Developer per gig"]:
+            self.assertFalse(self._decision(title).passed, title)
+
+    def test_php_ruby_stacks_blocked(self):
+        for title in ["Laravel Developer/Full Stack Developer",
+                      "Ruby on Rails Developer",
+                      "Senior Symfony Developer"]:
+            self.assertFalse(self._decision(title).passed, title)
+
+    def test_legit_titles_untouched(self):
+        for title in ["AI Engineer", "Python Developer",
+                      "Full Stack Developer", "Giganet Developer"]:
+            decision = self._decision(title)
+            if "Giganet" in title:
+                self.assertFalse(decision.passed)
+            else:
+                self.assertTrue(decision.passed, f"{title}: {decision.reason}")
+
+
+class TestBlockedQuestionStatic(unittest.IsolatedAsyncioTestCase):
+    async def test_instance_call_contract(self):
+        """Production calls self._extract_blocked_question (3 args with the
+        bound self); the TypeError in runs 554/556 came from a lost
+        staticmethod. This pins the call contract, not just the logic."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        el = MagicMock()
+        el.get_attribute = AsyncMock(return_value="How many years of experience?")
+        locs = MagicMock()
+        locs.all = AsyncMock(return_value=[el])
+        modal = MagicMock()
+        modal.locator = MagicMock(return_value=locs)
+        plat = LinkedInPlatform.__new__(LinkedInPlatform)
+        q = await plat._extract_blocked_question(modal, "Step 5 blocked")
+        self.assertIsNotNone(q)
+        self.assertEqual(q["kind"], "unknown")
 
 
 class TestNonHiringEmailExclusion(unittest.TestCase):

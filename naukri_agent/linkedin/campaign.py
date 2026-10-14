@@ -326,6 +326,9 @@ async def run_campaign(
                         "query", "feedback", "careers", "job", "jobs", "apply",
                         "application", "noreply", "no-reply", "donotreply",
                         "do-not-reply", "enquiry", "enquiries",
+                        "reasonableaccommodation", "reasonableaccommodations",
+                        "accommodation", "accommodations", "accessibility",
+                        "compliance", "legal", "privacy", "abuse",
                     ):
                         if local_part in ("careers", "job", "jobs", "apply", "application") \
                                 and company_domain_match(clean_email, company):

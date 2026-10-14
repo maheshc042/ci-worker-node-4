@@ -537,6 +537,7 @@ class LinkedInPlatform(BaseJobPlatform):
             pass
         return None
 
+    @staticmethod
     async def _extract_blocked_question(modal, form_text: str) -> dict | None:
         """Build a review-queue question from a stuck Easy Apply step.
 
