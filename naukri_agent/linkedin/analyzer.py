@@ -95,7 +95,9 @@ SPAM_OR_UNPAID_REJECT_REGEX = re.compile(
     r"\bthe\s+entrepreneurship\s+network\b|\bten\b|"
     r"\bb\.?\s*com\b|\bbcom\b|"
     r"\b50\+\s*openings\b|\b100\+\s*openings\b|"
-    r"dm\s+on\s+whatsapp|whatsapp\s+group"
+    r"dm\s+on\s+whatsapp|whatsapp\s+group|"
+    # Gig/piecework ("AI Engineer | $50/task"): not employment, wasted slot.
+    r"\bper\s+task\b|/\s*task\b|\bper\s+gig\b|\btask\s+based\b"
     r")",
     re.IGNORECASE,
 )

@@ -79,6 +79,12 @@ class TestExistingPins(unittest.TestCase):
     def test_spam_rejected(self):
         self.assertTrue(is_spam_or_unpaid("Unpaid internship, 50+ openings, DM on whatsapp"))
 
+    def test_gig_piecework_rejected(self):
+        """$50/task-style gig posts are not employment (run 559 applied)."""
+        self.assertTrue(is_spam_or_unpaid("AI Engineer | $50/task at Codefeast"))
+        self.assertTrue(is_spam_or_unpaid("Python Developer per task, remote"))
+        self.assertFalse(is_spam_or_unpaid("AI Engineer, Python RAG, full-time"))
+
     def test_role_classification(self):
         self.assertEqual(classify_role("Hiring LLM engineer, Python RAG"), "AI / Python Engineer")
         self.assertEqual(classify_role("Hiring React frontend MERN"), "Full Stack Engineer")
