@@ -32,12 +32,12 @@ platforms:
   linkedin: true
   naukri: true
   wellfound: true
-  # HiringCafe PAUSED again (2026-10-10, run 531): the /classic path that
-  # returned 200 for clean clients still challenges EVERY parameterized
-  # navigation inside the automated browser (3 walled search pages, zero
-  # cards). Server-side posture unchanged — client-side 200s mean nothing
-  # for CDP-driven Chrome. Revisit only on a validated live run.
-  hiringcafe: false
+  # HiringCafe EXPERIMENT (2026-10-14): unpaused for the clean-room context
+  # trial — isolated context, real browser identity, no stealth script, no
+  # interception. If the wall persists, the platform auto-pauses again via
+  # the standard walled path. Safe by construction: read-only feed,
+  # EXTERNAL-only, never APPLIED.
+  hiringcafe: true
 
 # HiringCafe feed (read-only source for the Sidekick handoff).
 # Server-side filters mirror the proven query: fresh, junior, eng/IT/data.
@@ -105,6 +105,9 @@ browser:
   min_action_delay_ms: 250
   max_action_delay_ms: 800
   block_resources: [font, media]
+  # Cloudflare experiment: HiringCafe-only clean-room context (real
+  # identity, no stealth, no interception). Shared context untouched.
+  hiringcafe_clean_context: true
 
 run:
   dedupe_window_days: 90
