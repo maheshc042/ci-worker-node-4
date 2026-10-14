@@ -453,8 +453,24 @@ class HiringCafePlatform(BaseJobPlatform):
             const href = a.getAttribute('href');
             if (!href || seen.has(href)) continue;
             seen.add(href);
-            const card = a.closest('li, article') || a.parentElement;
-            out.push({href, text: ((card ? card.innerText : a.innerText) || '').slice(0, 4000)});
+            // Climb to the real card container: the anchor's own text is
+            // just micro-copy ("Job Posting | View all", ~20 chars), which
+            // starved the prefilter and wiped run 561 (1310 collected, 0
+            // jobs). First ancestor with substantive text wins — markup
+            // agnostic, no tag-name guessing.
+            let text = '';
+            let node = a;
+            for (let i = 0; i < 6 && node && node !== document.body; i++) {
+                node = node.parentElement;
+                if (!node) break;
+                const t = (node.innerText || '').trim();
+                if (t.length > 120) { text = t; break; }
+            }
+            if (!text) {
+                const card = a.closest('li, article') || a.parentElement;
+                text = ((card ? card.innerText : a.innerText) || '');
+            }
+            out.push({href, text: text.slice(0, 4000)});
         }
         return out;
     }"""
