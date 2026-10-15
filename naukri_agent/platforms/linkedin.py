@@ -553,6 +553,13 @@ class LinkedInPlatform(BaseJobPlatform):
         r"(This field is required)?[\s\*]*",
         re.IGNORECASE,
     )
+    # Char-counter debris ("* 1/20 1 of 20 characters How many...") belongs
+    # to the previous question's text box — and "1/20" would otherwise trip
+    # the strong-text rule for the current question.
+    _BLOCKED_COUNTER_DEBRIS_RE = re.compile(
+        r"^\*?\s*\d+\s*/\s*\d+\s*(\d+\s+of\s+\d+\s+(characters|words))?",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     async def _extract_blocked_questions(modal, form_text: str) -> list[dict]:
@@ -597,34 +604,43 @@ class LinkedInPlatform(BaseJobPlatform):
                 if c and c.strip()
             ]
             for index, chunk in enumerate(chunks):
-                if len(items) >= 4:
+                if len(items) >= 6:
                     break
                 if len(chunk) < 20:
                     continue
                 if any(rx.search(chunk) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES):
                     continue
                 core = LinkedInPlatform._BLOCKED_LEADING_DEBRIS_RE.sub("", chunk).strip()
+                core = LinkedInPlatform._BLOCKED_COUNTER_DEBRIS_RE.sub("", core).strip()
                 if len(core) < 20 or any(
                     rx.search(core) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES
                 ):
                     continue
-                # A Yes/No pair trailing at the START of the next chunk
-                # belongs to this question ("Q? * Yes No This field... Q2?").
+                # Pair scope is the CLEANED question plus the next chunk's
+                # head (this question's trailing options). The raw chunk's
+                # own leading pair belongs to the PREVIOUS question —
+                # matching on it misclassifies text boxes as radio.
                 following = chunks[index + 1] if index + 1 < len(chunks) else ""
-                scope = chunk + " " + following[:40]
+                scope = core + " " + following[:40]
                 has_yes = re.search(r"\bYes\b", scope) is not None
                 has_no = re.search(r"\bNo\b", scope) is not None
-                if re.search(
-                    r"how many|years of|enter\b|type\b|1\s*/\s*\d+|characters|number",
+                strong_text = re.search(
+                    r"how many|years of|1\s*/\s*\d+|characters|number",
                     core, re.IGNORECASE,
-                ):
-                    items.append({"text": core[:500], "kind": "text", "options": []})
-                elif has_yes and has_no:
+                )
+                weak_text = re.search(
+                    r"ctc|salary|notice|location|city|email|phone|name\b|company|"
+                    r"college|degree|percent|cgpa|\bdob\b|birth|passport|visa",
+                    core, re.IGNORECASE,
+                )
+                if has_yes and has_no and not strong_text:
                     items.append({
                         "text": core[:500],
                         "kind": "radio",
                         "options": ["Yes", "No"],
                     })
+                elif strong_text or weak_text:
+                    items.append({"text": core[:500], "kind": "text", "options": []})
             if items:
                 return items
             text = (form_text or "").strip()[:500]

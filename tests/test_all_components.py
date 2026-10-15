@@ -1895,7 +1895,24 @@ class TestLinkedInBlockedStep(unittest.IsolatedAsyncioTestCase):
         self.assertIn("radio", kinds)
         self.assertIn("text", kinds)
         self.assertTrue(all(len(q["text"]) >= 20 for q in qs))
-        self.assertLessEqual(len(qs), 4)
+        self.assertLessEqual(len(qs), 6)
+
+    async def test_counter_debris_not_strong_text(self):
+        """'* 1/20 1 of 20 characters' belongs to the previous box — a Yes/No
+        question after one must still read as radio, not text."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        locs = MagicMock()
+        locs.all = AsyncMock(return_value=[])
+        modal = MagicMock()
+        modal.locator = MagicMock(return_value=locs)
+        blob = ("* 1/20 1 of 20 characters Can you write complex SQL queries?* "
+                "Yes No This field is required")
+        qs = await LinkedInPlatform._extract_blocked_questions(modal, blob)
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["kind"], "radio")
 
     def _btn(self, text, visible=True):
         from unittest.mock import AsyncMock, MagicMock

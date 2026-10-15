@@ -1057,6 +1057,23 @@ class Repository:
         )
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _options_key(options) -> tuple:
+        """Normalized options for exact-duplicate comparison (pure)."""
+        if not options:
+            return ()
+        if isinstance(options, str):
+            import json as _json
+
+            try:
+                options = _json.loads(options)
+            except Exception:
+                return (options.strip().lower(),)
+        try:
+            return tuple(sorted(str(o).strip().lower() for o in options))
+        except TypeError:
+            return ()
+
     async def resolve_review(self, review_id: int, answer: str) -> bool:
         row = await self.pool.fetchrow(
             """
@@ -1145,6 +1162,67 @@ class Repository:
                 cascaded=cascaded,
                 answer=answer[:40],
             )
+
+        # Cross-profile exact duplicates: both profiles belong to the same
+        # human, so a VERBATIM identical question (normalized text) with the
+        # same kind AND same options needs no per-profile retraining — the
+        # widget is literally the same. Near-matches stay per-profile on
+        # purpose: tenure/skill answers legitimately differ by track, and a
+        # fuzzy cross-profile cascade could transplant the wrong value.
+        try:
+            self_row = await self.pool.fetchrow(
+                "SELECT question_kind, options FROM question_review WHERE id = $1",
+                review_id,
+            )
+            if self_row is not None:
+                cross_rows = await self.pool.fetch(
+                    """
+                    SELECT id, profile, question, question_kind, options FROM question_review
+                     WHERE resolved = FALSE AND profile <> $1 LIMIT 20
+                    """,
+                    profile,
+                )
+                q_norm = (question or "").strip().lower()
+                self_kind = self_row["question_kind"]
+                self_opts = self._options_key(self_row["options"])
+                for other in cross_rows:
+                    if (other["question"] or "").strip().lower() != q_norm:
+                        continue
+                    if other["question_kind"] != self_kind:
+                        continue
+                    if self._options_key(other["options"]) != self_opts:
+                        continue
+                    await self.pool.execute(
+                        """
+                        UPDATE question_review
+                           SET resolved = TRUE,
+                               answer = $1,
+                               auto_resolved = TRUE,
+                               resolved_by = 'auto-cascade-cross-profile',
+                               updated_at = now()
+                         WHERE id = $2
+                        """,
+                        answer, other["id"],
+                    )
+                    await self.pool.execute(
+                        """
+                        INSERT INTO answer_kb (profile, pattern, answer, priority, source)
+                        VALUES ($1, $2, $3, 15, 'auto-cascade')
+                        ON CONFLICT (profile, pattern) DO UPDATE
+                           SET answer = EXCLUDED.answer,
+                               priority = LEAST(answer_kb.priority, 15),
+                               source = 'auto-cascade',
+                               updated_at = now()
+                        """,
+                        other["profile"],
+                        (other["question"] or "").strip().lower(),
+                        answer,
+                    )
+                    log.info("answer_learn.cross_profile_cascade",
+                             from_profile=profile, to_profile=other["profile"],
+                             question=question[:80])
+        except Exception as exc:
+            log.warning("answer_learn.cross_cascade_failed", error=str(exc)[:150])
         return True
 
     # ------------------------------------------------------- profile refresh
