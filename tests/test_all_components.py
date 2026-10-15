@@ -1852,13 +1852,13 @@ class TestLinkedInBlockedStep(unittest.IsolatedAsyncioTestCase):
         locs.all = AsyncMock(return_value=[el])
         modal = MagicMock()
         modal.locator = MagicMock(return_value=locs)
-        q = await LinkedInPlatform._extract_blocked_question(
+        qs = await LinkedInPlatform._extract_blocked_questions(
             modal, "Step 6 Additional Questions How many years...")
-        self.assertIsNotNone(q)
-        self.assertIn("How many years", q["options"][0])
-        self.assertEqual(q["kind"], "unknown")
+        self.assertEqual(len(qs), 1)
+        self.assertIn("How many years", qs[0]["text"])
+        self.assertEqual(qs[0]["kind"], "text")
 
-    async def test_empty_step_returns_none(self):
+    async def test_empty_step_returns_empty(self):
         from unittest.mock import AsyncMock, MagicMock
 
         from naukri_agent.platforms.linkedin import LinkedInPlatform
@@ -1867,7 +1867,35 @@ class TestLinkedInBlockedStep(unittest.IsolatedAsyncioTestCase):
         locs.all = AsyncMock(return_value=[])
         modal = MagicMock()
         modal.locator = MagicMock(return_value=locs)
-        self.assertIsNone(await LinkedInPlatform._extract_blocked_question(modal, ""))
+        self.assertEqual(await LinkedInPlatform._extract_blocked_questions(modal, ""), [])
+
+    async def test_multipage_blob_splits(self):
+        """Review #62 verbatim shape: one blob with face-2-face Yes/No, a
+        Hyderabad presence Yes/No, and years text inputs must split into
+        separate items — answerable ones train, presence stays review."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        locs = MagicMock()
+        locs.all = AsyncMock(return_value=[])
+        modal = MagicMock()
+        modal.locator = MagicMock(return_value=locs)
+        blob = (
+            "Apply to SRS Consulting Inc 3/4 pages Additional Questions "
+            "Are you comfortable for face 2 face interview?* Yes No "
+            "This field is required "
+            "Are you currently in Hyderabad?* Yes No "
+            "This field is required "
+            "How many years of work experience do you have with Python?* "
+            "How many years of work experience do you have with Docker?*"
+        )
+        qs = await LinkedInPlatform._extract_blocked_questions(modal, blob)
+        kinds = [q["kind"] for q in qs]
+        self.assertIn("radio", kinds)
+        self.assertIn("text", kinds)
+        self.assertTrue(all(len(q["text"]) >= 20 for q in qs))
+        self.assertLessEqual(len(qs), 4)
 
     def _btn(self, text, visible=True):
         from unittest.mock import AsyncMock, MagicMock
@@ -3132,9 +3160,9 @@ class TestGigAndStackDisjoint(unittest.TestCase):
 
 class TestBlockedQuestionStatic(unittest.IsolatedAsyncioTestCase):
     async def test_instance_call_contract(self):
-        """Production calls self._extract_blocked_question (3 args with the
-        bound self); the TypeError in runs 554/556 came from a lost
-        staticmethod. This pins the call contract, not just the logic."""
+        """Production calls self._extract_blocked_questions (bound self); the
+        TypeError in runs 554/556 came from a lost staticmethod. This pins
+        the call contract, not just the logic."""
         from unittest.mock import AsyncMock, MagicMock
 
         from naukri_agent.platforms.linkedin import LinkedInPlatform
@@ -3146,9 +3174,9 @@ class TestBlockedQuestionStatic(unittest.IsolatedAsyncioTestCase):
         modal = MagicMock()
         modal.locator = MagicMock(return_value=locs)
         plat = LinkedInPlatform.__new__(LinkedInPlatform)
-        q = await plat._extract_blocked_question(modal, "Step 5 blocked")
-        self.assertIsNotNone(q)
-        self.assertEqual(q["kind"], "unknown")
+        qs = await plat._extract_blocked_questions(modal, "Step 5 blocked")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["kind"], "unknown")
 
 
 class TestNonHiringEmailExclusion(unittest.TestCase):

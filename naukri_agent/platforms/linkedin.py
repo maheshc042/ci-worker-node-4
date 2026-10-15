@@ -537,14 +537,36 @@ class LinkedInPlatform(BaseJobPlatform):
             pass
         return None
 
-    @staticmethod
-    async def _extract_blocked_question(modal, form_text: str) -> dict | None:
-        """Build a review-queue question from a stuck Easy Apply step.
+    _BLOCKED_BOILERPLATE_RES = (
+        re.compile(r"^[\W\d/]*$"),
+        re.compile(r"^this field is required", re.IGNORECASE),
+        re.compile(r"^additional questions", re.IGNORECASE),
+        re.compile(r"^\d+\s*of\s*\d+", re.IGNORECASE),
+        re.compile(r"^\d+\s*/\s*\d+\s*(characters|words)?$", re.IGNORECASE),
+        re.compile(r"^apply to .{0,80} \d+\s*/\s*\d+\s*pages?$", re.IGNORECASE),
+    )
+    # Trailing debris from the PREVIOUS question ("...Hyderabad? * Yes No
+    # This field is required How many years..."): strip it before kind
+    # inference so a text box isn't misread as radio.
+    _BLOCKED_LEADING_DEBRIS_RE = re.compile(
+        r"^[\*\-\•\s]*(Yes|No)\b[\s\*]*(Yes|No)?\b[\s\*]*"
+        r"(This field is required)?[\s\*]*",
+        re.IGNORECASE,
+    )
 
-        A dead FAILED teaches the KB nothing; a NEEDS_REVIEW with the step
-        text + field labels trains an answer that the auto-retry loop then
-        converts into an application. Returns None when nothing usable can
-        be extracted (caller keeps today's FAILED). Never raises.
+    @staticmethod
+    async def _extract_blocked_questions(modal, form_text: str) -> list[dict]:
+        """Split a stuck Easy Apply page into per-question review items.
+
+        A whole-page blob ("Q1? Yes No Q2? Yes No Q3? years...") teaches the
+        KB nothing: one unanswerable item blocks training for the answerable
+        ones beside it (run 564: face-2-face Yes + Python/Docker years died
+        next to a Hyderabad presence question). Each ?-chunk becomes its own
+        item (cap 4); Yes/No pairs attach as radio options, years/number
+        inputs as text. Boilerplate ("This field is required", page counters)
+        is dropped. Falls back to the legacy single blob when nothing splits.
+        Empty list only when truly nothing extractable (caller keeps FAILED).
+        Never raises.
         """
         try:
             labels: list[str] = []
@@ -567,16 +589,54 @@ class LinkedInPlatform(BaseJobPlatform):
                     continue
                 if len(labels) >= 12:
                     break
+
+            items: list[dict] = []
+            chunks = [
+                c.strip()
+                for c in re.split(r"(?<=\?)\s*", form_text or "")
+                if c and c.strip()
+            ]
+            for index, chunk in enumerate(chunks):
+                if len(items) >= 4:
+                    break
+                if len(chunk) < 20:
+                    continue
+                if any(rx.search(chunk) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES):
+                    continue
+                core = LinkedInPlatform._BLOCKED_LEADING_DEBRIS_RE.sub("", chunk).strip()
+                if len(core) < 20 or any(
+                    rx.search(core) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES
+                ):
+                    continue
+                # A Yes/No pair trailing at the START of the next chunk
+                # belongs to this question ("Q? * Yes No This field... Q2?").
+                following = chunks[index + 1] if index + 1 < len(chunks) else ""
+                scope = chunk + " " + following[:40]
+                has_yes = re.search(r"\bYes\b", scope) is not None
+                has_no = re.search(r"\bNo\b", scope) is not None
+                if re.search(
+                    r"how many|years of|enter\b|type\b|1\s*/\s*\d+|characters|number",
+                    core, re.IGNORECASE,
+                ):
+                    items.append({"text": core[:500], "kind": "text", "options": []})
+                elif has_yes and has_no:
+                    items.append({
+                        "text": core[:500],
+                        "kind": "radio",
+                        "options": ["Yes", "No"],
+                    })
+            if items:
+                return items
             text = (form_text or "").strip()[:500]
-            if not text and not labels:
-                return None
-            return {
-                "text": text or "LinkedIn Easy Apply blocked step",
-                "kind": "unknown",
-                "options": labels,
-            }
+            if text or labels:
+                return [{
+                    "text": text or "LinkedIn Easy Apply blocked step",
+                    "kind": "unknown",
+                    "options": labels,
+                }]
+            return []
         except Exception:
-            return None
+            return []
 
     async def _scroll_and_extract_cards(
         self,
@@ -1451,19 +1511,19 @@ class LinkedInPlatform(BaseJobPlatform):
                     log.warning("linkedin.apply.step_stuck", step=step, error=err_txt, buttons=btn_labels)
                     await self._dismiss_modal()
                     _record_timing()
-                    # Convert to review instead of a dead end: the extracted
-                    # step text + field labels train an answer that the
-                    # needs_review auto-retry loop converts into an
-                    # application. Falls back to FAILED when unextractable.
-                    blocked_q = await self._extract_blocked_question(modal, form_text)
-                    if blocked_q is None:
+                    # Convert to review instead of a dead end: each split
+                    # question trains an answer that the needs_review
+                    # auto-retry loop converts into an application. Falls
+                    # back to FAILED when nothing extractable.
+                    blocked_qs = await self._extract_blocked_questions(modal, form_text)
+                    if not blocked_qs:
                         btn_detail = f" buttons={btn_labels}" if btn_labels else ""
                         return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}{btn_detail}")
                     return ApplyOutcome(
                         status=ApplicationStatus.NEEDS_REVIEW,
                         reason=SkipReason.UNANSWERED_QUESTION,
-                        detail=f"Easy Apply step blocked: {err_txt} | step={step_sig}",
-                        unanswered_questions=[blocked_q],
+                        detail=f"Easy Apply step blocked ({len(blocked_qs)} questions): {err_txt} | step={step_sig}",
+                        unanswered_questions=blocked_qs,
                     )
             else:
                 stuck_count = 0

@@ -459,7 +459,20 @@ class Repository:
         window_days: int,
         account: str = "primary",
     ) -> list[Job]:
-        """Filters out jobs that fuzzy-match recently applied jobs across any platform."""
+        """Filters out jobs that fuzzy-match recently applied jobs across any platform.
+
+        INVARIANT (do not re-add account scoping): both Naukri accounts belong
+        to the same human. An application from EITHER account blocks the same
+        job on the other — same job_id or fuzzy company+title match. Replays
+        across accounts double-apply the same person to the same recruiter
+        (Oct 2026 audit: 184 duplicate groups, e.g. Tundra/Trukker/Flynaut
+        applied primary+secondary) and burn daily cap on both accounts for
+        zero extra coverage. The `account` parameter is kept for signature
+        compatibility and logging only.
+        Terminal outcomes only (applied/needs_review/external/
+        already_applied): profile-specific SKIPS stay per-account on purpose —
+        an AI-tenure shortfall must never block the Full Stack account.
+        """
         if not jobs:
             return []
 
@@ -470,11 +483,9 @@ class Repository:
                   FROM applications a
                   JOIN jobs j ON j.job_id = a.job_id AND j.platform = a.platform
                  WHERE a.status IN ('applied', 'needs_review', 'external', 'already_applied')
-                   AND a.account = $2
                    AND a.created_at > now() - ($1 || ' days')::interval
                 """,
                 str(window_days),
-                account,
             )
         except Exception as exc:
             log.warning("db.filter_cross_platform_duplicates_failed", error=str(exc))
@@ -493,10 +504,11 @@ class Repository:
             if not j_company or not j_title:
                 return False
 
-            job_platform = (getattr(job, "platform", None) or "naukri").lower()
-            for c_company, c_title, prev_platform in recent:
-                if str(prev_platform or "").lower() == job_platform:
-                    continue  # intra-platform handled by known_job_ids exactly
+            for c_company, c_title, _prev_platform in recent:
+                # No same-platform exemption: known_job_ids is account-scoped,
+                # so only the fuzzy match sees same-platform cross-account
+                # pairs (primary applied X + secondary evaluating X). Exact
+                # same-ID pairs match here at ratio 1.0.
                 # Fuzzy match: same company (high similarity) and similar title
                 comp_ratio = SequenceMatcher(None, j_company, c_company).ratio()
                 title_ratio = SequenceMatcher(None, j_title, c_title).ratio()
