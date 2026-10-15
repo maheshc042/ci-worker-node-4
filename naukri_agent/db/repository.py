@@ -458,6 +458,7 @@ class Repository:
         jobs: list[Job],
         window_days: int,
         account: str = "primary",
+        profile: str | None = None,
     ) -> list[Job]:
         """Filters out jobs that fuzzy-match recently applied jobs across any platform.
 
@@ -469,9 +470,13 @@ class Repository:
         applied primary+secondary) and burn daily cap on both accounts for
         zero extra coverage. The `account` parameter is kept for signature
         compatibility and logging only.
-        Terminal outcomes only (applied/needs_review/external/
-        already_applied): profile-specific SKIPS stay per-account on purpose —
-        an AI-tenure shortfall must never block the Full Stack account.
+        Terminal outcomes only (applied/already_applied/external): profile-
+        specific SKIPS stay per-account on purpose — an AI-tenure shortfall
+        must never block the Full Stack account.
+        needs_review is profile-scoped: another profile's stuck job does NOT
+        block this one — different KBs resolve differently, so the second
+        profile gets its attempt and queues its own review if it also stalls.
+        Only the same profile stuck on the same job suppresses retries.
         """
         if not jobs:
             return []
@@ -479,7 +484,7 @@ class Repository:
         try:
             rows = await self._fetch_with_retry(
                 """
-                SELECT j.job_id, j.company, j.title, a.platform
+                SELECT j.job_id, j.company, j.title, a.platform, a.profile, a.status
                   FROM applications a
                   JOIN jobs j ON j.job_id = a.job_id AND j.platform = a.platform
                  WHERE a.status IN ('applied', 'needs_review', 'external', 'already_applied')
@@ -496,7 +501,8 @@ class Repository:
             company = str(row["company"] or "").strip().lower()
             title = str(row["title"] or "").strip().lower()
             if company and title:
-                recent.append((company, title, row["platform"]))
+                recent.append((company, title, row["platform"],
+                               row["profile"], row["status"]))
 
         def is_duplicate(job: Job) -> bool:
             j_company = str(job.company or "").strip().lower()
@@ -504,11 +510,16 @@ class Repository:
             if not j_company or not j_title:
                 return False
 
-            for c_company, c_title, _prev_platform in recent:
+            for c_company, c_title, _prev_platform, row_profile, row_status in recent:
                 # No same-platform exemption: known_job_ids is account-scoped,
                 # so only the fuzzy match sees same-platform cross-account
                 # pairs (primary applied X + secondary evaluating X). Exact
                 # same-ID pairs match here at ratio 1.0.
+                if row_status == "needs_review" and profile is not None \
+                        and (row_profile or "") != profile:
+                    # Another profile's stuck job: this profile's KB may
+                    # resolve what the other could not — attempt, don't block.
+                    continue
                 # Fuzzy match: same company (high similarity) and similar title
                 comp_ratio = SequenceMatcher(None, j_company, c_company).ratio()
                 title_ratio = SequenceMatcher(None, j_title, c_title).ratio()

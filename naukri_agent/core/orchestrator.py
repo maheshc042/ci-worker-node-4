@@ -1115,7 +1115,8 @@ class Orchestrator:
         collected_jobs = await self.repo.filter_cross_platform_duplicates(
             collected_jobs,
             window_days=self.config.run.dedupe_window_days,
-            account=self.account_key
+            account=self.account_key,
+            profile=profile.name,
         )
         if len(collected_jobs) < pre_dedupe_count:
             deduped = pre_dedupe_count - len(collected_jobs)
