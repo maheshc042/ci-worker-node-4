@@ -1884,8 +1884,6 @@ class Orchestrator:
             self.stats,
             duration_s=self.elapsed_s,
             run_id=self.run_id,
-            include_job_list=notifications.include_job_list,
-            max_jobs=notifications.max_jobs_in_message,
             error=error,
             dry_run=self.dry_run,
         )

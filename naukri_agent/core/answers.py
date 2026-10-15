@@ -242,6 +242,32 @@ class AnswerEngine:
         raw.sort(key=lambda triple: len(triple[0]), reverse=True)
         raw += [(_normalise(pattern), answer, "kb") for pattern, answer in kb]
 
+        # Profile precedence (config.yaml: "Profile-level answers win over
+        # these"): drop kb rows shadowed by a profile row — same intent in
+        # different words (profile tokens ⊆ kb tokens, plain patterns only).
+        # Without this, longer global phrasings outscore corrected profile
+        # entries on token count (ML 2-vs-0 stayed wrong for weeks), and no
+        # profile correction can ever win. Regex entries never shadow (their
+        # match semantics differ from substring/token matching).
+        _profile_toks = [
+            _tokenise(pattern)
+            for pattern, _answer, source in raw
+            if source == "profile" and pattern and not pattern.startswith("re:")
+        ]
+        if any(_profile_toks):
+            _kept: list[tuple[str, str, str]] = []
+            for pattern, answer, source in raw:
+                if (
+                    source == "kb"
+                    and pattern
+                    and not pattern.startswith("re:")
+                    and any(pt and pt <= _tokenise(pattern) for pt in _profile_toks)
+                ):
+                    log.debug("answers.shadowed", pattern=pattern[:80])
+                    continue
+                _kept.append((pattern, answer, source))
+            raw = _kept
+
         self.entries: list[_Entry] = []
         for index, (pattern, answer, source) in enumerate(raw):
             if not pattern:

@@ -2847,6 +2847,81 @@ class TestExperienceGates(unittest.TestCase):
         self.assertTrue(j.experience_imputed)
 
 
+class TestProfileShadowing(unittest.TestCase):
+    """Config promises profile answers win over global ones. Without
+    shadowing, longer global phrasings outscored corrected profile entries
+    (AI profile answered '2 years machine learning' with 0 ML background)."""
+
+    def _engine(self, profile_name):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if profile_name in p.name)
+        return AnswerEngine(
+            kb=[(k, v) for k, v in cfg.answers.items()],
+            profile_answers=dict(prof.answers), strict=True)
+
+    def test_ml_answers_honest_on_ai_profile(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._engine("AI / Python Engineer")
+        res = eng.resolve(ScreeningQuestion(
+            text="Do you have experience in machine learning?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_ml_numeric_without_honest_option_reviews(self):
+        """A '0' that fits no numeric option must route to review — never
+        fall back to the shadowed global '2'."""
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._engine("AI / Python Engineer")
+        res = eng.resolve(ScreeningQuestion(
+            text="How many years of experience do you have in machine learning?",
+            kind="radio", options=["2", "3"]))
+        self.assertIsNone(res)
+
+    def test_relevant_experience_uses_profile_value(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._engine("AI / Python Engineer")
+        res = eng.resolve(ScreeningQuestion(
+            text="What is your relevant experience?",
+            kind="radio", options=["2", "3"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "2")
+
+    def test_unrelated_globals_survive(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._engine("AI / Python Engineer")
+        res = eng.resolve(ScreeningQuestion(
+            text="What is your notice period?", kind="text"))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "0 days")
+
+
+class TestRunSummaryFormat(unittest.TestCase):
+    def test_no_job_lists_all_errors_shown(self):
+        from naukri_agent.core.models import RunStats
+        from naukri_agent.notify.notifier import format_run_summary
+
+        stats = RunStats()
+        stats.applied = 3
+        stats.errors = ["boom x", "boom x", "other y"]
+        stats.applied_jobs = [{"platform": "Naukri", "title": "T", "company": "C"}]
+        stats.external_jobs = [{"platform": "Naukri", "title": "E", "company": "C"}]
+        body = format_run_summary(stats, duration_s=65, run_id=1)
+        self.assertNotIn("APPLIED POSITIONS", body)
+        self.assertNotIn("ACTION REQUIRED", body)
+        self.assertIn("boom x (×2)", body)
+        self.assertIn("other y", body)
+
+
 class TestCompletenessDiscount(unittest.TestCase):
     """Unknown fields sink below stated fits (ordering only, never a
     reject): stated-good > stated-close > unknown > stated-bad."""

@@ -131,12 +131,17 @@ def format_run_summary(
     *,
     duration_s: float,
     run_id: int | None,
-    include_job_list: bool = True,
-    max_jobs: int = 20,
     error: str | None = None,
     dry_run: bool = False,
 ) -> str:
-    """Executive product-grade run summary formatted for clarity and readability."""
+    """Compact run summary: counts only, no job lists.
+
+    Owner directive: applied/external/failed job lists are noise — what
+    matters is the metrics, the per-platform breakdown, walk-in
+    opportunities, and every distinct error. Identical error lines collapse
+    to one row with a ×N count so repeated failures stay visible instead
+    of eating the message cap.
+    """
     mins = int(duration_s // 60)
     secs = int(duration_s % 60)
     mode_tag = " [DRY-RUN]" if dry_run else ""
@@ -170,44 +175,6 @@ def format_run_summary(
                 f"{external} external | {scraped} scraped | {rejected} plan-rejected"
             )
 
-    if include_job_list and stats.applied_jobs:
-        lines.append("")
-        lines.append(f"🚀 APPLIED POSITIONS ({len(stats.applied_jobs)}):")
-        for job in stats.applied_jobs[:max_jobs]:
-            platform = job.get("platform", "Naukri")
-            profile = job.get("profile", "")
-            title = job.get("title", "?")
-            company = job.get("company", "?")
-            prof_tag = f" [{profile}]" if profile else ""
-            lines.append(f"  • [{platform}] {title} @ {company}{prof_tag}")
-            form_links = job.get("form_links", [])
-            recruiter_emails = job.get("recruiter_emails", [])
-            if form_links:
-                lines.append(f"    ⚠️ Form Required: {', '.join(form_links)}")
-            if recruiter_emails:
-                lines.append(f"    📧 Recruiter Email: {', '.join(recruiter_emails)}")
-        remaining = len(stats.applied_jobs) - max_jobs
-        if remaining > 0:
-            lines.append(f"  … and {remaining} more jobs")
-
-    if stats.external_jobs:
-        lines.append("")
-        lines.append(f"🔗 ACTION REQUIRED / EXTERNAL JOBS ({len(stats.external_jobs)}):")
-        for job in stats.external_jobs[:10]:
-            platform = job.get("platform", "Portal")
-            title = job.get("title", "?")
-            company = job.get("company", "?")
-            url = job.get("url", "")
-            form_links = job.get("form_links", [])
-            recruiter_emails = job.get("recruiter_emails", [])
-            lines.append(f"  • [{platform}] {title} @ {company}")
-            if form_links:
-                lines.append(f"    📝 Form: {', '.join(form_links)}")
-            if recruiter_emails:
-                lines.append(f"    📧 Recruiter: {', '.join(recruiter_emails)}")
-            if url:
-                lines.append(f"    🌐 URL: {url}")
-
     if stats.walkin_alerts:
         lines.append("")
         lines.append(f"📍 BANGALORE WALK-IN RADAR ({len(stats.walkin_alerts)}):")
@@ -223,8 +190,13 @@ def format_run_summary(
     if stats.errors:
         lines.append("")
         lines.append("⚠️ ERRORS / WARNINGS:")
-        for message in stats.errors[:5]:
-            lines.append(f"  ! {message[:160]}")
+        seen: dict[str, int] = {}
+        for message in stats.errors:
+            key = message[:160]
+            seen[key] = seen.get(key, 0) + 1
+        for message, count in seen.items():
+            suffix = f" (×{count})" if count > 1 else ""
+            lines.append(f"  ! {message}{suffix}")
 
     if error:
         lines.append("")
