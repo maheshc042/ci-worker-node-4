@@ -371,6 +371,14 @@ class AnswerEngine:
         experienced = self._resolve_experienced_yes(text, question)
         if experienced is not None:
             return experienced
+        # Stage 1.85: Tenure comparisons ("more than 5 years?") and
+        # presence denials ("based in Gurgaon?" asked in Bengaluru).
+        # Both are Yes/No-shaped but match no KB intent; without them the
+        # job dies in review (run 569 #71, #73).
+        for intent in (self._resolve_tenure_comparison, self._resolve_presence_no):
+            hit = intent(text, question)
+            if hit is not None:
+                return hit
         # Stage 2: Experience Math
         experience = self._resolve_experience(text, question)
         if experience is not None:
@@ -559,6 +567,15 @@ class AnswerEngine:
         question_tokens = _tokenise(text)
         best: _Entry | None = None
         best_score: tuple[int, int, int, int] | None = None
+        # Tenure questions ("how many years ...?") must only be answered by
+        # tenure entries (numeric answer or tenure words in the pattern).
+        # Otherwise a skill-list entry ("programming language" ->
+        # "Python, TypeScript, ...") hijacks the years box via token overlap
+        # (run 569 #66: years-with-Python answered with a language list).
+        tenure_q = bool(_EXPERIENCE_INTENT.search(text))
+        _non_tenure_pat = re.compile(
+            r"experienc|years?|yrs?|knowledge|expertise|tenure", re.IGNORECASE
+        )
 
         for entry in self.entries:
             if entry.regex is not None:
@@ -566,12 +583,24 @@ class AnswerEngine:
                     continue
                 stage, matched = 3, 3
             elif entry.pattern in text:
+                # Short patterns ("nit", "iit", "dtu", "dob", "lwd") must be
+                # word-matched: plain substring lets "nit" fire inside
+                # "opportunity" and answer a compensation question with "No"
+                # (run 569 #79: "<30 lakhs?" answered No via NIT).
+                if len(entry.pattern) <= 4 and not _contains_word(text, entry.pattern):
+                    continue
+                if tenure_q and not _non_tenure_pat.search(entry.pattern):
+                    if not _NUMBER.search(entry.answer or ""):
+                        continue
                 stage, matched = 2, len(entry.tokens)
             elif (
                 entry.tokens
                 and entry.index not in self._polarity_only
                 and entry.tokens <= question_tokens
             ):
+                if tenure_q and not _non_tenure_pat.search(entry.pattern):
+                    if not _NUMBER.search(entry.answer or ""):
+                        continue
                 stage, matched = 1, len(entry.tokens)
             else:
                 continue
@@ -796,6 +825,76 @@ class AnswerEngine:
             return fitted
         return None
 
+    def _resolve_tenure_comparison(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """"Do you have more than 5 years of exp?" — compare the threshold
+        against verified total tenure instead of typing a number into a
+        Yes/No-shaped question (run 569 #71 went to review: "exp" carries
+        no tenure noun so the experience stages never fire)."""
+        m = re.search(
+            r"\b(?:more\s+than|over|above|greater\s+than|at\s+least|minimum(?:\s+of)?|"
+            r"atleast|5\s*\+|(\d+)\s*\+\s*(?:years?|yrs?|exp))\s*"
+            r"(\d+(?:\.\d+)?)?\s*(?:years?|yrs?|\by\b|\bexp\b)?",
+            text,
+        )
+        if not m:
+            return None
+        if not re.search(r"\b(?:years?|yrs?|\bexp\b|experience)\b", text):
+            return None
+        num = m.group(2) or m.group(1)
+        # "5+ years" form carries the number outside group 2.
+        if num is None:
+            m2 = re.search(r"(\d+(?:\.\d+)?)\s*\+", text)
+            num = m2.group(1) if m2 else None
+        if num is None:
+            return None
+        try:
+            threshold = float(num)
+        except (TypeError, ValueError):
+            return None
+        try:
+            total = float(self.experience.total_years) if self.experience.total_years is not None else None
+        except (TypeError, ValueError):
+            total = None
+        if total is None:
+            return None
+        want = "Yes" if total >= threshold else "No"
+        fitted = self._fit_to_options(want, question, f"tenure-compare:{threshold:g}", "tenure-map")
+        if fitted is not None:
+            log.info("answers.tenure_comparison", question=question.text[:120],
+                     threshold=threshold, total=total, value=want)
+        return fitted
+
+    def _resolve_presence_no(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """"Are you currently based in Gurgaon?" asked from Bengaluru.
+        The Bengaluru-scoped KB keys must never answer Yes for any city
+        (anti-lie rule), but "No" is the truthful Yes/No answer for a
+        known-foreign hub — routing it to review burns the application
+        (run 569 #73). Free-text variants ("which city...?") still get
+        Bengaluru, never a bare No."""
+        if not re.search(
+            r"\bbased\s+in\b|\bcurren\w*\s+(?:based|located|residing|living)\b|"
+            r"\bresiding\s+in\b|\blocated\s+in\b|\blive\s+in\b|\bstaying\s+in\b|"
+            r"\bcurren\w*\s+in\b",
+            text,
+        ):
+            return None
+        if _job_place_is_home(text):
+            return None
+        opts = list(question.options or [])
+        if opts:
+            has_yes = any(self._polarity(_normalise(o)) is True for o in opts)
+            has_no = any(self._polarity(_normalise(o)) is False for o in opts)
+            if has_yes or has_no:
+                fitted = self._fit_to_options("No", question, "intent:presence_foreign_no", "intent-map")
+                if fitted is not None:
+                    log.info("answers.presence_foreign_no", question=question.text[:120])
+                return fitted
+            return None
+        fitted = self._fit_to_options("Bengaluru", question, "intent:presence_foreign_city", "intent-map")
+        if fitted is not None:
+            log.info("answers.presence_foreign_city", question=question.text[:120])
+        return fitted
+
     def _resolve_experience(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         config = self.experience
         if not _EXPERIENCE_INTENT.search(text):
@@ -871,6 +970,20 @@ class AnswerEngine:
         # Unknown required facts block the application; never invent experience.
         return None
 
+    def _configured_ctc(self, which: str) -> float | None:
+        """First numeric CTC value configured for expected/current."""
+        for entry in self.entries:
+            if which in entry.pattern and (
+                "ctc" in entry.pattern or "salary" in entry.pattern or "pay" in entry.pattern
+            ):
+                m = _NUMBER.search(entry.answer or "")
+                if m:
+                    try:
+                        return float(m.group())
+                    except (TypeError, ValueError):
+                        continue
+        return None
+
     def _resolve_compensation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         """Answer salary/CTC questions from the configured expected/current CTC.
 
@@ -883,6 +996,32 @@ class AnswerEngine:
             text,
         ):
             return None
+        # Budget comparisons ("expected ... less than 30 lakhs?") are
+        # Yes/No-shaped: compare the threshold against the configured
+        # expected CTC instead of typing "7" into a Yes/No box (run 569
+        # #79 also caught a "nit"-in-"opportunity" false positive here).
+        m = re.search(
+            r"\b(?:less\s+than|under|below|up\s*to|upto|within|max(?:imum)?|budget)\b"
+            r"\s*(?:rs\.?|₹|inr)?\s*(\d+(?:\.\d+)?)\s*(?:lakh|lakhs|lpa)?",
+            text,
+        )
+        if m and re.search(r"\bexpect", text):
+            try:
+                threshold = float(m.group(1))
+            except (TypeError, ValueError):
+                threshold = None
+            exp_val = self._configured_ctc("expected")
+            if threshold is not None and exp_val is not None:
+                want_bool = "Yes" if exp_val <= threshold else "No"
+                fitted = self._fit_to_options(
+                    want_bool, question,
+                    f"compensation:expected_le_{threshold:g}", "compensation-map",
+                )
+                if fitted is not None:
+                    log.info("answers.compensation_compare",
+                             question=question.text[:100],
+                             expected=exp_val, threshold=threshold, value=want_bool)
+                    return fitted
         norm = text.lower()
         if any(m in norm for m in ("expected", "expectation", "looking for", "desired", "asking", "demand")):
             want = "expected"

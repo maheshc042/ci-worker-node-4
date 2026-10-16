@@ -284,6 +284,15 @@ answers:
   premier institute: "No"
   tier 1: "No"
 
+  # Presence denials for known-foreign hubs (run 569 #73: "Are you currently
+  # based in Gurgaon?" radio Yes/No — the Bengaluru-scoped keys must never
+  # answer Yes for any city, and the engine now answers No by default; these
+  # exact-phrase keys are belt-and-braces so Stage 1 resolves directly).
+  "are you currently based in gurgaon": "No"
+  "currently based in gurgaon": "No"
+  "are you currently based in gurugram": "No"
+  "currently based in gurugram": "No"
+
   # Residing & Relocation
   residing: "Yes"
   relocate: "Yes"
@@ -651,6 +660,14 @@ profiles:
       proficiency in typescript: "Proficient in TypeScript with hands-on experience in modern React and Node.js."
       programming language: "Python, TypeScript, JavaScript"
       programming languages: "Python, TypeScript, JavaScript"
+      # Run 569 #65: free-text "what role(s) are you applying for?" — the
+      # profile's own title, per account (one account == one job family).
+      "what role / roles you are applying for": "Full Stack Developer"
+      "what roles are you applying for": "Full Stack Developer"
+      "what role are you applying for": "Full Stack Developer"
+      "which role are you applying for": "Full Stack Developer"
+      "what position are you applying for": "Full Stack Developer"
+      "which position are you applying for": "Full Stack Developer"
       current ctc: "4"
       expected ctc: "7"
       notice period: "0 days"
@@ -746,3 +763,11 @@ profiles:
       reason for job change: "Transitioning fully into AI/Python engineering after building AI features on top of my full-stack work."
       are you an ex-infosys employee: "NA"
       ex-employee: "No"
+      # Run 569 #65: free-text "what role(s) are you applying for?" — the
+      # profile's own title, per account (one account == one job family).
+      "what role / roles you are applying for": "AI / Python Engineer"
+      "what roles are you applying for": "AI / Python Engineer"
+      "what role are you applying for": "AI / Python Engineer"
+      "which role are you applying for": "AI / Python Engineer"
+      "what position are you applying for": "AI / Python Engineer"
+      "which position are you applying for": "AI / Python Engineer"

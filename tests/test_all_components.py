@@ -2442,6 +2442,90 @@ class TestContractionFit(unittest.TestCase):
         self.assertIn("github.com/maheshchichkoti", r.value)
 
 
+class TestRun569Unanswered(unittest.TestCase):
+    """Run 569 (#65-79): 15 screening questions queued for review in one
+    run. Root causes, one per failure class."""
+
+    def _eng(self, profile_name="AI / Python Engineer"):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if p.name == profile_name)
+        return AnswerEngine(
+            kb=[(k, v) for k, v in cfg.answers.items()],
+            profile_answers=dict(prof.answers),
+            strict=True,
+            experience=cfg.experience_for(prof),
+        )
+
+    def test_role_question_resolves_profile_title(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng("AI / Python Engineer").resolve(ScreeningQuestion(
+            text="What role / roles you are applying for?",
+            kind="text", options=[]))
+        self.assertIsNotNone(r)
+        self.assertIn("AI", r.value)
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="What role / roles you are applying for?",
+            kind="text", options=[]))
+        self.assertIsNotNone(r)
+        self.assertIn("Full Stack", r.value)
+
+    def test_tenure_beats_language_list(self):
+        # "How many years ... Python?" must answer years, never the
+        # "programming language" skill list.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Apply to techolution 3/4 pages Additional Questions "
+                 "How many years of work experience do you have with "
+                 "Python (Programming Language)?",
+            kind="text", options=[]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value.strip(), "2")
+
+    def test_more_than_5_years_is_no(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Do you have more than 5 years of exp?",
+            kind="text", options=[]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+
+    def test_foreign_presence_is_no(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Are you currently based in Gurgaon?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+
+    def test_compensation_below_30l_is_yes(self):
+        # Expected 7 LPA <= 30. Guards the "nit"-in-"opportunity"
+        # substring false positive that answered No.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Is your expected annual compensation for this opportunity "
+                 "less than 30 lakhs?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "Yes")
+
+    def test_opportunity_never_matches_nit(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Is this opportunity open to freshers?",
+            kind="radio", options=["Yes", "No"]))
+        # Must not resolve via the "nit" (NIT college) KB entry.
+        if r is not None:
+            self.assertNotEqual(r.matched_pattern, "nit")
+
+
 class TestLinkedInFieldGuards(unittest.TestCase):
     """Q#40: typo'd/singular numeric labels fell through to the 140-char
     generic bio and died on maxlength validation."""
@@ -2637,11 +2721,14 @@ class TestCityAndBasedQuestions(unittest.TestCase):
             options=["Yes", "No", "Skip this question"]))
         self.assertIsNotNone(r)
         self.assertEqual(r.value, "Yes")
-        # Mumbai must NOT resolve (would be a lie) — falls to review.
+        # Mumbai must NOT resolve Yes (would be a lie). Since run 569 #73 it
+        # resolves No — the truthful Yes/No answer for a known-foreign hub —
+        # instead of burning the application in review.
         r2 = eng.resolve(ScreeningQuestion(
             text="Are you based in Mumbai?", kind="radio",
             options=["Yes", "No"]))
-        self.assertIsNone(r2)
+        self.assertIsNotNone(r2)
+        self.assertEqual(r2.value, "No")
 
 
 class TestCutshortTextareaAttribution(unittest.IsolatedAsyncioTestCase):
