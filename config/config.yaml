@@ -385,9 +385,9 @@ answers:
   # "currently located in bangalore" covers every phrasing ("Are you
   # currently located in Bangalore?", "currently located in...") at 0.9.
   currently located in bangalore: "Yes"
-  are you an ex-infosys employee: "NA"
-  ex-infosys employee id: "NA"
-  ex-employee of infosys: "NA"
+  are you an ex-infosys employee: "No"
+  ex-infosys employee id: "No"
+  ex-employee of infosys: "No"
   date of birth: "1997-11-19"
   dob: "1997-11-19"
   birth date: "1997-11-19"
@@ -761,7 +761,7 @@ profiles:
       notice period: "0 days"
       last working day: "30/04/2026"
       reason for job change: "Transitioning fully into AI/Python engineering after building AI features on top of my full-stack work."
-      are you an ex-infosys employee: "NA"
+      are you an ex-infosys employee: "No"
       ex-employee: "No"
       # Run 569 #65: free-text "what role(s) are you applying for?" — the
       # profile's own title, per account (one account == one job family).
@@ -771,3 +771,48 @@ profiles:
       "which role are you applying for": "AI / Python Engineer"
       "what position are you applying for": "AI / Python Engineer"
       "which position are you applying for": "AI / Python Engineer"
+      # Run 572 #95: seniority self-description gradient — pick independent IC,
+      # never lead-level (guide architecture / review others).
+      "which best describes your experience independently delivering full stack features": "I independently plan, build, test, and deploy features across the stack."
+      # Run 572 #106: FastAPI tenure.
+      "how many years of work experience do you have with fastapi": "2"
+      # Run 572 #107: LLM/RAG production shipping.
+      "how many years of experience do you have shipping llm or rag features to production": "2"
+      # Run 572 #108: vector search / embeddings in production.
+      "have you built retrieval using embeddings and vector search": "Yes"
+      # Run 572 #109: offline eval / LLM-as-judge.
+      "have you designed an offline evaluation set or llm-as-judge scoring": "Yes"
+      # Run 572 #110: tool/function calling + streaming.
+      "have you implemented tool/function calling and streaming responses": "Yes"
+      # Run 572 #111: salary range comfort (expected 7 LPA within 5-8 band).
+      "are you comfortable with a salary range of 5-8 lpa": "Yes"
+      # Run 572 #113: 5.5y Python threshold — honest No (2y AI/Python).
+      "do you have at least 5.5 years of professional, hands-on python": "No"
+      # Run 572 #114: production-grade Python apps/APIs.
+      "have you personally designed, coded, tested and deployed production-grade python": "Yes"
+      # Run 572 #115: production incident investigation.
+      "have you personally investigated a production incident": "Yes"
+      # Run 572 #116: Git + code reviews + automated testing.
+      "have you used git-based version control, code reviews and automated unit/integration testing": "Yes"
+      # Run 572 #117: CI/CD pipelines.
+      "have you personally worked with ci/cd pipelines": "Yes"
+      # Run 572 #118: IaC (Terraform/CloudFormation/CDK) — not on resume.
+      "have you used infrastructure as code": "No"
+      # Run 574 #128: currently employed.
+      "are you currently working": "Yes"
+      # Run 574 #129: Agentic AI architecture.
+      "have you designed, architected agentic ai systems": "Yes"
+      # Run 574 #130: product-based organisation — user confirmed Yes.
+      "are you from a product-based organisation": "Yes"
+      # Run 574 #135: Java + REST Assured API automation frameworks.
+      "have you developed api automation frameworks using java and rest assured": "No"
+      # Run 574 #136: Java OOP/Collections/exception handling.
+      "can you write java programs using oop concepts": "No"
+      # Run 577 #169: Python years (LinkedIn variant).
+      "how many years of work experience do you have with python": "2"
+      # Run 577 #171: immediate joiner (typo variant).
+      "are your a immediate joiner": "Yes"
+      "are you a immediate joiner": "Yes"
+      # Run 577 #172: serving notice (garbled "30 or serving" = 30-day notice).
+      "are you a 30 or serving": "No"
+      "are you serving 30": "No"

@@ -2525,6 +2525,85 @@ class TestRun569Unanswered(unittest.TestCase):
         if r is not None:
             self.assertNotEqual(r.matched_pattern, "nit")
 
+    def test_self_describe_picks_independent_not_lead(self):
+        # Run 571 #94: seniority gradient. OPT2 (independent IC) is the
+        # truthful pick at 3y; OPT3 (guide architecture + review others)
+        # claims lead-level work and must never win.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        opts = [
+            "I need detailed implementation instructions and regular technical guidance.",
+            "I own individual tasks but need help planning changes across the stack.",
+            "I independently plan, build, test, and deploy features across the stack.",
+            "I independently deliver features and also guide architecture and review other engineers work.",
+        ]
+        eng = self._eng("Full Stack / Web Developer")
+        r = eng.resolve(ScreeningQuestion(
+            text="Which best describes your experience independently delivering full stack features?",
+            kind="radio", options=opts))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, opts[2])
+
+    def test_self_describe_unknown_skill_stays_review(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        opts = ["Beginner.", "I independently deliver and guide architecture."]
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Which best describes your experience with COBOL mainframes?",
+            kind="radio", options=opts))
+        self.assertIsNone(r)
+
+    def test_self_describe_lead_only_stays_review(self):
+        # Every option claims lead work: answering any of them is a lie.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Which best describes your experience leading enterprise architecture?",
+            kind="radio", options=[
+                "I set org-wide architecture and mentor principal engineers.",
+                "I guide architecture and review other engineers work."]))
+        self.assertIsNone(r)
+
+    def test_run572_kb_patterns(self):
+        """Run 572 #95-118: all new KB patterns resolve correctly."""
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._eng("AI / Python Engineer")
+        cases = [
+            ("Which best describes your experience independently delivering full stack features?",
+             "radio",
+             ["I need detailed implementation instructions and regular technical guidance.",
+              "I own individual tasks but need help planning changes across the stack.",
+              "I independently plan, build, test, and deploy features across the stack.",
+              "I independently deliver features and also guide architecture and review other engineers work."],
+             "I independently plan, build, test, and deploy features across the stack."),
+            ("How many years of work experience do you have with FastAPI?", "text", [], "2"),
+            ("How many years of experience do you have shipping LLM or RAG features to production?", "text", [], "2"),
+            ("Have you built retrieval using embeddings and vector search (pgvector, Pinecone, Weaviate, Qdrant, etc.) in a production system?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you designed an offline evaluation set or LLM-as-judge scoring to measure chat or retrieval quality?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you implemented tool/function calling and streaming responses (SSE or WebSockets) with an LLM API?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Are you comfortable with a salary range of 5-8 LPA?", "radio", ["Yes", "No"], "Yes"),
+            ("Do you have at least 5.5 years of professional, hands-on Python software development experience, with Python as a language you have personally used to build and maintain software?",
+             "text", [], "No"),
+            ("Have you personally designed, coded, tested and deployed production-grade Python applications, backend services or APIs—not just notebooks, scripts for analysis, or proof-of-concept AI models?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you personally investigated a production incident, identified its root cause and implemented a permanent technical fix?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you used Git-based version control, code reviews and automated unit/integration testing as part of a professional software delivery process?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you personally worked with CI/CD pipelines to test, package, deploy or release software into production?",
+             "radio", ["Yes", "No"], "Yes"),
+            ("Have you used Infrastructure as Code (for example, Terraform, AWS CloudFormation or AWS CDK) to provision or manage infrastructure in a real project?",
+             "radio", ["Yes", "No"], "No"),
+        ]
+        for text, kind, opts, expected in cases:
+            r = eng.resolve(ScreeningQuestion(text=text, kind=kind, options=opts))
+            self.assertIsNotNone(r, f"unanswered: {text[:80]}")
+            self.assertEqual(r.value, expected, f"wrong answer for: {text[:80]}")
+
 
 class TestLinkedInFieldGuards(unittest.TestCase):
     """Q#40: typo'd/singular numeric labels fell through to the 140-char

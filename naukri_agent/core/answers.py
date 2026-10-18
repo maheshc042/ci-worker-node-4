@@ -371,11 +371,13 @@ class AnswerEngine:
         experienced = self._resolve_experienced_yes(text, question)
         if experienced is not None:
             return experienced
-        # Stage 1.85: Tenure comparisons ("more than 5 years?") and
-        # presence denials ("based in Gurgaon?" asked in Bengaluru).
-        # Both are Yes/No-shaped but match no KB intent; without them the
-        # job dies in review (run 569 #71, #73).
-        for intent in (self._resolve_tenure_comparison, self._resolve_presence_no):
+        # Stage 1.85: Tenure comparisons ("more than 5 years?"), presence
+        # denials ("based in Gurgaon?" asked in Bengaluru), and seniority
+        # self-descriptions ("which best describes your experience ...?").
+        # None match any KB intent; without them the job dies in review
+        # (run 569 #71, #73; run 571 #94).
+        for intent in (self._resolve_tenure_comparison, self._resolve_presence_no,
+                       self._resolve_self_describe):
             hit = intent(text, question)
             if hit is not None:
                 return hit
@@ -862,6 +864,62 @@ class AnswerEngine:
         if fitted is not None:
             log.info("answers.tenure_comparison", question=question.text[:120],
                      threshold=threshold, total=total, value=want)
+        return fitted
+
+    def _resolve_self_describe(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """"Which best describes your experience ...?" seniority gradients
+        (run 571 #94). The named area must be a mapped skill with real
+        tenure; then pick the strongest option that does NOT claim
+        lead-level work (guide architecture, review others, mentor, manage,
+        lead a team). Never understates to junior ("need guidance") when
+        tenure supports independent delivery, never overstates to lead.
+        Unknown/zero skills and lead-only option sets stay in review."""
+        if not re.search(
+            r"\bwhich\b.{0,20}\bbest\b.{0,20}\bdescrib|\bbest\b.{0,20}\bdescrib|\bselect\b.{0,30}\bstatement\b",
+            text,
+        ):
+            return None
+        opts = list(question.options or [])
+        if len(opts) < 2:
+            return None
+        area = re.sub(r"^.*describes?\s+(?:your\s+)?", "", text).strip(" ?")
+        if not area or len(area) > 80:
+            return None
+        known_years: float | None = None
+        for skill, years in (self.experience.skills or {}).items():
+            phrase = _normalise(skill)
+            if phrase and _contains_word(area, phrase):
+                try:
+                    known_years = float(years)
+                except (TypeError, ValueError):
+                    return None
+                break
+        if known_years is None or known_years <= 0:
+            return None
+        lead_marks = (
+            "guide architecture", "review other", "mentor", "manage",
+            "lead the", "lead a", "leadership",
+        )
+        indep_marks = (
+            "independently", "own", "plan", "build", "test", "deploy",
+            "end-to-end", "end to end", "deliver",
+        )
+        best: str | None = None
+        best_score = -1
+        for opt in opts:
+            low = opt.lower()
+            if any(m in low for m in lead_marks):
+                continue
+            score = sum(1 for m in indep_marks if m in low)
+            if score > best_score:
+                best, best_score = opt, score
+        if best is None:
+            log.info("answers.self_describe_lead_only", question=question.text[:120])
+            return None
+        fitted = self._fit_to_options(best, question, "intent:self_describe", "intent-map")
+        if fitted is not None:
+            log.info("answers.self_describe", question=question.text[:120],
+                     value=best[:60])
         return fitted
 
     def _resolve_presence_no(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
