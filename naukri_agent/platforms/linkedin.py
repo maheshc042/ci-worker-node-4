@@ -133,11 +133,12 @@ def _fit_field_length(ans: str, maxlength: int | None) -> str:
 
     A real short answer never exceeds maxlength; an overlong value is the
     wrong answer for this field (Q#40: 140-char bio into a 20-char box),
-    so it drops to "" (caller skips to review) instead of submitting a
-    fragment that dies as "Invalid input".
+    so it truncates to maxlength instead of submitting a fragment that
+    dies as "Invalid input". Truncation keeps the field filled (required
+    fields must not be left blank).
     """
     if maxlength and len(str(ans)) > maxlength:
-        return ""
+        return str(ans)[:maxlength]
     return ans
 
 
@@ -232,6 +233,7 @@ class LinkedInPlatform(BaseJobPlatform):
         self.location = location
         cfg_days = getattr(getattr(self.config, "linkedin", None), "days", None)
         self.days = cfg_days if cfg_days is not None else days
+        self._applied_job_ids: set[str] = set()  # idempotency guard against double-submit
 
     @property
     def platform_name(self) -> str:
@@ -1182,6 +1184,14 @@ class LinkedInPlatform(BaseJobPlatform):
         pre_submit_check: Callable[[Job], FilterDecision] | None = None,
     ) -> ApplyOutcome:
         """Executes full multi-step Easy Apply application in-page with 10/10 precision."""
+        # Idempotency guard: never apply to the same job twice in one run
+        if job.job_id in self._applied_job_ids:
+            log.info("linkedin.apply.already_applied", job_id=job.job_id)
+            return ApplyOutcome(
+                status=ApplicationStatus.ALREADY_APPLIED,
+                detail="Already applied in this run (idempotency guard)",
+            )
+        self._applied_job_ids.add(job.job_id)
         log.info("linkedin.apply.start", job_id=job.job_id, title=job.title, company=job.company)
         t0 = _time.perf_counter()
         jt = None
@@ -1515,6 +1525,41 @@ class LinkedInPlatform(BaseJobPlatform):
                     log.info("linkedin.apply.step_empty_reloaded", step=step)
             step_sig = f"inputs:{input_count}::{form_text[:250]}"
 
+            # Single-page questionnaire: >8 inputs means LinkedIn shows all
+            # questions on one page (not multi-step). Fill all inputs, then
+            # look for submit/review button directly instead of looping.
+            if input_count > 8:
+                log.info("linkedin.apply.single_page_detected", step=step, inputs=input_count)
+                for attempt in range(3):
+                    submit_loc = self.page.locator("button:has-text('Submit application'), button[aria-label*='Submit application' i], button:has-text('Review'), button[aria-label*='Review your application' i]").first
+                    if await submit_loc.count() > 0:
+                        try:
+                            await submit_loc.scroll_into_view_if_needed(timeout=2000)
+                        except Exception:
+                            pass
+                        if self.policy.dry_run:
+                            await self._dismiss_modal()
+                            return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=SkipReason.DRY_RUN, detail="Dry-run submit reached")
+                        self.require_mutation("submit_application")
+                        log.info("linkedin.apply.single_page_submitting", job_id=job.job_id)
+                        await submit_loc.click(force=True)
+                        await human_pause(2500, 4000)
+                        if await self._verify_submit(modal, job):
+                            _record_timing()
+                            return ApplyOutcome(status=ApplicationStatus.APPLIED, detail="Submitted via LinkedIn single-page questionnaire")
+                        await self._recover_step_errors(modal)
+                        try:
+                            await submit_loc.click(force=True, timeout=3000)
+                        except Exception:
+                            pass
+                        await human_pause(2500, 4000)
+                        if await self._verify_submit(modal, job):
+                            _record_timing()
+                            return ApplyOutcome(status=ApplicationStatus.APPLIED, detail="Submitted via LinkedIn single-page questionnaire")
+                        break
+                    await human_pause(1500, 2500)
+                log.info("linkedin.apply.single_page_no_submit", step=step, attempts=3)
+
             if step > 1 and step_sig == prev_step_signature:
                 stuck_count += 1
                 log.info("linkedin.apply.step_unchanged", step=step, count=stuck_count)
@@ -1524,17 +1569,37 @@ class LinkedInPlatform(BaseJobPlatform):
                     error_el = await first_visible(modal, [".artdeco-inline-feedback--error", "p.artdeco-inline-feedback", "[data-test-form-builder-error]"], timeout_ms=800)
                     err_txt = (await safe_text(error_el)).strip() if error_el else "Required field unfilled"
                     btn_labels = await self._modal_button_labels(modal)
+                    # Capture diagnostics BEFORE dismissing the modal so the
+                    # actual step content is preserved for forensics.
+                    try:
+                        if self.artifacts is not None:
+                            await self.artifacts.screenshot(self.page, label=f"linkedin_step{step}_stuck")
+                            await self.artifacts.dump_html(self.page, label=f"linkedin_step{step}_stuck")
+                        modal_html = await modal.evaluate("el => el.outerHTML") if await modal.count() > 0 else ""
+                        log.warning("linkedin.apply.step_stuck_html", step=step, html_len=len(modal_html), html_preview=modal_html[:2000])
+                    except Exception as diag_exc:
+                        log.warning("linkedin.apply.step_stuck_diag_failed", error=str(diag_exc)[:120])
+                    # Broader input detection: LinkedIn sometimes uses custom
+                    # components (dropdowns, date pickers, file uploads) that
+                    # don't match input/select/textarea.
+                    try:
+                        broad_selectors = "[role='combobox'], [role='listbox'], [role='radio'], [role='checkbox'], [type='file'], [type='date'], .artdeco-text-input, .artdeco-dropdown, .jobs-easy-apply-form-element input, .jobs-easy-apply-form-element select, .jobs-easy-apply-form-element textarea, .fb-dash-form-element input, .fb-dash-form-element select, .fb-dash-form-element textarea"
+                        broad_count = await modal.locator(broad_selectors).count()
+                        if broad_count > 0:
+                            log.warning("linkedin.apply.step_stuck_broad_detected", step=step, broad_count=broad_count, sig=step_sig)
+                            # Update the step signature so we don't loop on the same detection
+                            step_sig = f"broad:{broad_count}::{form_text[:250]}"
+                    except Exception:
+                        pass
                     log.warning("linkedin.apply.step_stuck", step=step, error=err_txt, buttons=btn_labels)
-                    await self._dismiss_modal()
-                    _record_timing()
-                    # Convert to review instead of a dead end: each split
-                    # question trains an answer that the needs_review
-                    # auto-retry loop converts into an application. Falls
-                    # back to FAILED when nothing extractable.
                     blocked_qs = await self._extract_blocked_questions(modal, form_text)
                     if not blocked_qs:
+                        await self._dismiss_modal()
+                        _record_timing()
                         btn_detail = f" buttons={btn_labels}" if btn_labels else ""
                         return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}{btn_detail}")
+                    await self._dismiss_modal()
+                    _record_timing()
                     return ApplyOutcome(
                         status=ApplicationStatus.NEEDS_REVIEW,
                         reason=SkipReason.UNANSWERED_QUESTION,

@@ -1108,6 +1108,21 @@ class Orchestrator:
             log.info("search.jobs_empty", profile=profile.name, platform=platform.platform_name)
             return
 
+        # Record every scraped job for the audit log
+        from .audit import record as audit_record
+        for j in collected_jobs:
+            audit_record(
+                run_id=self.run_id,
+                platform=platform.platform_name,
+                job_id=j.job_id,
+                title=j.title or "",
+                company=j.company or "",
+                outcome="scraped",
+                location=j.location or "",
+                experience_text=j.experience_text or "",
+                salary_text=j.salary_text or "",
+            )
+
         # =========================================================
         # STEP 1.1: Cross-platform Job Deduplication (Fuzzy Match)
         # =========================================================
@@ -1591,6 +1606,18 @@ class Orchestrator:
 
         if outcome.status == ApplicationStatus.APPLIED:
             self.stats.bump(profile.name, "applied", platform=platform_name)
+            # Record applied outcome for audit
+            from .audit import record as audit_record
+            audit_record(
+                run_id=self.run_id,
+                platform=platform_name.lower(),
+                job_id=job.job_id,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="applied",
+                detail=(outcome.detail or "")[:200],
+                score=rank_score,
+            )
             self.stats.applied_jobs.append(
                 {
                     "platform": platform_name,
@@ -1618,10 +1645,35 @@ class Orchestrator:
                 self.consecutive_failures += 1
                 self.platform_consecutive_failures += 1
             self.stats.errors.append(f"[{platform_name}] {job.title[:40]}: {outcome.detail[:120]}")
+            # Record failed outcome for audit
+            from .audit import record as audit_record
+            audit_record(
+                run_id=self.run_id,
+                platform=platform_name.lower(),
+                job_id=job.job_id,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="failed",
+                detail=(outcome.detail or "")[:200],
+                score=rank_score,
+            )
         elif outcome.status == ApplicationStatus.EXTERNAL or outcome.reason == SkipReason.EXTERNAL_APPLY:
             self.stats.bump(profile.name, "external", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            # Record external outcome for audit
+            from .audit import record as audit_record
+            audit_record(
+                run_id=self.run_id,
+                platform=platform_name,
+                job_id=job.job_id,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="external",
+                reason="external_apply",
+                detail=(outcome.detail or "")[:200],
+                score=outcome.rank_score if hasattr(outcome, 'rank_score') else None,
+            )
             self.stats.external_jobs.append(
                 {
                     "platform": platform_name,
@@ -1875,7 +1927,7 @@ class Orchestrator:
     # ---------------------------------------------------------------- notify
     async def _notify(self, status: RunStatus, error: str | None) -> None:
         notifications = self.config.notifications
-        is_error = status == RunStatus.FAILED
+        is_error = status == RunStatus.FAILED or (self.stats.failed > 0 and status == RunStatus.PARTIAL)
         if is_error and not notifications.notify_on_failure:
             return
         if not is_error and not notifications.notify_on_success:

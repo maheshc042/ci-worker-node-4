@@ -2604,6 +2604,58 @@ class TestRun569Unanswered(unittest.TestCase):
             self.assertIsNotNone(r, f"unanswered: {text[:80]}")
             self.assertEqual(r.value, expected, f"wrong answer for: {text[:80]}")
 
+    def test_linkedin_field_length_truncates(self):
+        """LinkedIn overlong answers must truncate, not return empty."""
+        from naukri_agent.platforms.linkedin import _fit_field_length
+
+        self.assertEqual(_fit_field_length("short", 10), "short")
+        self.assertEqual(_fit_field_length("this is too long", 10), "this is to")
+        self.assertEqual(_fit_field_length("exact10chr", 10), "exact10chr")
+        self.assertEqual(_fit_field_length("no limit", None), "no limit")
+
+    def test_audit_record_and_report(self):
+        """Audit system: record a job and read it back."""
+        import tempfile
+        from pathlib import Path
+        from naukri_agent.core import audit
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_dir = audit.AUDIT_DIR
+            audit.AUDIT_DIR = Path(tmpdir)
+            try:
+                audit.record(
+                    run_id=999, platform="test", job_id="test-123",
+                    title="Test Job", company="TestCo", outcome="applied",
+                )
+                records = audit.read_last_days(days=1)
+                self.assertGreaterEqual(len(records), 1)
+                self.assertEqual(records[-1]["job_id"], "test-123")
+                self.assertEqual(records[-1]["outcome"], "applied")
+                report = audit.generate_report(days=1)
+                self.assertIn("Test Job", report)
+                self.assertIn("999", report)
+            finally:
+                audit.AUDIT_DIR = original_dir
+
+    def test_audit_cleanup_old_files(self):
+        """Audit system: old files are cleaned up on write."""
+        import tempfile
+        from pathlib import Path
+        from naukri_agent.core import audit
+        from datetime import UTC, datetime, timedelta
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_dir = audit.AUDIT_DIR
+            audit.AUDIT_DIR = Path(tmpdir)
+            try:
+                old_day = datetime.now(UTC) - timedelta(days=10)
+                old_path = audit._audit_path(old_day)
+                old_path.write_text('{"old": true}\n', encoding="utf-8")
+                audit.record(run_id=1, platform="test", job_id="x", outcome="scraped")
+                self.assertFalse(old_path.exists())
+            finally:
+                audit.AUDIT_DIR = original_dir
+
 
 class TestLinkedInFieldGuards(unittest.TestCase):
     """Q#40: typo'd/singular numeric labels fell through to the 140-char
@@ -2628,7 +2680,7 @@ class TestLinkedInFieldGuards(unittest.TestCase):
 
         self.assertEqual(_fit_field_length("2", 20), "2")
         self.assertEqual(_fit_field_length("Bengaluru", None), "Bengaluru")
-        self.assertEqual(_fit_field_length("x" * 140, 20), "")
+        self.assertEqual(_fit_field_length("x" * 140, 20), "x" * 20)
         self.assertEqual(_fit_field_length("x" * 20, 20), "x" * 20)
 
 

@@ -968,6 +968,24 @@ def version() -> None:
 
 
 @app.command()
+def audit(
+    days: int = typer.Option(3, "--days", "-d", help="Look-back window in days (default: 3)."),
+) -> None:
+    """
+    Show agent quality report for the last N days.
+
+    \b
+    Examples:
+      naukri-agent audit              # last 3 days
+      naukri-agent audit --days 7    # last 7 days
+    """
+    from .core.audit import generate_report
+
+    setup_logging("INFO", json_logs=False)
+    console.print(generate_report(days))
+
+
+@app.command()
 def stats(
     days: int = typer.Option(7, "--days", "-d", help="Look-back window in days (default: 7)."),
     weekly: bool = typer.Option(False, "--weekly", "-w", help="Show weekly aggregation instead of daily."),
