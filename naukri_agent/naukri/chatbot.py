@@ -289,8 +289,17 @@ class ChatbotHandler:
             return True
         if rv in ("no", "false") and ct_words & {"no", "never", "not", "none", "neither", "cannot", "unwilling"}:
             return True
+        # City groups: first is home (from config), rest are common Indian hubs
+        _home_city = "bengaluru"  # fallback if config unavailable
+        try:
+            from ..config import AgentConfig
+            _loc = AgentConfig.load().applicant_location.lower()
+            if "bengaluru" in _loc or "bangalore" in _loc:
+                _home_city = "bengaluru"
+        except Exception:
+            pass
         _CITY_GROUPS = (
-            {"bengaluru", "bangalore"},
+            {_home_city, "bangalore"} if _home_city == "bengaluru" else {_home_city},
             {"mumbai", "bombay"},
             {"hyderabad"}, {"delhi"}, {"noida"}, {"pune"}, {"chennai"},
         )

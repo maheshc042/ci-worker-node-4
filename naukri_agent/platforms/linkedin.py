@@ -235,6 +235,15 @@ class LinkedInPlatform(BaseJobPlatform):
         self.days = cfg_days if cfg_days is not None else days
         self._applied_job_ids: set[str] = set()  # idempotency guard against double-submit
 
+    def _candidate_expected_ctc(self) -> float:
+        """Read expected CTC from config.yaml candidate section."""
+        try:
+            candidate = self.config.candidate
+            val = float(candidate.expected_ctc or "0")
+            return val if val > 0 else 7.0
+        except (AttributeError, ValueError, TypeError):
+            return 7.0
+
     @property
     def platform_name(self) -> str:
         return "linkedin"
@@ -1865,8 +1874,14 @@ class LinkedInPlatform(BaseJobPlatform):
                                 target_val = o.strip()
                                 break
                     elif any(k in label_low for k in ["total years", "years of", "years of experience"]):
+                        try:
+                            exp_years = self.config.experience.total_years or 2
+                            exp_str = str(int(exp_years)) if exp_years == int(exp_years) else str(exp_years)
+                            exp_options = [exp_str, f"{exp_str}+", f"{exp_str} "]
+                        except (AttributeError, ValueError):
+                            exp_options = ["2", "3", "2.5", "2+"]
                         for o in options:
-                            if any(d == o.strip() or f"{d} " in o for d in ["2", "3", "2.5", "2+"]):
+                            if any(d == o.strip() or f"{d} " in o for d in exp_options):
                                 target_val = o.strip()
                                 break
                     elif any(k in label_low for k in ["additional month", "months"]):
@@ -1896,7 +1911,8 @@ class LinkedInPlatform(BaseJobPlatform):
                                 break
                     elif any(k in label_low for k in ["gender", "sex"]):
                         for o in options:
-                            if "male" in o.lower() and "female" not in o.lower():
+                            gender = (self.config.candidate.gender if self.config.candidate else "Male")
+                            if gender.lower() in o.lower():
                                 target_val = o.strip()
                                 break
                     elif any(k in label_low for k in ["veteran", "military"]):
@@ -1992,7 +2008,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     if any(k in low_q for k in ["sponsorship", "visa sponsorship", "require sponsorship"]) or any(k in low_q for k in ["disability", "handicap", "impairment"]) or any(k in low_q for k in ["veteran", "military"]):
                         target_val = "No"
                     elif any(k in low_q for k in ["gender", "sex"]):
-                        target_val = "Male"
+                        target_val = (self.config.candidate.gender if self.config.candidate else "Male")
                     elif any(k in low_q for k in ["authorized", "authorization", "commute", "relocate", "comfortable", "background", "willing", "participate", "agree", "process", "interest", "onsite", "hybrid", "remote", "budget", "salary", "lpa", "join", "immediate", "bond", "contract", "policy", "terms", "undertaking"]):
                         target_val = "Yes"
                     else:
@@ -2315,7 +2331,7 @@ class LinkedInPlatform(BaseJobPlatform):
                                 _unit = "thousands"
                             else:
                                 _unit = "lpa"  # lakh/lpa label or LinkedIn India default
-                            _base = _ctc_lpa if _ctc_lpa is not None else 7.0  # expected CTC fallback
+                            _base = _ctc_lpa if _ctc_lpa is not None else self._candidate_expected_ctc()
                             if _unit == "inr":
                                 ans = str(int(_base * 100000))
                             elif _unit == "thousands":
@@ -2373,9 +2389,12 @@ class LinkedInPlatform(BaseJobPlatform):
                             from ..core.gemini_writer import applicant_snapshot
                             who = applicant_snapshot()
                             applicant_name = who.name if who.name != "a Software Engineer" else (self.config.applicant_name or "").strip()
-                            ans = (
-                                f"Experienced software and AI engineer ({applicant_name}) with {who.experience_label} of experience "
+                            bio_template = (self.config.candidate.bio if self.config.candidate else "") or (
+                                f"Experienced software and AI engineer with hands-on experience "
                                 "building scalable applications, APIs, and AI workflows."
+                            )
+                            ans = (
+                                f"{bio_template} ({applicant_name})"
                                 if applicant_name else ""
                             )
 

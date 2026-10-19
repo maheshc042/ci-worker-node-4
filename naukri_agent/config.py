@@ -889,6 +889,28 @@ class SidekickConfig(_Model):
 
 
 
+class CandidateConfig(_Model):
+    """Centralized candidate profile — single source of truth for ALL platforms.
+    Update this when candidate details change; no code edits needed elsewhere."""
+
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    phone_intl: str = ""
+    location: str = ""
+    gender: str = "Male"
+    title: str = ""
+    company: str = ""
+    current_ctc: str = ""
+    expected_ctc: str = ""
+    expected_ctc_display: str = ""
+    experience_label: str = ""
+    notice_label: str = ""
+    bio: str = ""
+    achievements: list[str] = Field(default_factory=list)
+    wellfound_pitch: str = ""
+
+
 class AgentConfig(_Model):
     platforms: PlatformsConfig = Field(default_factory=PlatformsConfig)
     linkedin: LinkedInConfig = Field(default_factory=LinkedInConfig)
@@ -904,6 +926,7 @@ class AgentConfig(_Model):
     match_score_prefilter: MatchScoreConfig = Field(default_factory=MatchScoreConfig)
     answers: dict[str, str] = Field(default_factory=dict)
     experience: ExperienceConfig = Field(default_factory=ExperienceConfig)
+    candidate: CandidateConfig = Field(default_factory=CandidateConfig)
     profiles: list[JobProfile] = Field(default_factory=list)
 
     # User Identity & Contacts — no literals: empty means unconfigured and the

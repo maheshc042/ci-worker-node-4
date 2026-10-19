@@ -1676,10 +1676,16 @@ class CutshortPlatform(BaseJobPlatform):
 
         # Dynamic tech stack, specialty, and achievement tailored to the role
         text_for_skills = f"{actual_title} {modal_text} {job.description}".lower()
+        # Read achievements from config.yaml candidate section
+        achievements = (self.config.candidate.achievements if self.config.candidate else []) or [
+            "automated RAG workflows achieving <300ms p95 latency",
+            "high-performance full-stack architectures with a 60% API latency reduction",
+            "scalable, low-latency microservices with <150ms p95 response times",
+        ]
         if any(k in text_for_skills for k in ["ai", "llm", "genai", "gpt", "machine learning", "rag", "agent", "prompt"]):
             key_tech_stack = "Python, FastAPI, GenAI, and LLM orchestration (RAG/LangChain)"
             core_specialty = "autonomous AI agents, vector search pipelines, and scalable Python backends"
-            specific_achievement = "automated RAG workflows achieving <300ms p95 latency and cutting token costs by 35%"
+            specific_achievement = achievements[0] if achievements else "automated RAG workflows achieving <300ms p95 latency"
         elif any(k in text_for_skills for k in ["qa", "testing", "test automation", "sdet"]):
             key_tech_stack = "Python, Playwright, Selenium, and API automation frameworks"
             core_specialty = "robust automated testing pipelines and CI/CD quality gates"

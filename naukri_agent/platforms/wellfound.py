@@ -981,13 +981,17 @@ class WellfoundPlatform(BaseJobPlatform):
                 company_label = job.company or "your team"
                 links = [p for p in (who.github, who.linkedin) if p]
                 links_line = "\n" + " | ".join(links) if links else ""
+                # Read pitch template from config.yaml candidate section
+                pitch_body = (self.config.candidate.wellfound_pitch if self.config.candidate else "") or (
+                    "• Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations.\n"
+                    "• Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS.\n"
+                    "• Fast Delivery: Comfortable owning features end-to-end in fast-paced startup environments."
+                )
                 pitch = (
                     f"Hi {company_label} Team,\n\n"
                     f"I'm applying for the {clean_title} role to help build {company_label}'s product platform.\n\n"
                     f"Over the past {who.experience_label}, I've specialized in building production backend services and GenAI architectures:\n"
-                    f"• Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations using LangChain and FastAPI for low-latency, context-rich responses.\n"
-                    f"• Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS, handling asynchronous workloads and database integrations.\n"
-                    f"• Fast Delivery: Comfortable owning features end-to-end, from data ingestion and API design to cloud deployment in fast-paced startup environments.\n\n"
+                    f"{pitch_body}\n\n"
                     f"I am based in {who.location} and available to join immediately ({who.notice_label}).\n\n"
                     f"Are you open to a quick 10-minute chat this week to discuss how I can contribute to {company_label}'s product roadmap?\n\n"
                     f"Best regards,\n{who.name}{links_line}"

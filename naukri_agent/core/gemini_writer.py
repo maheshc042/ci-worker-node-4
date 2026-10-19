@@ -39,16 +39,17 @@ PINNED_DEFAULT_MODEL = "gemini-3.6-flash"
 
 @dataclass(slots=True)
 class ApplicantSnapshot:
-    """Identity facts for email copy, resolved from AgentConfig."""
+    """Identity facts for email copy, resolved from AgentConfig.
+    All values now come from config.yaml `candidate` section — no hardcoded fallbacks."""
 
-    name: str = "Mahesh Chitakoti"
-    email: str = "maheshrwd042@gmail.com"
-    location: str = "Bengaluru, India"
-    experience_label: str = "2.5+ years"
-    notice_label: str = "Immediate (0 days)"
-    current_ctc: str = "₹3.9 LPA"
-    expected_ctc: str = "₹7 - 8 LPA (Negotiable)"
-    mobile: str = "+91 9481777227"
+    name: str = ""
+    email: str = ""
+    location: str = ""
+    experience_label: str = ""
+    notice_label: str = ""
+    current_ctc: str = ""
+    expected_ctc: str = ""
+    mobile: str = ""
     github: str = ""
     linkedin: str = ""
     skills_label: str = ""
@@ -156,7 +157,7 @@ def strip_company_from_title(title: str, company: str = "") -> str:
 
 
 def applicant_snapshot() -> ApplicantSnapshot:
-    """Resolve identity facts from AgentConfig with safe generic fallbacks."""
+    """Resolve identity facts from AgentConfig — all values from config.yaml."""
     try:
         from ..config import AgentConfig
 
@@ -165,46 +166,62 @@ def applicant_snapshot() -> ApplicantSnapshot:
         log.debug("gemini.config_unavailable", error=str(exc)[:120])
         return ApplicantSnapshot()
 
-    name = (config.applicant_name or "").strip() or "Mahesh Chitakoti"
-    location = (config.applicant_location or "").strip() or "Bengaluru, India"
+    name = (config.applicant_name or "").strip()
+    location = (config.applicant_location or "").strip()
 
-    # User profile specifies 2.5 years of experience
-    experience_label = "2.5 years"
-    years: float | None = None
+    # Experience label from candidate config
+    experience_label = ""
     try:
-        years = config.experience.total_years
+        candidate = config.candidate
+        experience_label = candidate.experience_label or ""
     except (AttributeError, ValueError):
-        years = None
-    if years and years > 0 and years != 3:
-        experience_label = f"{years:g} years"
+        pass
+    if not experience_label:
+        try:
+            years = config.experience.total_years
+            if years and years > 0:
+                experience_label = f"{years:g} years"
+        except (AttributeError, ValueError):
+            pass
 
-    notice_label = "Immediate (0 days)"
-    current_ctc = "₹3.9 LPA"
-    expected_ctc = "₹7 - 8 LPA (Negotiable)"
+    # Notice/CTC from candidate config, fallback to answers
+    notice_label = ""
+    current_ctc = ""
+    expected_ctc = ""
     try:
-        answers = config.answers or {}
-        lowered = {str(k).strip().lower(): str(v).strip() for k, v in answers.items()}
-        notice_raw = lowered.get("notice period", "")
-        if notice_raw:
-            if "0" in notice_raw or "immediate" in notice_raw.lower():
-                notice_label = "Immediate (0 days)"
-            else:
-                notice_label = notice_raw if "day" in notice_raw.lower() else f"{notice_raw} notice"
-
-        c_raw = lowered.get("current ctc", "")
-        if c_raw:
-            current_ctc = f"₹{c_raw} LPA" if "lpa" not in c_raw.lower() else c_raw
-        e_raw = lowered.get("expected ctc", "")
-        if e_raw:
-            expected_ctc = f"₹{e_raw} LPA (Negotiable)" if "lpa" not in e_raw.lower() else f"{e_raw} (Negotiable)"
-    except (AttributeError, ValueError) as exc:
-        log.debug("gemini.answers_unavailable", error=str(exc)[:120])
+        candidate = config.candidate
+        notice_label = candidate.notice_label or ""
+        current_ctc = candidate.current_ctc or ""
+        expected_ctc = candidate.expected_ctc_display or ""
+    except (AttributeError, ValueError):
+        pass
+    if not notice_label or not current_ctc or not expected_ctc:
+        try:
+            answers = config.answers or {}
+            lowered = {str(k).strip().lower(): str(v).strip() for k, v in answers.items()}
+            if not notice_label:
+                notice_raw = lowered.get("notice period", "")
+                if notice_raw:
+                    if "0" in notice_raw or "immediate" in notice_raw.lower():
+                        notice_label = "Immediate (0 days)"
+                    else:
+                        notice_label = notice_raw if "day" in notice_raw.lower() else f"{notice_raw} notice"
+            if not current_ctc:
+                c_raw = lowered.get("current ctc", "")
+                if c_raw:
+                    current_ctc = f"₹{c_raw} LPA" if "lpa" not in c_raw.lower() else c_raw
+            if not expected_ctc:
+                e_raw = lowered.get("expected ctc", "")
+                if e_raw:
+                    expected_ctc = f"₹{e_raw} LPA (Negotiable)" if "lpa" not in e_raw.lower() else f"{e_raw} (Negotiable)"
+        except (AttributeError, ValueError) as exc:
+            log.debug("gemini.answers_unavailable", error=str(exc)[:120])
 
     phone = (config.applicant_phone or "").strip()
     if phone:
         mobile = f"+91 {phone}" if not phone.startswith("+") and len(phone) == 10 else phone
     else:
-        mobile = "+91 9481777227"
+        mobile = ""
 
     # Verified skill inventory: top mapped skills by tenure. The prompt may
     # ONLY name these — presenting a post requirement ("LLM evals", "Go")

@@ -566,6 +566,34 @@ experience:
     fircosoft: 0
 
 # ---------------------------------------------------------------------------
+# Centralized candidate profile — single source of truth for ALL platforms.
+# Update this section when candidate details change; no code edits needed.
+# ---------------------------------------------------------------------------
+candidate:
+  name: "Mahesh Chitakoti"
+  email: "maheshrwd042@gmail.com"
+  phone: "9481777227"
+  phone_intl: "+91 9481777227"
+  location: "Bengaluru, India"
+  gender: "Male"
+  title: "Full Stack & AI Engineer"
+  company: "Independent Software Consultant"
+  current_ctc: "3.9"
+  expected_ctc: "7"
+  expected_ctc_display: "7 - 8 LPA (Negotiable)"
+  experience_label: "2.5+ years"
+  notice_label: "Immediate (0 days)"
+  bio: "Experienced software and AI engineer with hands-on experience building scalable applications, APIs, and AI workflows."
+  achievements:
+    - "automated RAG workflows achieving <300ms p95 latency and cutting token costs by 35%"
+    - "high-performance full-stack architectures with a 60% API latency reduction"
+    - "scalable, low-latency microservices with <150ms p95 response times"
+  wellfound_pitch: |
+    • Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations using LangChain and FastAPI for low-latency, context-rich responses.
+    • Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS, handling asynchronous workloads and database integrations.
+    • Fast Delivery: Comfortable owning features end-to-end, from data ingestion and API design to cloud deployment in fast-paced startup environments.
+
+# ---------------------------------------------------------------------------
 # Daily "touch the profile" pass. Naukri's recruiter search sorts candidates by
 # profile-last-updated, so a stale profile is invisible past page one. This is
 # quota-free and usually generates more inbound contact than applying does.
@@ -626,7 +654,7 @@ profiles:
 
     # Primary skills required: AT LEAST ONE of core_skills MUST match in every job
     # Explicit title keywords for scoring (so it doesn't divide by 50)
-    title_keywords: ["full stack", "mern", "react", "node", "frontend", "backend", "software engineer", "developer", "web", "qa", "automation", "sdet", "next", "cloud engineer", "devops", "platform engineer", "database developer", "sql developer"]
+    title_keywords: ["full stack", "mern", "react", "node", "frontend", "backend", "software engineer", "developer", "web", "qa", "automation", "sdet", "next", "cloud engineer", "devops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "associate"]
 
     # Condensed to Top 14 so math allows a high score
     core_skills: ["react", "node", "javascript", "typescript", "python", "fastapi", "django", "frontend", "backend", "full stack", "mern", "ui", "aws", "docker", "nextjs"]
@@ -634,7 +662,7 @@ profiles:
     bonus_skills: ["testing", "pytest", "jest", "playwright", "cypress", "git", "github", "jira", "agile", "scrum", "code review", "debugging"]
 
     filters:
-      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality engineer, test engineer, manual testing, automation testing, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability]
+      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality engineer, test engineer, manual testing, automation testing, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability]
       title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml engineer, deep learning, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
@@ -695,7 +723,7 @@ profiles:
     resume_file: "resumes/CV_Mahesh_Chitakoti_2026.pdf"
 
     # Explicit title keywords for scoring (so it doesn't divide by 33)
-    title_keywords: ["ai", "python", "machine learning", "ml", "genai", "llm", "backend", "full stack", "software engineer", "developer", "sde", "chatbot", "rag", "nlp", "agent", "qa", "automation", "sdet", "quality analyst", "cloud engineer", "devops", "mlops", "platform engineer", "database developer", "sql developer"]
+    title_keywords: ["ai", "python", "machine learning", "ml", "genai", "llm", "backend", "full stack", "software engineer", "developer", "sde", "chatbot", "rag", "nlp", "agent", "qa", "automation", "sdet", "quality analyst", "cloud engineer", "devops", "mlops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "data analyst", "associate"]
 
     # Condensed to Top 13 so math allows a high score
     core_skills: ["python", "fastapi", "django", "ai", "artificial intelligence", "machine learning", "ml", "generative ai", "genai", "llm", "rag", "langchain", "openai", "chatbot", "nlp"]
@@ -703,7 +731,7 @@ profiles:
     bonus_skills: ["testing", "pytest", "jest", "git", "github", "jira", "agile", "scrum", "debugging"]
 
     filters:
-      title_must_include_any: [ai, artificial intelligence, ml, python, django, mongodb, llm, genai, generative ai, nlp, chatbot, prompt, ai agent, llm agent, agentic, python developer, ai engineer, ml engineer, ai software engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality analyst, quality engineer, test automation, manual testing, automation testing, cloud engineer, devops, devops engineer, mlops, mlops engineer, platform engineer, database developer, database engineer, sql developer, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, junior engineer, fresher, junior data engineer, data engineer, site reliability engineer, customer success engineer, data analyst, technical support engineer, support engineer, product support, application support]
+      title_must_include_any: [ai, artificial intelligence, ml, python, django, mongodb, llm, genai, generative ai, nlp, chatbot, prompt, ai agent, llm agent, agentic, python developer, ai engineer, ml engineer, ai software engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality analyst, quality engineer, test automation, manual testing, automation testing, cloud engineer, devops, devops engineer, mlops, mlops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, junior data engineer, data engineer, site reliability engineer, customer success engineer, data analyst, technical support engineer, support engineer, product support, application support, automation engineer, test automation engineer]
       title_must_exclude_any: [machine learning, lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
