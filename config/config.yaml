@@ -13,9 +13,7 @@
 #
 # SOURCE: Naukri's own "Recommended jobs" feed only. Naukri has already matched
 # those postings against the profile, headline, skills and preferences, so it
-# beats any keyword query. The keyword-search fallback is left configured but
-# disabled (`searches: []`) — see the commented block on the Full-Stack profile
-# to re-enable it.
+# beats any keyword query. There is no keyword-search path in this product.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -727,7 +725,7 @@ profiles:
     resume_file: "resumes/CV_Mahesh_Chitakoti_2026.pdf"
 
     # Explicit title keywords for scoring (so it doesn't divide by 33)
-    title_keywords: ["ai", "python", "machine learning", "ml", "genai", "llm", "backend", "full stack", "software engineer", "developer", "sde", "chatbot", "rag", "nlp", "agent", "qa", "automation", "sdet", "quality analyst", "cloud engineer", "devops", "mlops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "data analyst", "associate"]
+    title_keywords: ["ai", "python", "machine learning", "ml", "genai", "llm", "backend", "full stack", "software engineer", "developer", "sde", "chatbot", "rag", "nlp", "agent", "qa", "automation", "sdet", "quality analyst", "cloud engineer", "devops", "mlops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "data analyst"]
 
     # Condensed to Top 13 so math allows a high score
     core_skills: ["python", "fastapi", "django", "ai", "artificial intelligence", "machine learning", "ml", "generative ai", "genai", "llm", "rag", "langchain", "openai", "chatbot", "nlp"]
@@ -735,8 +733,8 @@ profiles:
     bonus_skills: ["testing", "pytest", "jest", "git", "github", "jira", "agile", "scrum", "debugging"]
 
     filters:
-      title_must_include_any: [ai, artificial intelligence, ml, python, django, mongodb, llm, genai, generative ai, nlp, chatbot, prompt, ai agent, llm agent, agentic, python developer, ai engineer, ml engineer, ai software engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality analyst, quality engineer, test automation, manual testing, automation testing, cloud engineer, devops, devops engineer, mlops, mlops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, junior data engineer, data engineer, site reliability engineer, customer success engineer, data analyst, technical support engineer, support engineer, product support, application support, automation engineer, test automation engineer]
-      title_must_exclude_any: [machine learning, lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher]
+      title_must_include_any: [ai, artificial intelligence, machine learning, machine learning engineer, machine learning developer, ml, python, django, mongodb, llm, genai, generative ai, nlp, chatbot, prompt, ai agent, llm agent, agentic, python developer, ai engineer, ml engineer, ai software engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality analyst, quality engineer, test automation, manual testing, automation testing, cloud engineer, devops, devops engineer, mlops, mlops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, junior data engineer, data engineer, site reliability engineer, customer success engineer, data analyst, technical support engineer, support engineer, product support, application support, automation engineer, test automation engineer]
+      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher, automation anywhere, rpa, data analytics]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
@@ -848,3 +846,26 @@ profiles:
       # Run 577 #172: serving notice (garbled "30 or serving" = 30-day notice).
       "are you a 30 or serving": "No"
       "are you serving 30": "No"
+      # Run 587/590 (#261-#267) and run 590 (#288-#290): long-form LinkedIn
+      # screening forms. Every "Yes" below is backed by core_skills above
+      # (langchain, rag, agent, openai, embeddings, vector database, fastapi,
+      # aws) and by the resume's shipped GenAI work.
+      # #261: CS/IT background, not Electronics/Mechanical/Mechatronics.
+      "educational background in any of these domains": "No"
+      # #262: same 2 years the profile reports for AI/LLM work.
+      "hands-on professional experience do you have in ai/ml development": "2"
+      # #263: LLM apps shipped with OpenAI/Claude/Gemini.
+      "independently developed and deployed production-ready generative ai applications": "Yes"
+      # #264: agents + RAG + vector DB + LangChain orchestration.
+      "hands-on experience building ai agents, rag pipelines, vector databases": "Yes"
+      # #265: assistants/agents wired to external APIs.
+      "ai-powered conversational assistants or autonomous agents": "Yes"
+      # #266: Python/FastAPI/AWS deployment and LLM cost-latency tuning.
+      "hands-on experience with python, fastapi, cloud deployment": "Yes"
+      # #267: LinkedIn free-text CTC box (same value as expected ctc).
+      "expected annual ctc": "7"
+      # #288: two-week agent build is well inside demonstrated prototype speed.
+      "design, build, and deploy an ai agent": "Yes"
+      # #289/#290: acknowledgement of contract terms, not an experience claim.
+      "contractor engagement, with compensation paid against completed and approved milestones": "Yes"
+      "contract renewal will depend on your delivery and performance": "Yes"

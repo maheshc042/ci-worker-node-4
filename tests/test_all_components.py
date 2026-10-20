@@ -269,49 +269,54 @@ class TestFilterEngine(unittest.TestCase):
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
     def test_ai_profile_breadth_policy(self):
-        """Product policy (owner call): the AI profile is breadth-first for
-        interviews — analyst/support families PASS (Python transfers, details
-        get sorted at interview); core-ML titles are EXCLUDED to save daily
-        window (recruiter would reject an applied-AI background anyway)."""
+        """Product policy: the AI profile is breadth-first for interviews.
+
+        Analyst/support families PASS (Python transfers, details get sorted at
+        interview) and core-ML/GenAI titles PASS too — they are the profile's
+        own subject matter, so excluding them only wasted the daily window.
+        Genuinely unrelated or over-senior tracks stay blocked."""
         engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+
+        def passes(title: str) -> bool:
+            job = Job(
+                job_id=f"test-ai-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            return engine.evaluate_card(job).passed
+
         for title in [
             "Data Analyst",
             "Technical Support Engineer",
             "Product Support Executive",
             "Customer Success Engineer",
+            "Machine Learning Engineer",
+            "Senior Machine Learning Engineer",
+            "ML Engineer",
+            "Gen AI Engineer",
+            "LLM Engineer",
+            "NLP Engineer",
+            "Prompt Engineer",
+            "AI Engineer",
+            "Python Developer",
+            "Data Engineer",
         ]:
-            job = Job(
-                job_id=f"test-ai-{title}",
-                title=title,
-                company="Test Corp",
-                location="Bengaluru",
-                url="http://test.com",
-                platform="naukri",
-            )
-            decision = engine.evaluate_card(job)
-            self.assertTrue(decision.passed, f"{title!r} must pass the AI profile: {decision.reason}")
-        for title in ["Machine Learning Engineer", "Senior Machine Learning Engineer"]:
-            job = Job(
-                job_id=f"test-ai-{title}",
-                title=title,
-                company="Test Corp",
-                location="Bengaluru",
-                url="http://test.com",
-                platform="naukri",
-            )
-            decision = engine.evaluate_card(job)
-            self.assertFalse(decision.passed, f"{title!r} must be excluded as core-ML")
-        for title in ["AI Engineer", "Python Developer", "Data Engineer"]:
-            job = Job(
-                job_id=f"test-ai-{title}",
-                title=title,
-                company="Test Corp",
-                location="Bengaluru",
-                url="http://test.com",
-                platform="naukri",
-            )
-            decision = engine.evaluate_card(job)
-            self.assertTrue(decision.passed, f"{title!r} must still pass: {decision.reason}")
+            self.assertTrue(passes(title), f"{title!r} must pass the AI profile")
+
+        for title in [
+            "Data Scientist",
+            "Computer Vision Engineer",
+            "AI Researcher",
+            "Research Scientist",
+            "Data Analytics Executive",
+            "RPA Developer",
+            "Associate",
+            "Android Developer",
+        ]:
+            self.assertFalse(passes(title), f"{title!r} must be excluded from the AI profile")
 
     def test_disjoint_specialization_blocks(self):
         """Verify that strictly non-relevant roles remain blocked."""
@@ -2440,6 +2445,92 @@ class TestContractionFit(unittest.TestCase):
         r = eng.resolve(q)
         self.assertIsNotNone(r)
         self.assertIn("github.com/maheshchichkoti", r.value)
+
+
+class TestRun587592LinkedInLongForm(unittest.TestCase):
+    """Runs 587/590-592: long-form LinkedIn screening forms. Every answer
+    below is backed by the AI/Python profile's own skills; the two questions
+    with no honest answer must stay queued for a human (never fabricated)."""
+
+    # (review id, question text, kind, options, expected answer)
+    CASES = [
+        (261, "Do you have an educational background in any of these domains: "
+              "Electronics, Mechanical, or Mechatronics Engineering?",
+         "radio", ["Yes", "No", "Skip this question"], "No"),
+        (262, "Apply to EaseMyTrip.com 3/4 pages Additional Questions How many "
+              "years of hands-on professional experience do you have in AI/ML "
+              "development, including Generative AI and Large Language Models "
+              "(LLMs)?",
+         "text", [], "2"),
+        (263, "Have you independently developed and deployed production-ready "
+              "Generative AI applications using OpenAI, Claude, Gemini, Llama or "
+              "other LLMs?",
+         "radio", ["Yes", "No"], "Yes"),
+        (264, "Do you have hands-on experience building AI agents, RAG pipelines, "
+              "vector databases and LLM orchestration using LangChain, LangGraph "
+              "or similar frameworks?",
+         "radio", ["Yes", "No"], "Yes"),
+        (265, "Have you developed AI-powered conversational assistants or "
+              "autonomous agents that integrate with external APIs to execute "
+              "real-world tasks?",
+         "radio", ["Yes", "No"], "Yes"),
+        (266, "Do you have hands-on experience with Python, FastAPI, cloud "
+              "deployment (AWS/GCP/Azure) and optimizing LLM applications for "
+              "latency, accuracy and cost?",
+         "radio", ["Yes", "No"], "Yes"),
+        (267, "What is your expected annual CTC in \u20b9 lakh (LPA)?",
+         "text", [], "7"),
+        (288, "Apply to Greyhorse Clearinghouse LLC 3/4 pages Additional "
+              "Questions Can you Design, Build, and Deploy an AI Agent(s) within "
+              "Two Weeks?",
+         "radio", ["Yes", "No"], "Yes"),
+        (289, "Do you understand that this is a Contractor Engagement, with "
+              "Compensation paid against Completed and Approved Milestones under "
+              "the Contract?",
+         "radio", ["Yes", "No"], "Yes"),
+        (290, "Do you understand that Contract Renewal will depend on your "
+              "Delivery and Performance?",
+         "radio", ["Yes", "No"], "Yes"),
+    ]
+
+    def _eng(self, profile_name="AI / Python Engineer"):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if p.name == profile_name)
+        return AnswerEngine(
+            kb=[(k, v) for k, v in cfg.answers.items()],
+            profile_answers=dict(prof.answers),
+            strict=True,
+            experience=cfg.experience_for(prof),
+        )
+
+    def test_long_form_answers_resolve_from_config(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._eng()
+        for rid, text, kind, options, expected in self.CASES:
+            with self.subTest(review=rid):
+                r = eng.resolve(
+                    ScreeningQuestion(text=text, kind=kind, options=list(options))
+                )
+                self.assertIsNotNone(r, f"#{rid} unresolved")
+                self.assertEqual(r.value, expected, f"#{rid}")
+
+    def test_unanswerable_questions_stay_unresolved(self):
+        # #30 is an external assessment link, not a form field; #38 offers only
+        # "4 Yrs"/"4+ Yrs" for Node.js while the profile claims 2.5+ years.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Please submit the online assessment : "
+                 "https://www.autoproctor.co/tests/bfIxNc90WC/instructions/",
+            kind="text", options=[]))
+        self.assertIsNone(r)
+        r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
+            text="Relevant Experience in Node.js",
+            kind="radio", options=["4 Yrs", "4+ Yrs"]))
+        self.assertIsNone(r)
 
 
 class TestRun569Unanswered(unittest.TestCase):

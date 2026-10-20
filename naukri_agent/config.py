@@ -548,22 +548,6 @@ class MatchScoreConfig(_Model):
     fail_open: bool = True
 
 
-class SearchSpec(_Model):
-    keyword: str
-    locations: list[str] = Field(default_factory=list)
-    max_pages: int = Field(default=3, ge=1, le=50)
-    sort_by: str = "date"
-    freshness_days: int | None = Field(default=None, ge=1, le=365)
-    # A hand-built Naukri URL wins over the generated one; Naukri's own filter
-    # UI produces query strings we cannot reconstruct from keywords alone.
-    custom_url: str | None = None
-
-    @field_validator("locations")
-    @classmethod
-    def _lower(cls, value: list[str]) -> list[str]:
-        return [str(item).strip().lower() for item in value if str(item).strip()]
-
-
 class ExperienceRange(_Model):
     min_years: float = Field(default=0, ge=0, le=50)
     max_years: float = Field(default=99, ge=0, le=50)
@@ -690,10 +674,6 @@ class JobProfile(_Model):
     min_rank_score: float = Field(default=0.0, ge=0.0, le=100.0)
     resume_label: str | None = None
     resume_file: str | None = None
-    searches: list[SearchSpec] = Field(default_factory=list)
-    # When true the keyword searches only run if the recommended feed did not
-    # fill `max_applications_per_run`.
-    search_is_fallback_only: bool = True
     filters: FilterRules = Field(default_factory=FilterRules)
     answers: dict[str, str] = Field(default_factory=dict)
     experience: ExperienceConfig | None = None

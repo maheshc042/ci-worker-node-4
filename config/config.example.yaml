@@ -88,17 +88,6 @@ profiles:
     resume_label: null
     # Local file used only by the "upload new resume" flow (optional).
     resume_file: null
-    searches:
-      - keyword: "python developer"
-        locations: [bengaluru, hyderabad, remote]
-        max_pages: 3
-        sort_by: date
-        freshness_days: 7
-      - keyword: "ai engineer"
-        locations: [bengaluru, remote]
-        max_pages: 2
-        sort_by: date
-        freshness_days: 7
     filters:
       title_must_include_any: [python, ai, ml, machine learning, backend, llm]
       title_must_exclude_any: [intern, trainee, fresher, sales, support, manual testing]
@@ -123,12 +112,6 @@ profiles:
     priority: 20
     experience_years: 4
     max_applications_per_run: 10
-    searches:
-      - keyword: "full stack developer react node"
-        locations: [bengaluru, remote]
-        max_pages: 2
-        sort_by: date
-        freshness_days: 7
     filters:
       title_must_include_any: [full stack, fullstack, react, node]
       title_must_exclude_any: [intern, fresher, php, wordpress]

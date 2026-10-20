@@ -14,7 +14,6 @@ Design decisions:
 - **DOM Growth & Composite Termination.** Tracks DOM element count growth to detect real
   feed termination vs duplicate card filtering.
 - **Analysis Export.** Automatically exports raw harvested datasets to `analysis/collected_jobs.csv`.
-- **URL-driven keyword search fallback.** Kept fully backward compatible via `search_page()`.
 """
 
 from __future__ import annotations
@@ -38,13 +37,12 @@ from ..browser.resilience import (
     safe_text,
     scroll_page,
 )
-from ..config import RecommendedConfig, SearchSpec
+from ..config import RecommendedConfig
 from ..core.models import Job, RecommendationTab
 from ..core.runtime_metrics import RuntimeMetrics, TabTiming
 from ..logging_setup import get_logger
 from . import selectors as S
 from .parser import (
-    build_search_url,
     normalise_whitespace,
     parse_experience,
     parse_posted_days,
@@ -180,79 +178,6 @@ class JobSearcher:
         self.max_delay_ms = max_delay_ms
         self.artifacts = artifacts
         self.metrics = metrics
-
-    # -------------------------------------------------- keyword search fallback
-    async def search_page(
-        self,
-        spec: SearchSpec,
-        experience_years: float | None,
-        page_no: int,
-        exclude_job_ids: set[str] | None = None,
-    ) -> list[Job]:
-        """
-        URL-driven keyword search page collector (legacy / fallback strategy).
-        """
-        exclude = exclude_job_ids or set()
-        url = build_search_url(
-            keyword=spec.keyword,
-            locations=spec.locations,
-            experience_years=experience_years,
-            page=page_no,
-            sort_by=spec.sort_by,
-            freshness_days=spec.freshness_days,
-            custom_url=spec.custom_url,
-        )
-        try:
-            cards = await retry_async(
-                lambda u=url: self._load_page(u),
-                attempts=3,
-                base_delay=3.0,
-                label=f"search:{spec.keyword}:p{page_no}",
-            )
-        except Exception as exc:
-            log.error(
-                "search.page_failed",
-                keyword=spec.keyword,
-                page=page_no,
-                error=str(exc)[:250],
-            )
-            return []
-
-        if not cards:
-            log.info("search.no_more_results", keyword=spec.keyword, page=page_no)
-            return []
-
-        page_jobs: list[Job] = []
-        for index, card in enumerate(cards, start=1):
-            job = await self._parse_card(
-                card,
-                keyword=spec.keyword,
-                tab_enum=RecommendationTab.DEFAULT,
-                position=index,
-            )
-            if job is None or job.job_id in exclude:
-                continue
-            page_jobs.append(job)
-
-        log.info(
-            "search.page_scraped",
-            keyword=spec.keyword,
-            page=page_no,
-            cards=len(cards),
-            found=len(page_jobs),
-        )
-        await human_pause(self.min_delay_ms, self.max_delay_ms)
-        return page_jobs
-
-    async def _load_page(self, url: str) -> list[Locator]:
-        """Navigate to a search page and return raw card elements."""
-        response = await self.page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-        if response is not None and response.status >= 500:
-            raise TransientPageError(f"Naukri returned HTTP {response.status}")
-
-        await dismiss_overlays(self.page)
-        card_tuples = await self._reco_cards()
-        return [card for card, _ in card_tuples]
 
     # ------------------------------------------------------ recommended collector
     async def search_recommended(
