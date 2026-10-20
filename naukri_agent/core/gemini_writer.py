@@ -202,10 +202,17 @@ def applicant_snapshot() -> ApplicantSnapshot:
             if not notice_label:
                 notice_raw = lowered.get("notice period", "")
                 if notice_raw:
-                    if "0" in notice_raw or "immediate" in notice_raw.lower():
-                        notice_label = "Immediate (0 days)"
+                    # Normalize the configured answer; never substitute a
+                    # candidate-specific label that config did not provide.
+                    low_notice = notice_raw.lower()
+                    if (
+                        "immediate" in low_notice
+                        or "day" in low_notice
+                        or "0" in notice_raw
+                    ):
+                        notice_label = notice_raw
                     else:
-                        notice_label = notice_raw if "day" in notice_raw.lower() else f"{notice_raw} notice"
+                        notice_label = f"{notice_raw} notice"
             if not current_ctc:
                 c_raw = lowered.get("current ctc", "")
                 if c_raw:
@@ -213,7 +220,9 @@ def applicant_snapshot() -> ApplicantSnapshot:
             if not expected_ctc:
                 e_raw = lowered.get("expected ctc", "")
                 if e_raw:
-                    expected_ctc = f"₹{e_raw} LPA (Negotiable)" if "lpa" not in e_raw.lower() else f"{e_raw} (Negotiable)"
+                    expected_ctc = (
+                        f"₹{e_raw} LPA" if "lpa" not in e_raw.lower() else e_raw
+                    )
         except (AttributeError, ValueError) as exc:
             log.debug("gemini.answers_unavailable", error=str(exc)[:120])
 
@@ -281,7 +290,8 @@ def applicant_snapshot() -> ApplicantSnapshot:
         or "email_address" in sender_email.lower()
         or "[" in sender_email
     ):
-        sender_email = "maheshrwd042@gmail.com"
+        # No configured contact email: stay blank instead of inventing one.
+        sender_email = ""
 
     return ApplicantSnapshot(
         name=name,
@@ -361,7 +371,7 @@ def finalize_email_body(text: str, who: ApplicantSnapshot | None = None, role_na
     )
 
     # 3. Standardize contact line to include both mobile and verified email cleanly on one line
-    contact_email = getattr(who, "email", "") or "maheshrwd042@gmail.com"
+    contact_email = (getattr(who, "email", "") or "").strip()
 
     def _replace_contact_line(m: re.Match) -> str:
         prefix = m.group(1) or "• "
@@ -370,8 +380,11 @@ def finalize_email_body(text: str, who: ApplicantSnapshot | None = None, role_na
         phone_part = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "", rest)
         phone_part = re.sub(r"[|/,-]\s*$", "", phone_part).strip()
         if not phone_part or not any(c.isdigit() for c in phone_part):
-            phone_part = who.mobile or "+91 9481777227"
-        return f"{prefix}Contact: {phone_part} | {contact_email}"
+            phone_part = who.mobile or ""
+        parts = [part for part in (phone_part, contact_email) if part]
+        if not parts:
+            return ""
+        return f"{prefix}Contact: {' | '.join(parts)}"
 
     cleaned = re.sub(
         r"([•\-\*]\s*)(?:Contact|Mobile|Phone):\s*([^\n]+)",
@@ -380,9 +393,15 @@ def finalize_email_body(text: str, who: ApplicantSnapshot | None = None, role_na
         flags=re.IGNORECASE,
     )
 
-    # Safeguard against hallucinated variations of candidate email
-    cleaned = re.sub(r"\bmaheshchitakoti@gmail\.com\b", contact_email, cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bchitakotimahesh@gmail\.com\b", contact_email, cleaned, flags=re.IGNORECASE)
+    # Safeguard against any hallucinated sender address: rewrite every email in
+    # the body to the configured contact email. Without a configured contact
+    # email there is nothing truthful to substitute, so leave the text alone.
+    if contact_email:
+        cleaned = re.sub(
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+            contact_email,
+            cleaned,
+        )
 
     # 4. Remove AI fluff phrases if generated
     cleaned = re.sub(
@@ -701,7 +720,7 @@ You are {who.name}, writing a high-impact startup pitch note on Wellfound for th
 
 CRITICAL AUDIENCE & CONTEXT:
 The reader is a Startup Founder, CTO, or Engineering Lead reviewing candidate pitches directly on Wellfound.
-Your candidate profile card (Name, Bengaluru location, contact info, portfolio links, salary range) is already visible right next to this note.
+Your candidate profile card (Name, {who.location or 'current'} location, contact info, portfolio links, salary range) is already visible right next to this note.
 Do NOT write a standard recruitment email or HR form letter. Founders want to see:
 1. Proof of what you have built (backend architecture, GenAI pipelines, latency reduction, APIs).
 2. Alignment with their specific product and tech stack.

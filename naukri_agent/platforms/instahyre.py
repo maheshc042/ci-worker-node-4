@@ -451,12 +451,16 @@ class InstahyrePlatform(BaseJobPlatform):
             exp_val = str(int(inst_cfg.experience_years))
         elif profile.experience_years > 0:
             exp_val = str(int(profile.experience_years))
+        elif self.config and getattr(self.config, "experience", None) and self.config.experience.total_years:
+            exp_val = str(int(self.config.experience.total_years))
         elif profile.filters and profile.filters.experience and profile.filters.experience.max_years < 50:
             exp_val = str(int(profile.filters.experience.max_years))
         else:
-            exp_val = "2"
+            # No configured tenure: leave the filter untouched rather than
+            # searching with an invented number of years.
+            exp_val = ""
 
-        if exp_input:
+        if exp_input and exp_val:
             try:
                 await exp_input.click()
                 await human_pause(200, 400)

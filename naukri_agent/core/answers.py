@@ -148,20 +148,43 @@ def _contains_word(haystack: str, needle: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
 
 
-_HOME_PLACE_MARKERS = (
-    "bengaluru", "bangalore", "remote", "work from home", "hybrid", "anywhere",
+_REMOTE_PLACE_MARKERS = (
+    "remote", "work from home", "work-from-home", "wfh", "hybrid", "anywhere",
 )
 
-# Major Indian job hubs outside home. Word-boundary matched (Noida/no lesson).
+# Major Indian job hubs. Word-boundary matched (Noida/no lesson). Geography
+# only — the candidate's own city comes from config, never this table.
 _NON_HOME_CITIES = (
     "delhi", "new delhi", "pune", "mumbai", "bombay", "hyderabad",
     "chennai", "kolkata", "noida", "gurgaon", "gurugram", "ahmedabad",
     "kochi", "cochin", "jaipur", "indore", "nagpur", "surat", "lucknow",
     "chandigarh", "coimbatore", "bhubaneswar", "mysuru", "mysore",
+    "bengaluru", "bangalore",
 )
 
 
-def _job_place_is_home(text: str) -> bool:
+def _home_markers(home: str) -> tuple[str, ...]:
+    """City tokens that make a location question read as home.
+
+    Derived from the configured location (e.g. "Bengaluru, India" ->
+    "bengaluru"), plus remote/hybrid phrasings that are true from anywhere.
+    """
+    markers: list[str] = []
+    low = (home or "").strip().lower()
+    if low:
+        city = low.split(",")[0].strip()
+        if city:
+            markers.append(city)
+            # Bengaluru/Bangalore spellings are used interchangeably.
+            if city == "bengaluru":
+                markers.append("bangalore")
+            elif city == "bangalore":
+                markers.append("bengaluru")
+    markers.extend(_REMOTE_PLACE_MARKERS)
+    return tuple(dict.fromkeys(m for m in markers if m))
+
+
+def _job_place_is_home(text: str, home: str = "") -> bool:
     """True when a location question names home/remote — or names no place
     at all (fail-open: unknown never rejects).
 
@@ -172,13 +195,14 @@ def _job_place_is_home(text: str) -> bool:
     A question naming home/remote anywhere reads as home. Expects
     normalised (lowercased) text. Pure.
     """
+    markers = _home_markers(home)
     m = re.search(
         r"location of this job will be ([a-z0-9][a-z0-9\s().,&\-]{0,60})", text or ""
     )
     if m and m.group(1):
-        return any(h in m.group(1) for h in _HOME_PLACE_MARKERS)
+        return any(h in m.group(1) for h in markers)
     low = text or ""
-    if any(h in low for h in _HOME_PLACE_MARKERS):
+    if any(h in low for h in markers):
         return True
     return not any(re.search(rf"\b{re.escape(city)}\b", low) for city in _NON_HOME_CITIES)
 
@@ -234,6 +258,7 @@ class AnswerEngine:
         profile_answers: dict[str, str] | None = None,
         strict: bool = True,
         experience: ExperienceAnswers | None = None,
+        home_location: str = "",
     ) -> None:
         raw: list[tuple[str, str, str]] = [
             (_normalise(pattern), answer, "profile")
@@ -301,6 +326,11 @@ class AnswerEngine:
 
         self.strict = strict
         self.experience = experience or ExperienceAnswers()
+        # Candidate's own city comes from config (`candidate.location`), so a
+        # relocation/current-location answer never asserts a hardcoded place.
+        self.home_location = (home_location or "").strip()
+        self.home_city = self.home_location.split(",")[0].strip()
+        self.home_markers = _home_markers(self.home_location)
         self.hits: dict[tuple[str, str], int] = {}
         self.fuzzy_threshold: float = 0.80
 
@@ -476,7 +506,7 @@ class AnswerEngine:
         # falls through to review instead of a lie. Willingness is not
         # presence; a false here-claim is misrepresentation.
         _opts = list(question.options or [])
-        if _opts and not _job_place_is_home(text):
+        if _opts and not _job_place_is_home(text, self.home_location):
             _kept = [o for o in _opts if "currently in this location" not in o.lower()]
             if len(_kept) != len(_opts):
                 log.info("answers.here_claim_quarantined", question=question.text[:100],
@@ -489,20 +519,20 @@ class AnswerEngine:
                              question=question.text[:100])
                     return None
         if _opts:
-            # 1. Check for preferred locations (Bengaluru, Remote, Hybrid)
+            # 1. Check for preferred locations (home city, Remote, Hybrid)
             for opt in _opts:
                 if self._polarity(_normalise(opt)) is False:
                     continue
                 opt_low = opt.strip().lower()
-                if any(pref in opt_low for pref in ("bengaluru", "bangalore", "remote", "hybrid", "work from home")):
+                if any(pref in opt_low for pref in self.home_markers):
                     return ResolvedAnswer(opt, "intent:willingness_location_preferred", "intent-map")
 
             # 2. Check for Cutshort-style affirmative presence / relocation options.
             # Place-aware (run 480, hardened run 539): "I am currently in
-            # this location" is only true for home (Bengaluru) or remote —
-            # foreign instances are quarantined above, so anything reaching
-            # here is answerable. Explicit relocate options still win.
-            is_home = _job_place_is_home(text)
+            # this location" is only true for home (config location) or
+            # remote — foreign instances are quarantined above, so anything
+            # reaching here is answerable. Explicit relocate options still win.
+            is_home = _job_place_is_home(text, self.home_location)
             opt_lows = [(opt, opt.strip().lower()) for opt in _opts]
             if not is_home:
                 # Relocate-intent carve-out (run 544 / review #57/#58):
@@ -923,12 +953,12 @@ class AnswerEngine:
         return fitted
 
     def _resolve_presence_no(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
-        """"Are you currently based in Gurgaon?" asked from Bengaluru.
-        The Bengaluru-scoped KB keys must never answer Yes for any city
+        """"Are you currently based in Gurgaon?" asked from the home city.
+        The home-city-scoped KB keys must never answer Yes for any city
         (anti-lie rule), but "No" is the truthful Yes/No answer for a
         known-foreign hub — routing it to review burns the application
-        (run 569 #73). Free-text variants ("which city...?") still get
-        Bengaluru, never a bare No."""
+        (run 569 #73). Free-text variants ("which city...?") still get the
+        configured home city, never a bare No."""
         if not re.search(
             r"\bbased\s+in\b|\bcurren\w*\s+(?:based|located|residing|living)\b|"
             r"\bresiding\s+in\b|\blocated\s+in\b|\blive\s+in\b|\bstaying\s+in\b|"
@@ -936,7 +966,7 @@ class AnswerEngine:
             text,
         ):
             return None
-        if _job_place_is_home(text):
+        if _job_place_is_home(text, self.home_location):
             return None
         opts = list(question.options or [])
         if opts:
@@ -948,7 +978,9 @@ class AnswerEngine:
                     log.info("answers.presence_foreign_no", question=question.text[:120])
                 return fitted
             return None
-        fitted = self._fit_to_options("Bengaluru", question, "intent:presence_foreign_city", "intent-map")
+        if not self.home_city:
+            return None
+        fitted = self._fit_to_options(self.home_city, question, "intent:presence_foreign_city", "intent-map")
         if fitted is not None:
             log.info("answers.presence_foreign_city", question=question.text[:120])
         return fitted
@@ -1186,10 +1218,16 @@ class AnswerEngine:
             if _contains_word(low, wanted) or _contains_word(wanted, low):
                 return ResolvedAnswer(option, pattern, source)
 
-        if wanted in ("bengaluru", "bangalore"):
+        # The candidate's own city comes from config; match any spelling of it
+        # that an option uses (e.g. "Bengaluru" answer vs "Bangalore" option).
+        home_names = {
+            marker for marker in self.home_markers
+            if marker not in _REMOTE_PLACE_MARKERS
+        }
+        if home_names and wanted in home_names:
             for option in options:
                 low = _opt_low(option)
-                if "bengaluru" in low or "bangalore" in low:
+                if any(name in low for name in home_names):
                     return ResolvedAnswer(option, pattern, source)
 
         polarity = self._polarity(wanted)

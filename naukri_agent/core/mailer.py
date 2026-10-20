@@ -179,7 +179,9 @@ class ColdEmailer:
             )
             closer = "My resume is attached for your review. If my background aligns with your requirements, I would welcome a brief 10-minute chat to discuss how I can contribute."
 
-        sender = self.sender_email or "maheshrwd042@gmail.com"
+        sender = self.sender_email or ""
+        contact_parts = [part for part in (who.mobile, sender) if part]
+        contact_line = f"• Contact: {' | '.join(contact_parts)}" if contact_parts else ""
         links_lines = []
         if who.github:
             links_lines.append(f"GitHub: {who.github}")
@@ -198,7 +200,7 @@ Candidate Snapshot:
 • Notice Period: {who.notice_label}
 • Current CTC: {who.current_ctc}
 • Expected CTC: {who.expected_ctc}
-• Contact: {who.mobile} | {sender}
+{contact_line}
 
 {closer}
 
@@ -272,12 +274,14 @@ Best regards,
 
             # Human-style subject: role first (mobile shows ~35 chars), then
             # company, then name — all three searchable later — plus the
-            # immediate-joiner tag, your single strongest hook. No pipes,
-            # no tags, no YOE counters.
+            # immediate-joiner tag, your single strongest hook.
             try:
-                immediate = is_immediate_joiner(applicant_snapshot().notice_label)
+                snapshot = applicant_snapshot()
+                immediate = is_immediate_joiner(snapshot.notice_label)
+                years_tag = (snapshot.experience_label or "").strip()
             except Exception:
                 immediate = False
+                years_tag = ""
             clean_name = " ".join(str(name or "").splitlines()).strip()
             referral = str(angle or "application").strip().lower() == "referral"
 
@@ -304,7 +308,7 @@ Best regards,
                 immediate=immediate,
                 referral=referral,
                 stack_summary=stack_tag,
-                years="2.5 Yrs Exp",
+                years=years_tag,
             )
             msg = EmailMessage()
             msg["Subject"] = subject

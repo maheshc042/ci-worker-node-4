@@ -289,19 +289,29 @@ class ChatbotHandler:
             return True
         if rv in ("no", "false") and ct_words & {"no", "never", "not", "none", "neither", "cannot", "unwilling"}:
             return True
-        # City groups: first is home (from config), rest are common Indian hubs
-        _home_city = "bengaluru"  # fallback if config unavailable
+        # City groups: first is home (from config), rest are common Indian hubs.
+        # An unset location leaves the home group empty rather than assuming a
+        # city — a silent "bengaluru" default would match the wrong candidate.
+        _home_city = ""
         try:
             from ..config import AgentConfig
-            _loc = AgentConfig.load().applicant_location.lower()
-            if "bengaluru" in _loc or "bangalore" in _loc:
-                _home_city = "bengaluru"
+            _home_city = (AgentConfig.load().applicant_location or "").split(",")[0].strip().lower()
         except Exception:
             pass
-        _CITY_GROUPS = (
-            {_home_city, "bangalore"} if _home_city == "bengaluru" else {_home_city},
-            {"mumbai", "bombay"},
-            {"hyderabad"}, {"delhi"}, {"noida"}, {"pune"}, {"chennai"},
+        if _home_city in {"bengaluru", "bangalore"}:
+            _home_group = {"bengaluru", "bangalore"}
+        elif _home_city:
+            _home_group = {_home_city}
+        else:
+            _home_group = set()
+        _CITY_GROUPS = tuple(
+            group
+            for group in (
+                _home_group,
+                {"mumbai", "bombay"},
+                {"hyderabad"}, {"delhi"}, {"noida"}, {"pune"}, {"chennai"},
+            )
+            if group
         )
         for cities in _CITY_GROUPS:
             if rv_words & cities:

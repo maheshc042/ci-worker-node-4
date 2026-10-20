@@ -9,11 +9,17 @@ from naukri_agent.core.answers import AnswerEngine, ExperienceAnswers
 from naukri_agent.core.models import ScreeningQuestion
 
 
+# Geography tests supply their own home city fixture; production always
+# passes `candidate.location` from config.
+_HOME = "Bengaluru, India"
+
+
 def _engine() -> AnswerEngine:
     return AnswerEngine(
         kb=[],
         profile_answers={},
         strict=True,
+        home_location=_HOME,
         experience=ExperienceAnswers(
             total_years=3.0,
             default_years=2.0,

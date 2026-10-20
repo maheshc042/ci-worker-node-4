@@ -18,10 +18,14 @@
 # to re-enable it.
 # ---------------------------------------------------------------------------
 
-applicant_name: "Mahesh Chitakoti"
-applicant_location: "Bengaluru, India"
-applicant_email: "[EMAIL_ADDRESS]"
-applicant_phone: "9481777227"
+# ---------------------------------------------------------------------------
+# Identity is defined ONCE in the `candidate:` block near the bottom of this
+# file. At load time it is mirrored into the legacy `applicant_name`,
+# `applicant_email`, `applicant_phone` and `applicant_location` fields, so you
+# only need to edit `candidate:` when the candidate's details change.
+# Only the profile links (not part of `candidate:`) are set here.
+# ---------------------------------------------------------------------------
+
 applicant_linkedin: "https://www.linkedin.com/in/maheshchitakoti"
 applicant_github: "https://github.com/maheshchichkoti"
 applicant_portfolio: "https://github.com/maheshchichkoti"

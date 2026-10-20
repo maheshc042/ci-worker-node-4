@@ -3325,16 +3325,18 @@ class TestQuarantineGeneralization(unittest.TestCase):
 
         cfg = AgentConfig.load()
         return AnswerEngine(kb=[(k, v) for k, v in cfg.answers.items()],
-                            profile_answers={}, strict=True)
+                            profile_answers={}, strict=True,
+                            home_location=cfg.candidate.location)
 
     def test_non_cutshort_phrasing_quarantined(self):
         """'Are you currently in Pune?' quarantines the here-claim and the
         apply proceeds via the truthful relocate option — interview kept."""
         from naukri_agent.core.answers import _job_place_is_home
 
-        self.assertFalse(_job_place_is_home("are you currently in pune?"))
-        self.assertTrue(_job_place_is_home("are you currently in bengaluru?"))
-        self.assertTrue(_job_place_is_home("are you willing to relocate?"))
+        home = AgentConfig.load().candidate.location
+        self.assertFalse(_job_place_is_home("are you currently in pune?", home))
+        self.assertTrue(_job_place_is_home("are you currently in bengaluru?", home))
+        self.assertTrue(_job_place_is_home("are you willing to relocate?", home))
 
     def test_pune_question_resolves_relocate(self):
         from naukri_agent.core.models import ScreeningQuestion

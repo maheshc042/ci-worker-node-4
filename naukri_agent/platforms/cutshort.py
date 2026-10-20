@@ -1677,45 +1677,48 @@ class CutshortPlatform(BaseJobPlatform):
 
         # Dynamic tech stack, specialty, and achievement tailored to the role
         text_for_skills = f"{actual_title} {modal_text} {job.description}".lower()
-        # Read achievements from config.yaml candidate section
+        # Achievements come only from config.yaml `candidate.achievements`.
+        # With none configured, leave the proof clause out instead of inventing
+        # a claim the candidate never made.
         _cand = getattr(self.config, "candidate", None) if self.config is not None else None
-        achievements = (getattr(_cand, "achievements", None) or []) or [
-            "automated RAG workflows achieving <300ms p95 latency",
-            "high-performance full-stack architectures with a 60% API latency reduction",
-            "scalable, low-latency microservices with <150ms p95 response times",
-        ]
+        achievements = list(getattr(_cand, "achievements", None) or [])
+
+        def _pick(idx: int) -> str:
+            if idx < len(achievements):
+                return achievements[idx]
+            return achievements[0] if achievements else ""
         if any(k in text_for_skills for k in ["ai", "llm", "genai", "gpt", "machine learning", "rag", "agent", "prompt"]):
             key_tech_stack = "Python, FastAPI, GenAI, and LLM orchestration (RAG/LangChain)"
             core_specialty = "autonomous AI agents, vector search pipelines, and scalable Python backends"
-            specific_achievement = achievements[0] if achievements else "automated RAG workflows achieving <300ms p95 latency"
+            specific_achievement = _pick(0)
         elif any(k in text_for_skills for k in ["qa", "testing", "test automation", "sdet"]):
             key_tech_stack = "Python, Playwright, Selenium, and API automation frameworks"
             core_specialty = "robust automated testing pipelines and CI/CD quality gates"
-            specific_achievement = "comprehensive automated test suites ensuring high defect coverage"
+            specific_achievement = _pick(1)
         elif any(k in text_for_skills for k in ["devops", "docker", "kubernetes", "aws", "gcp", "azure"]):
             key_tech_stack = "Docker, Kubernetes, AWS, and CI/CD pipelines"
             core_specialty = "scalable cloud infrastructure and containerized deployments"
-            specific_achievement = "automated zero-downtime deployment workflows"
+            specific_achievement = _pick(2)
         elif "python" in text_for_skills and any(k in text_for_skills for k in ["fullstack", "full stack"]):
             key_tech_stack = "Python (FastAPI/Django), React, and TypeScript"
             core_specialty = "scalable full-stack web applications and robust microservices"
-            specific_achievement = "high-performance full-stack architectures with a 60% API latency reduction"
+            specific_achievement = _pick(3)
         elif any(k in text_for_skills for k in ["backend", "python", "fastapi", "django"]):
             key_tech_stack = "Python, FastAPI, Django, and PostgreSQL"
             core_specialty = "high-concurrency backend services and database architectures"
-            specific_achievement = "scalable, low-latency microservices with <150ms p95 response times"
+            specific_achievement = _pick(4)
         elif any(k in text_for_skills for k in ["frontend", "react", "next"]):
             key_tech_stack = "React, Next.js, and TypeScript"
             core_specialty = "responsive web applications and performant frontend architectures"
-            specific_achievement = "high-performance web apps with clean component architectures"
+            specific_achievement = _pick(5)
         elif any(k in text_for_skills for k in ["fullstack", "full stack", "node"]):
             key_tech_stack = "React, Node.js, TypeScript, and Python"
             core_specialty = "scalable full-stack web applications and robust microservices"
-            specific_achievement = "high-performance full-stack architectures with a 60% API latency reduction"
+            specific_achievement = _pick(6)
         else:
             key_tech_stack = "Python, Node.js, React, and modern web architectures"
             core_specialty = "scalable backend and full-stack software systems"
-            specific_achievement = "reliable, production-grade applications"
+            specific_achievement = _pick(7)
 
         from ..core.gemini_writer import applicant_snapshot
         who = applicant_snapshot()
@@ -1748,12 +1751,28 @@ class CutshortPlatform(BaseJobPlatform):
                     modal = wrapper
             except Exception:
                 pass
+        proof_clause = (
+            f"—recently delivering {specific_achievement}." if specific_achievement else "."
+        )
+        if who.experience_label:
+            intro_line = (
+                f"With {who.experience_label} of hands-on experience in {key_tech_stack}, "
+                f"I specialize in building {core_specialty}{proof_clause}"
+            )
+        else:
+            intro_line = f"I specialize in building {core_specialty}{proof_clause}"
+        availability_line = (
+            "My technical stack aligns closely with your requirements. "
+            f"Notice period: {who.notice_label}."
+            if who.notice_label
+            else "My technical stack aligns closely with your requirements."
+        )
         if textarea:
             pitch = (
                 f"Hi {recruiter_name},\n\n"
                 f"I noticed the {actual_title} opening at {clean_company} and wanted to reach out directly.\n\n"
-                f"With {who.experience_label} of hands-on experience in {key_tech_stack}, I specialize in building {core_specialty}—recently delivering {specific_achievement}.\n\n"
-                f"My technical stack aligns closely with your requirements, and I am available to join immediately (0-day notice).\n\n"
+                f"{intro_line}\n\n"
+                f"{availability_line}\n\n"
                 f"I'd be glad to discuss how my background can support {short_company}'s engineering goals—let me know when you have a few minutes to connect.\n\n"
                 f"Best,\n"
                 f"{applicant_name}{links_block}"

@@ -307,7 +307,21 @@ class Orchestrator:
             # Skill -> years map: answers the open-ended "how many years of X?"
             # family that no finite question table can cover.
             experience=self.config.experience_for(profile),
+            # Current-location answers come from `candidate.location`, never
+            # from a city literal baked into the answer engine.
+            home_location=self.config.candidate.location,
         )
+
+    def _home_city_markers(self) -> tuple[str, ...]:
+        """Lower-case tokens that identify the configured home city."""
+        candidate = getattr(self.config, "candidate", None)
+        location = (getattr(candidate, "location", "") or "").strip().lower()
+        city = location.split(",")[0].strip()
+        if not city:
+            return ()
+        if city in {"bengaluru", "bangalore"}:
+            return ("bengaluru", "bangalore")
+        return (city,)
 
     # ------------------------------------------------------------------- main
     async def run(self) -> RunStats:
@@ -1477,7 +1491,8 @@ class Orchestrator:
                     applied_outcomes.append((job, outcome))
                     if job.is_walkin:
                         loc = (job.location or "").lower()
-                        if "bangalore" in loc or "bengaluru" in loc:
+                        home_markers = self._home_city_markers()
+                        if home_markers and any(m in loc for m in home_markers):
                             self.stats.walkin_alerts.append(
                                 {
                                     "title": f"Applied: {job.title}",
@@ -1487,13 +1502,14 @@ class Orchestrator:
                                     "profile": profile.name,
                                 }
                             )
-                            log.info("job.bangalore_walkin_applied_alert", title=job.title[:70], company=job.company)
+                            log.info("job.home_walkin_applied_alert", title=job.title[:70], company=job.company)
                     await self._pace()
                 else:
                     failed_outcomes.append((job, outcome))
                     if job.is_walkin:
                         loc = (job.location or "").lower()
-                        if "bangalore" in loc or "bengaluru" in loc:
+                        home_markers = self._home_city_markers()
+                        if home_markers and any(m in loc for m in home_markers):
                             self.stats.walkin_alerts.append(
                                 {
                                     "title": f"Notice ({outcome.status.value}): {job.title}",
@@ -1503,7 +1519,7 @@ class Orchestrator:
                                     "profile": profile.name,
                                 }
                             )
-                            log.info("job.bangalore_walkin_notice_alert", title=job.title[:70], company=job.company)
+                            log.info("job.home_walkin_notice_alert", title=job.title[:70], company=job.company)
         except _CapReached:
             pass
         finally:
@@ -1622,7 +1638,7 @@ class Orchestrator:
                         "profile": profile.name,
                     }
                 )
-                log.info("job.bangalore_walkin_alert", title=job.title[:70], company=job.company)
+                log.info("job.home_walkin_alert", title=job.title[:70], company=job.company)
             else:
                 log.info(
                     "job.filtered",
@@ -2028,15 +2044,20 @@ class Orchestrator:
                 resume_path = cand
 
         if not resume_path:
+            configured = self.config.resume_for(self.account_key)
+            if configured:
+                cand = PROJECT_ROOT / configured
+                if cand.exists():
+                    resume_path = cand
+        if not resume_path:
             resume_dir = PROJECT_ROOT / "resumes"
-            role = (job.title or profile.name or "").lower()
-            if any(k in role for k in ["full stack", "fullstack", "react", "frontend", "web", "node", "mern", "javascript"]):
-                resume_path = resume_dir / "CV_Mahesh_Chitakoti_2026_1_.pdf"
-            else:
-                resume_path = resume_dir / "CV_Mahesh_Chitakoti_2026.pdf"
+            candidates = sorted(resume_dir.glob("*.pdf"))
+            if candidates:
+                log.warning("cold_email.resume_unconfigured", using=candidates[0].name)
+                resume_path = candidates[0]
 
-        if not resume_path.exists():
-            log.error("cold_email.resume_missing", path=str(resume_path))
+        if not resume_path or not resume_path.exists():
+            log.error("cold_email.resume_missing", path=str(resume_path or ""))
             return
 
         role_name = job.title or profile.name

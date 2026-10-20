@@ -1303,16 +1303,25 @@ class LinkedInPlatform(BaseJobPlatform):
             if _prof is None:
                 _regated = None
             else:
-                _cand = CandidateProfile(
-                    title_keywords=list(getattr(_prof, "title_keywords", []) or []),
-                    core_skills=list(getattr(_prof, "core_skills", []) or []),
-                    secondary_skills=list(getattr(_prof, "secondary_skills", []) or []),
-                    bonus_skills=list(getattr(_prof, "bonus_skills", []) or []),
-                    target_experience_years=float(getattr(_prof, "experience_years", 0) or 2.5),
-                )
-                _regated = FilterEngine(
-                    _prof.filters_for("recommended"), candidate=_cand
-                ).evaluate_card(job)
+                # Target tenure comes from the profile/config; when neither
+                # is set, skip the re-gate rather than assume a number.
+                _exp_cfg = getattr(self.config, "experience", None)
+                _exp_years = float(
+                    getattr(_prof, "experience_years", 0) or 0
+                ) or float(getattr(_exp_cfg, "total_years", 0) or 0)
+                if _exp_years <= 0:
+                    _regated = None
+                else:
+                    _cand = CandidateProfile(
+                        title_keywords=list(getattr(_prof, "title_keywords", []) or []),
+                        core_skills=list(getattr(_prof, "core_skills", []) or []),
+                        secondary_skills=list(getattr(_prof, "secondary_skills", []) or []),
+                        bonus_skills=list(getattr(_prof, "bonus_skills", []) or []),
+                        target_experience_years=_exp_years,
+                    )
+                    _regated = FilterEngine(
+                        _prof.filters_for("recommended"), candidate=_cand
+                    ).evaluate_card(job)
         except Exception as exc:
             log.debug("linkedin.apply.regate_failed_open", error=str(exc)[:120])
             _regated = None
@@ -1722,6 +1731,19 @@ class LinkedInPlatform(BaseJobPlatform):
                     return None
         return None
 
+    def _configured_experience(self) -> tuple[float | None, str]:
+        """Configured tenure as (years, display string); (None, "") when unset."""
+        try:
+            exp = self.config.experience
+            years = exp.total_years if exp.total_years is not None else exp.default_years
+        except (AttributeError, ValueError):
+            return None, ""
+        if years is None:
+            return None, ""
+        years = float(years)
+        label = str(int(years)) if years == int(years) else str(years)
+        return years, label
+
     async def _fill_step_inputs(self, modal: Locator, job: Job | None = None, profile_name: str = "") -> None:
         """Fills radio fieldsets, text inputs, dropdowns, comboboxes strictly within the modal."""
         # 1. State-aware resume selection (never deselects already selected resume)
@@ -1874,16 +1896,13 @@ class LinkedInPlatform(BaseJobPlatform):
                                 target_val = o.strip()
                                 break
                     elif any(k in label_low for k in ["total years", "years of", "years of experience"]):
-                        try:
-                            exp_years = self.config.experience.total_years or 2
-                            exp_str = str(int(exp_years)) if exp_years == int(exp_years) else str(exp_years)
+                        _, exp_str = self._configured_experience()
+                        if exp_str:
                             exp_options = [exp_str, f"{exp_str}+", f"{exp_str} "]
-                        except (AttributeError, ValueError):
-                            exp_options = ["2", "3", "2.5", "2+"]
-                        for o in options:
-                            if any(d == o.strip() or f"{d} " in o for d in exp_options):
-                                target_val = o.strip()
-                                break
+                            for o in options:
+                                if any(d == o.strip() or f"{d} " in o for d in exp_options):
+                                    target_val = o.strip()
+                                    break
                     elif any(k in label_low for k in ["additional month", "months"]):
                         for o in options:
                             if any(d == o.strip() or f"{d} " in o for d in ["6", "0"]):
@@ -1911,8 +1930,8 @@ class LinkedInPlatform(BaseJobPlatform):
                                 break
                     elif any(k in label_low for k in ["gender", "sex"]):
                         for o in options:
-                            gender = (self.config.candidate.gender if self.config.candidate else "Male")
-                            if gender.lower() in o.lower():
+                            gender = ((self.config.candidate.gender if self.config.candidate else "") or "").strip().lower()
+                            if gender and gender in o.lower():
                                 target_val = o.strip()
                                 break
                     elif any(k in label_low for k in ["veteran", "military"]):
@@ -2008,7 +2027,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     if any(k in low_q for k in ["sponsorship", "visa sponsorship", "require sponsorship"]) or any(k in low_q for k in ["disability", "handicap", "impairment"]) or any(k in low_q for k in ["veteran", "military"]):
                         target_val = "No"
                     elif any(k in low_q for k in ["gender", "sex"]):
-                        target_val = (self.config.candidate.gender if self.config.candidate else "Male")
+                        target_val = ((self.config.candidate.gender if self.config.candidate else "") or "").strip()
                     elif any(k in low_q for k in ["authorized", "authorization", "commute", "relocate", "comfortable", "background", "willing", "participate", "agree", "process", "interest", "onsite", "hybrid", "remote", "budget", "salary", "lpa", "join", "immediate", "bond", "contract", "policy", "terms", "undertaking"]):
                         target_val = "Yes"
                     else:
@@ -2273,6 +2292,9 @@ class LinkedInPlatform(BaseJobPlatform):
 
                 ans = ""
                 if is_numeric:
+                    # Tenure comes from config; no config value means the
+                    # field is left for human review, never guessed.
+                    _exp_years, _exp_str = self._configured_experience()
                     # If val had a number (e.g. "2.5"), extract it and round to whole integer
                     if val:
                         num_match = re.search(r"[-+]?\d*\.?\d+", val)
@@ -2295,9 +2317,13 @@ class LinkedInPlatform(BaseJobPlatform):
                         min_val = float(min_attr) if min_attr and re.match(r"^\d+(\.\d+)?$", min_attr) else None
 
                         if any(k in label_low for k in ["notice", "how soon", "availability", "immediate", "serving"]):
-                            ans = "0"
+                            # Config answers cover the usual phrasings; if the
+                            # question did not match any configured answer,
+                            # leave it for review instead of guessing.
+                            ans = ""
                         elif "months" in label_low:
-                            ans = "6"
+                            # Extra months of tenure is not a configured fact.
+                            ans = ""
                         elif any(k in label_low for k in ["percentile", "cet", "jee", "math", "class 10", "10th", "12th", "percentage", "cgpa", "marks"]):
                             # Never fabricate exam scores or grades: leave the field
                             # empty so it routes to human review instead of
@@ -2339,26 +2365,65 @@ class LinkedInPlatform(BaseJobPlatform):
                             else:
                                 ans = str(int(_base)) if float(_base) == int(_base) else str(_base)
                         else:
-                            # Skill or general years of experience -> whole integer 2 (respecting max if 1)
-                            ans = "1" if (max_val and max_val < 2) else "2"
+                            # Skill/general years of experience from config;
+                            # never invent a tenure. If the field's max is
+                            # below the configured tenure, leave it for review.
+                            if _exp_years is None:
+                                ans = ""
+                            elif max_val and max_val < _exp_years:
+                                ans = ""
+                            else:
+                                ans = _exp_str
                 else:
                     resolved = self.answers.resolve(ScreeningQuestion(text=label, kind="text"))
                     ans = resolved.value if resolved else ""
 
                     import datetime
                     if "ddmmyy" in label_low or "ddmmyyyy" in label_low or "dd-mm-yy" in label_low or "dd/mm/yy" in label_low or "dd-mm-yyyy" in label_low or "dd/mm/yyyy" in label_low:
-                        if "ddmmyyyy" in label_low or "dd-mm-yyyy" in label_low:
-                            ans = datetime.date.today().strftime("%d%m%Y" if "ddmmyyyy" in label_low else "%d-%m-%Y")
+                        if "ddmmyyyy" in label_low:
+                            _fmt = "%d%m%Y"
+                        elif "dd-mm-yyyy" in label_low:
+                            _fmt = "%d-%m-%Y"
                         elif "dd/mm/yyyy" in label_low:
-                            ans = datetime.date.today().strftime("%d/%m/%Y")
+                            _fmt = "%d/%m/%Y"
                         elif "dd/mm/yy" in label_low:
-                            ans = datetime.date.today().strftime("%d/%m/%y")
+                            _fmt = "%d/%m/%y"
                         elif "dd-mm-yy" in label_low:
-                            ans = datetime.date.today().strftime("%d-%m-%y")
+                            _fmt = "%d-%m-%y"
                         else:
-                            ans = datetime.date.today().strftime("%d%m%y")
+                            _fmt = "%d%m%y"
+                        # Reformat only a configured answer; never invent a date.
+                        _parsed = None
+                        if ans:
+                            for _in_fmt in (
+                                "%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d",
+                                "%d/%m/%y", "%d-%m-%y", "%d%m%y",
+                            ):
+                                try:
+                                    _parsed = datetime.datetime.strptime(
+                                        ans.strip(), _in_fmt
+                                    ).date()
+                                    break
+                                except ValueError:
+                                    continue
+                        ans = _parsed.strftime(_fmt) if _parsed else ""
                     elif inp_type == "date" or any(k in label_low for k in ["start date", "joining date", "available date", "date of", "last working", "lwd", "relieving"]):
-                        ans = datetime.date.today().strftime("%Y-%m-%d")
+                        # Dates are identity facts: convert a configured answer
+                        # to ISO, otherwise never substitute today's date.
+                        _parsed = None
+                        if ans:
+                            for _in_fmt in (
+                                "%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d",
+                                "%d/%m/%y", "%d-%m-%y", "%d%m%y",
+                            ):
+                                try:
+                                    _parsed = datetime.datetime.strptime(
+                                        ans.strip(), _in_fmt
+                                    ).date()
+                                    break
+                                except ValueError:
+                                    continue
+                        ans = _parsed.strftime("%Y-%m-%d") if _parsed else ""
                     elif not ans and any(k in label_low for k in ["percentile", "cet", "jee", "math", "class 10", "10th", "12th", "percentage", "cgpa", "marks"]):
                         # Never fabricate exam scores or grades: without a configured
                         # answer the field is left for human review.
@@ -2371,9 +2436,9 @@ class LinkedInPlatform(BaseJobPlatform):
                         ans = ""
                     elif not ans:
                         if "title" in label_low:
-                            ans = "Full Stack & AI Engineer"
+                            ans = (getattr(self.config.candidate, "title", "") or "").strip()
                         elif "company" in label_low:
-                            ans = "Independent Software Consultant"
+                            ans = (getattr(self.config.candidate, "company", "") or "").strip()
                         elif "linkedin" in label_low:
                             ans = (self.config.applicant_linkedin or "").strip()
                         elif "github" in label_low or "portfolio" in label_low or "website" in label_low:
@@ -2389,14 +2454,13 @@ class LinkedInPlatform(BaseJobPlatform):
                             from ..core.gemini_writer import applicant_snapshot
                             who = applicant_snapshot()
                             applicant_name = who.name if who.name != "a Software Engineer" else (self.config.applicant_name or "").strip()
-                            bio_template = (self.config.candidate.bio if self.config.candidate else "") or (
-                                f"Experienced software and AI engineer with hands-on experience "
-                                "building scalable applications, APIs, and AI workflows."
-                            )
-                            ans = (
-                                f"{bio_template} ({applicant_name})"
-                                if applicant_name else ""
-                            )
+                            bio_template = (
+                                getattr(self.config.candidate, "bio", "") or ""
+                            ).strip()
+                            if bio_template and applicant_name:
+                                ans = f"{bio_template} ({applicant_name})"
+                            else:
+                                ans = bio_template
 
                 if ans:
                     # Field-length guard (Q#40: a 140-char generic bio pasted
@@ -2482,6 +2546,9 @@ class LinkedInPlatform(BaseJobPlatform):
                         continue
 
                     # 2. Text/Number input in error container
+                    # Tenure claims come from config (never a literal); if
+                    # config has no experience set, leave the field alone.
+                    _, exp_str = self._configured_experience()
                     inputs = await target_scope.locator("input:not([type='radio']):not([type='checkbox']):not([type='hidden']):not([type='file']), textarea").all()
                     for inp in inputs:
                         err_text_low = (await safe_text(err)).lower()
@@ -2498,28 +2565,29 @@ class LinkedInPlatform(BaseJobPlatform):
                             else:
                                 new_val = "500000"
                         elif "between 0 and 99" in err_text_low or "between 0 and" in err_text_low:
-                            new_val = "2"
+                            new_val = exp_str
                         elif "decimal" in err_text_low:
-                            new_val = "2.5"
+                            new_val = exp_str
                         elif "email" in err_text_low:
                             new_val = (self.config.applicant_email or "").strip()
                         elif "phone" in err_text_low or "mobile" in err_text_low:
                             new_val = (self.config.applicant_phone or "").strip()
                         elif "date" in err_text_low or (await inp.get_attribute("type") == "date"):
-                            import datetime
-                            new_val = datetime.date.today().strftime("%Y-%m-%d")
+                            # Never substitute today's date for a date the
+                            # candidate did not configure.
+                            new_val = ""
 
-                            if not new_val:
-                                # Config holds no identity value for this field:
-                                # fail closed instead of submitting a blank/literal.
-                                log.warning("linkedin.apply.error_recovery_no_config_value")
-                                continue
-                            await inp.fill("")
-                            await inp.fill(new_val)
-                            await inp.dispatch_event("input")
-                            await inp.dispatch_event("change")
-                            await inp.dispatch_event("blur")
-                            log.info("linkedin.apply.error_recovered_input", length=len(new_val))
+                        if not new_val:
+                            # Config holds no value for this field: fail
+                            # closed instead of submitting a blank/literal.
+                            log.warning("linkedin.apply.error_recovery_no_config_value")
+                            continue
+                        await inp.fill("")
+                        await inp.fill(new_val)
+                        await inp.dispatch_event("input")
+                        await inp.dispatch_event("change")
+                        await inp.dispatch_event("blur")
+                        log.info("linkedin.apply.error_recovered_input", length=len(new_val))
 
                     # 3. Select dropdown in error container
                     selects = await target_scope.locator("select").all()

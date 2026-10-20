@@ -257,6 +257,18 @@ class FilterEngine:
         self._norm_blocked_companies = [c.lower() for c in (rules.blocked_companies or [])]
         self._norm_blocked_locations = [l.lower() for l in (rules.blocked_locations or [])]
         self._norm_allowed_locations = [l.lower() for l in (rules.allowed_locations or [])]
+        # Home city for walk-in filtering, derived from the candidate profile
+        # (which is populated from config.yaml) instead of a city literal.
+        self._home_locations: list[str] = []
+        home = str(getattr(candidate, "location", "") or "").strip().lower()
+        if home:
+            city = home.split(",")[0].strip()
+            if city:
+                self._home_locations.append(city)
+                if city == "bengaluru":
+                    self._home_locations.append("bangalore")
+                elif city == "bangalore":
+                    self._home_locations.append("bengaluru")
 
     def _experience_verdict(self, job: Job, title: str) -> FilterDecision | None:
         """Experience gates 7-8 as a reusable verdict (None == pass).
@@ -531,12 +543,17 @@ class FilterEngine:
                     False, SkipReason.FILTER_LOCATION, f"location '{job.location}' not allowed"
                 )
 
-        # 6. Walk-in check (Bangalore/Bengaluru is allowed to apply and alert)
-        if rules.skip_walkin and job.is_walkin:
-            if "bengaluru" in location or "bangalore" in location:
-                pass
-            else:
-                return FilterDecision(False, SkipReason.WALKIN, f"walk-in drive outside Bangalore ({job.location})")
+        # 6. Walk-in check: drives in the configured home city are allowed to
+        # apply and alert. With no configured home city, fail open rather than
+        # rejecting every walk-in against a guessed city.
+        if rules.skip_walkin and job.is_walkin and self._home_locations:
+            if not any(city in location for city in self._home_locations):
+                home_label = self._home_locations[0].title()
+                return FilterDecision(
+                    False,
+                    SkipReason.WALKIN,
+                    f"walk-in drive outside {home_label} ({job.location})",
+                )
 
         # 7-8. Experience gates (shared helper: re-run at detail stage on
         # JD-refreshed numbers — see evaluate_detail).

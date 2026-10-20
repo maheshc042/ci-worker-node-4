@@ -126,6 +126,18 @@ def build_notifier(
     return CompositeNotifier(channels)
 
 
+def _walkin_radar_title() -> str:
+    """Walk-in radar label uses the configured home city, never a literal."""
+    try:
+        from ..config import AgentConfig
+
+        location = (AgentConfig.load().candidate.location or "").strip()
+    except Exception:
+        location = ""
+    city = location.split(",")[0].strip()
+    return f"📍 {city.upper()} WALK-IN RADAR" if city else "📍 WALK-IN RADAR"
+
+
 def format_run_summary(
     stats: RunStats,
     *,
@@ -177,7 +189,7 @@ def format_run_summary(
 
     if stats.walkin_alerts:
         lines.append("")
-        lines.append(f"📍 BANGALORE WALK-IN RADAR ({len(stats.walkin_alerts)}):")
+        lines.append(f"{_walkin_radar_title()} ({len(stats.walkin_alerts)}):")
         for job in stats.walkin_alerts[:10]:
             title = job.get("title", "?")
             company = job.get("company", "?")

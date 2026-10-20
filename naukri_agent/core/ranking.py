@@ -46,8 +46,13 @@ class CandidateProfile:
     core_skills: list[str]        # High priority (e.g. Python, FastAPI, LangChain, LLM, RAG, PostgreSQL)
     secondary_skills: list[str]   # Medium priority (e.g. Docker, Redis, Celery, AWS, GitHub Actions)
     bonus_skills: list[str] = field(default_factory=list)  # Small bonus (e.g. Git, Linux, Jira)
-    target_experience_years: float = 2.5
+    # Tenure target is supplied by config (`experience.total_years`); the
+    # default is "unset" so no code-level tenure claim can leak into ranking.
+    target_experience_years: float = 0.0
     min_acceptable_salary_lpa: float | None = None
+    # Home city, mirrored from config.yaml `candidate.location`; used for
+    # geography decisions such as walk-in filtering.
+    location: str = ""
 
 
 @dataclass(slots=True)
@@ -468,6 +473,10 @@ class RankingEngine:
     def _score_experience(self, job: Job) -> tuple[float, str]:
         w = self.weights
         target = float(self.candidate.target_experience_years)
+        if target <= 0:
+            # Tenure target unset (no config value): score neutrally instead
+            # of assuming the candidate's years of experience.
+            return round(w.experience_max * 0.5, 2), "○ Experience target not configured"
         min_e = float(job.min_experience) if job.min_experience is not None else None
         max_e = float(job.max_experience) if job.max_experience is not None else None
 

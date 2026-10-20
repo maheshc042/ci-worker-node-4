@@ -795,7 +795,8 @@ class JobProfile(_Model):
         if target_exp <= 0 and config is not None and config.experience.total_years:
             target_exp = config.experience.total_years
         if target_exp <= 0:
-            target_exp = 1.0
+            # No configured tenure: keep it unset (0) rather than invent one.
+            target_exp = 0.0
 
         return CandidateProfile(
             title_keywords=title_kws,
@@ -804,6 +805,7 @@ class JobProfile(_Model):
             bonus_skills=b_skills,
             target_experience_years=target_exp,
             min_acceptable_salary_lpa=self.filters.min_salary_lpa if self.filters else None,
+            location=(config.candidate.location if config is not None else ""),
         )
 
 
@@ -889,6 +891,33 @@ class SidekickConfig(_Model):
 
 
 
+_IDENTITY_PLACEHOLDERS = (
+    "[email_address]",
+    "your_email",
+    "youremail",
+    "your-email",
+    "your email",
+    "your.name@example.com",
+    "name@example.com",
+)
+
+
+def _is_placeholder_identity(value: str) -> bool:
+    """True when a configured identity value is scaffolding, not a fact.
+
+    A placeholder is non-empty, so it slips past `if not value` checks and then
+    gets used as if it were a real name/email/phone. Treat it as unset.
+    """
+    low = (value or "").strip().lower()
+    if not low:
+        return True
+    if "[" in low or "]" in low or "<" in low or ">" in low:
+        return True
+    if any(token in low for token in _IDENTITY_PLACEHOLDERS):
+        return True
+    return "example.com" in low or low in {"email", "name", "phone", "location"}
+
+
 class CandidateConfig(_Model):
     """Centralized candidate profile — single source of truth for ALL platforms.
     Update this when candidate details change; no code edits needed elsewhere."""
@@ -898,7 +927,7 @@ class CandidateConfig(_Model):
     phone: str = ""
     phone_intl: str = ""
     location: str = ""
-    gender: str = "Male"
+    gender: str = ""
     title: str = ""
     company: str = ""
     current_ctc: str = ""
@@ -955,6 +984,33 @@ class AgentConfig(_Model):
         return self
 
     # ------------------------------------------------------------- selection
+    @model_validator(mode="after")
+    def _sync_candidate_identity(self) -> AgentConfig:
+        """`candidate:` is authoritative; mirror it into the legacy applicant_* fields.
+
+        applicant_* predates CandidateConfig and is still read by resume
+        rendering, form filling, and the writer. Mirroring here means a
+        candidate edit touches exactly one block in config.yaml. Explicit
+        applicant_* values survive only while `candidate:` leaves the field
+        blank, so a half-migrated config cannot silently keep a stale identity.
+        """
+        candidate = self.candidate
+        pairs = (
+            (candidate.name, "applicant_name"),
+            (candidate.email, "applicant_email"),
+            (candidate.phone, "applicant_phone"),
+            (candidate.location, "applicant_location"),
+        )
+        for source, attr in pairs:
+            if _is_placeholder_identity(source):
+                continue
+            object.__setattr__(self, attr, source.strip())
+
+        # A placeholder in the legacy field is not an identity either.
+        if _is_placeholder_identity(self.applicant_email):
+            object.__setattr__(self, "applicant_email", "")
+        return self
+
     def active_profiles(
         self, only: list[str] | None = None, account: str | None = None
     ) -> list[JobProfile]:
@@ -1101,7 +1157,11 @@ class AgentConfig(_Model):
             enabled=True,
             priority=1,
             account="primary",
-            experience_years=2.5,
+            experience_years=float(
+                self.experience.total_years
+                if self.experience.total_years is not None
+                else (self.experience.default_years or 0)
+            ),
             use_recommended=True,
             platform_limits={"instahyre": instahyre_limit},
             min_rank_score=0.0,
@@ -1201,7 +1261,11 @@ class AgentConfig(_Model):
             enabled=True,
             priority=1,
             account="primary",
-            experience_years=2.5,
+            experience_years=float(
+                self.experience.total_years
+                if self.experience.total_years is not None
+                else (self.experience.default_years or 0)
+            ),
             use_recommended=True,
             platform_limits={"cutshort": cutshort_limit},
             min_rank_score=0.0,
@@ -1263,7 +1327,11 @@ class AgentConfig(_Model):
             enabled=True,
             priority=1,
             account="primary",
-            experience_years=2.5,
+            experience_years=float(
+                self.experience.total_years
+                if self.experience.total_years is not None
+                else (self.experience.default_years or 0)
+            ),
             use_recommended=True,
             platform_limits={"hiringcafe": hc_limit},
             min_rank_score=0.0,
@@ -1390,7 +1458,11 @@ class AgentConfig(_Model):
             enabled=True,
             priority=1,
             account="primary",
-            experience_years=2.5,
+            experience_years=float(
+                self.experience.total_years
+                if self.experience.total_years is not None
+                else (self.experience.default_years or 0)
+            ),
             use_recommended=True,
             platform_limits={"wellfound": wellfound_limit},
             min_rank_score=0.0,
