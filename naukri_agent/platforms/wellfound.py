@@ -982,7 +982,8 @@ class WellfoundPlatform(BaseJobPlatform):
                 links = [p for p in (who.github, who.linkedin) if p]
                 links_line = "\n" + " | ".join(links) if links else ""
                 # Read pitch template from config.yaml candidate section
-                pitch_body = (self.config.candidate.wellfound_pitch if self.config.candidate else "") or (
+                _cand = getattr(self._config, "candidate", None) if self._config is not None else None
+                pitch_body = (getattr(_cand, "wellfound_pitch", "") or "") or (
                     "• Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations.\n"
                     "• Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS.\n"
                     "• Fast Delivery: Comfortable owning features end-to-end in fast-paced startup environments."

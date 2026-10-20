@@ -476,6 +476,46 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE jobs ADD COLUMN IF NOT EXISTS description_snippet TEXT NOT NULL DEFAULT '';
         """,
     ),
+    (
+        "0020_run_audits",
+        """
+        -- Per-job audit trail: every job seen by the agent, its outcome, and
+        -- the filter reason. Powers `naukri-agent audit` from any machine.
+        CREATE TABLE IF NOT EXISTS run_audits (
+            id BIGSERIAL PRIMARY KEY,
+            run_id BIGINT REFERENCES runs(id) ON DELETE CASCADE,
+            job_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            location TEXT DEFAULT '',
+            experience_text TEXT DEFAULT '',
+            salary_text TEXT DEFAULT '',
+            outcome TEXT NOT NULL DEFAULT 'pending',
+            filter_reason TEXT DEFAULT '',
+            detail TEXT DEFAULT '',
+            rank_score NUMERIC,
+            scraped_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS run_audits_run_idx ON run_audits(run_id, scraped_at);
+        CREATE INDEX IF NOT EXISTS run_audits_outcome_idx ON run_audits(outcome);
+        """,
+    ),
+    (
+        "0021_run_audits_unique_job",
+        """
+        -- One audit row per (run, job, platform): the scraped pass inserts,
+        -- outcome passes upsert on top instead of appending duplicates.
+        DELETE FROM run_audits a
+              USING run_audits b
+              WHERE a.id < b.id
+                AND a.run_id = b.run_id
+                AND a.job_id = b.job_id
+                AND a.platform = b.platform;
+        CREATE UNIQUE INDEX IF NOT EXISTS run_audits_unique_job_idx
+            ON run_audits(run_id, job_id, platform);
+        """,
+    ),
 ]
 
 

@@ -830,11 +830,12 @@ def _parse_cutshort_posted(text: str) -> int | None:
 
 
 class CutshortPlatform(BaseJobPlatform):
-    def __init__(self, page: Page, account: NaukriAccount, artifacts: ArtifactStore, answers: AnswerEngine, policy: RunPolicy):
+    def __init__(self, page: Page, account: NaukriAccount, artifacts: ArtifactStore, answers: AnswerEngine, policy: RunPolicy, config: AgentConfig | None = None):
         super().__init__(page, account.key, policy)
         self.account = account
         self.artifacts = artifacts
         self.answers = answers
+        self.config = config
 
     @property
     def platform_name(self) -> str:
@@ -1677,7 +1678,8 @@ class CutshortPlatform(BaseJobPlatform):
         # Dynamic tech stack, specialty, and achievement tailored to the role
         text_for_skills = f"{actual_title} {modal_text} {job.description}".lower()
         # Read achievements from config.yaml candidate section
-        achievements = (self.config.candidate.achievements if self.config.candidate else []) or [
+        _cand = getattr(self.config, "candidate", None) if self.config is not None else None
+        achievements = (getattr(_cand, "achievements", None) or []) or [
             "automated RAG workflows achieving <300ms p95 latency",
             "high-performance full-stack architectures with a 60% API latency reduction",
             "scalable, low-latency microservices with <150ms p95 response times",

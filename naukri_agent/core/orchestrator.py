@@ -360,6 +360,7 @@ class Orchestrator:
         self._run_lock_conn = lock_conn
         try:
             await self.repo.prune_stale_data()
+            await self.repo.prune_audit_data(keep_days=30)
         except Exception as exc:
             log.debug("db.prune_ignored", error=str(exc))
         # Stale-run reaper: holding the account advisory lock proves no other
@@ -536,7 +537,7 @@ class Orchestrator:
                         elif p_name == "cutshort":
                             if answers is None:
                                 answers = await self._build_answer_engine(profiles[0])
-                            platform = CutshortPlatform(page, self.account, artifacts, answers, self.policy)
+                            platform = CutshortPlatform(page, self.account, artifacts, answers, self.policy, getattr(self, "config", None))
                         elif p_name == "wellfound":
                             platform = WellfoundPlatform(page, self.account, artifacts, self.policy, config=self.config, metrics=self.metrics)
                         elif p_name == "linkedin":
@@ -1108,25 +1109,29 @@ class Orchestrator:
             log.info("search.jobs_empty", profile=profile.name, platform=platform.platform_name)
             return
 
-        # Record every scraped job for the audit log
-        from .audit import record as audit_record
-        for j in collected_jobs:
-            audit_record(
-                run_id=self.run_id,
-                platform=platform.platform_name,
-                job_id=j.job_id,
-                title=j.title or "",
-                company=j.company or "",
-                outcome="scraped",
-                location=j.location or "",
-                experience_text=j.experience_text or "",
-                salary_text=j.salary_text or "",
-            )
+        # Record every scraped job for the audit log (DB, one batched insert).
+        # Rows are upserted later with the final outcome, so each job appears once.
+        await self.repo.record_audits(
+            run_id=self.run_id,
+            platform=platform.platform_name,
+            rows=[
+                {
+                    "job_id": j.job_id,
+                    "title": j.title or "",
+                    "company": j.company or "",
+                    "location": j.location or "",
+                    "experience_text": j.experience_text or "",
+                    "salary_text": j.salary_text or "",
+                }
+                for j in collected_jobs
+            ],
+        )
 
         # =========================================================
         # STEP 1.1: Cross-platform Job Deduplication (Fuzzy Match)
         # =========================================================
         pre_dedupe_count = len(collected_jobs)
+        _pre_ids = {j.job_id for j in collected_jobs}
         collected_jobs = await self.repo.filter_cross_platform_duplicates(
             collected_jobs,
             window_days=self.config.run.dedupe_window_days,
@@ -1137,6 +1142,20 @@ class Orchestrator:
             deduped = pre_dedupe_count - len(collected_jobs)
             self.stats.bump(profile.name, "filtered_out", deduped, platform=platform.platform_name)
             log.info("search.cross_platform_dedupe", deduplicated=deduped, profile=profile.name)
+            _kept_ids = {j.job_id for j in collected_jobs}
+            await self.repo.record_audits(
+                run_id=self.run_id,
+                platform=platform.platform_name,
+                rows=[
+                    {
+                        "job_id": jid,
+                        "outcome": "skipped",
+                        "filter_reason": "duplicate",
+                        "detail": "cross-platform duplicate",
+                    }
+                    for jid in _pre_ids - _kept_ids
+                ],
+            )
 
         if not collected_jobs:
             log.info("search.jobs_empty_after_dedupe", profile=profile.name, platform=platform.platform_name)
@@ -1154,13 +1173,32 @@ class Orchestrator:
         )
         if strike_ids:
             kept_jobs: list[Job] = []
+            strike_dropped: list[Job] = []
             for _job in collected_jobs:
                 if _job.job_id in strike_ids:
                     self.stats.bump(profile.name, "filtered_out", platform=platform.platform_name)
                     log.info("search.strike_backoff", job_id=_job.job_id, title=_job.title[:60])
+                    strike_dropped.append(_job)
                 else:
                     kept_jobs.append(_job)
             collected_jobs = kept_jobs
+            if strike_dropped:
+                await self.repo.record_audits(
+                    run_id=self.run_id,
+                    platform=platform.platform_name,
+                    rows=[
+                        {
+                            "job_id": _j.job_id,
+                            "title": _j.title or "",
+                            "company": _j.company or "",
+                            "location": _j.location or "",
+                            "outcome": "skipped",
+                            "filter_reason": "classification_strikes",
+                            "detail": "3+ prior classification failures",
+                        }
+                        for _j in strike_dropped
+                    ],
+                )
 
         if not collected_jobs:
             log.info("search.jobs_empty_after_strikes", profile=profile.name, platform=platform.platform_name)
@@ -1191,6 +1229,7 @@ class Orchestrator:
             scores = await self.api_client.batch_match_scores(job_ids)
 
             api_filtered_jobs = []
+            api_dropped: list[tuple[Job, str, str]] = []
             for job in collected_jobs:
                 raw_id = job.job_id.replace("reco-", "")
                 score_result = scores.get(raw_id)
@@ -1201,6 +1240,7 @@ class Orchestrator:
                     else:
                         self.stats.bump(profile.name, "filtered_out")
                         log.warning("match_score.missing_fail_closed", job_id=job.job_id)
+                        api_dropped.append((job, "match_score_missing", "no Naukri match score"))
                 elif score_result.keyskills_score >= ms_cfg.min_keyskills_score:
                     api_filtered_jobs.append(job)
                 else:
@@ -1211,6 +1251,32 @@ class Orchestrator:
                         score=score_result.keyskills_score,
                         minimum=ms_cfg.min_keyskills_score,
                     )
+                    api_dropped.append(
+                        (
+                            job,
+                            "match_score_low",
+                            f"keyskills score {score_result.keyskills_score} "
+                            f"below {ms_cfg.min_keyskills_score}",
+                        )
+                    )
+
+            if api_dropped:
+                await self.repo.record_audits(
+                    run_id=self.run_id,
+                    platform=platform.platform_name,
+                    rows=[
+                        {
+                            "job_id": _j.job_id,
+                            "title": _j.title or "",
+                            "company": _j.company or "",
+                            "location": _j.location or "",
+                            "outcome": "skipped",
+                            "filter_reason": _reason,
+                            "detail": _detail,
+                        }
+                        for _j, _reason, _detail in api_dropped
+                    ],
+                )
 
             log.info("match_score.batch_complete", before=len(collected_jobs), after=len(api_filtered_jobs))
             collected_jobs = api_filtered_jobs
@@ -1230,6 +1296,47 @@ class Orchestrator:
         )
         plan = planner.create_plan(collected_jobs)
         t_plan_1 = time.perf_counter()
+
+        # Record planner rejections so they are visible in the DB audit trail.
+        # These never reach _process_job(), which is why the run summary used to
+        # under-report filtering; now every reject has a queryable row.
+        if plan.rejected_jobs:
+            await self.repo.record_audits(
+                run_id=self.run_id,
+                platform=platform.platform_name,
+                rows=[
+                    {
+                        "job_id": r.job.job_id,
+                        "title": r.job.title or "",
+                        "company": r.job.company or "",
+                        "location": r.job.location or "",
+                        "experience_text": r.job.experience_text or "",
+                        "salary_text": r.job.salary_text or "",
+                        "outcome": "skipped",
+                        "filter_reason": r.reason.value if r.reason else "other",
+                        "detail": r.detail or "",
+                    }
+                    for r in plan.rejected_jobs
+                ],
+            )
+        if plan.overflow_jobs:
+            await self.repo.record_audits(
+                run_id=self.run_id,
+                platform=platform.platform_name,
+                rows=[
+                    {
+                        "job_id": rj.job.job_id,
+                        "title": rj.job.title or "",
+                        "company": rj.job.company or "",
+                        "location": rj.job.location or "",
+                        "outcome": "skipped",
+                        "filter_reason": "daily_limit",
+                        "detail": f"eligible but beyond daily cap (score {rj.score:.1f})",
+                        "rank_score": rj.score,
+                    }
+                    for rj in plan.overflow_jobs
+                ],
+            )
         self.metrics.planner_s += (t_plan_1 - t_plan_0)
         self.metrics.ranking_s += getattr(planner, "last_ranking_time_s", 0.0)
 
@@ -1603,20 +1710,20 @@ class Orchestrator:
         assert self.repo is not None
 
         platform_name = getattr(platform, "platform_name", str(platform)).capitalize()
+        audit_platform = platform_name.lower()
 
         if outcome.status == ApplicationStatus.APPLIED:
             self.stats.bump(profile.name, "applied", platform=platform_name)
-            # Record applied outcome for audit
-            from .audit import record as audit_record
-            audit_record(
+            # Record applied outcome for audit (DB)
+            await self.repo.record_audit(
                 run_id=self.run_id,
-                platform=platform_name.lower(),
                 job_id=job.job_id,
+                platform=audit_platform,
                 title=job.title or "",
                 company=job.company or "",
                 outcome="applied",
                 detail=(outcome.detail or "")[:200],
-                score=rank_score,
+                rank_score=rank_score,
             )
             self.stats.applied_jobs.append(
                 {
@@ -1645,34 +1752,32 @@ class Orchestrator:
                 self.consecutive_failures += 1
                 self.platform_consecutive_failures += 1
             self.stats.errors.append(f"[{platform_name}] {job.title[:40]}: {outcome.detail[:120]}")
-            # Record failed outcome for audit
-            from .audit import record as audit_record
-            audit_record(
+            # Record failed outcome for audit (DB)
+            await self.repo.record_audit(
                 run_id=self.run_id,
-                platform=platform_name.lower(),
                 job_id=job.job_id,
+                platform=audit_platform,
                 title=job.title or "",
                 company=job.company or "",
                 outcome="failed",
                 detail=(outcome.detail or "")[:200],
-                score=rank_score,
+                rank_score=rank_score,
             )
         elif outcome.status == ApplicationStatus.EXTERNAL or outcome.reason == SkipReason.EXTERNAL_APPLY:
             self.stats.bump(profile.name, "external", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
-            # Record external outcome for audit
-            from .audit import record as audit_record
-            audit_record(
+            # Record external outcome for audit (DB)
+            await self.repo.record_audit(
                 run_id=self.run_id,
-                platform=platform_name,
                 job_id=job.job_id,
+                platform=audit_platform,
                 title=job.title or "",
                 company=job.company or "",
                 outcome="external",
-                reason="external_apply",
+                filter_reason="external_apply",
                 detail=(outcome.detail or "")[:200],
-                score=outcome.rank_score if hasattr(outcome, 'rank_score') else None,
+                rank_score=rank_score,
             )
             self.stats.external_jobs.append(
                 {
@@ -1703,10 +1808,36 @@ class Orchestrator:
             self.stats.bump(profile.name, "already_applied", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            await self.repo.record_audit(
+                run_id=self.run_id,
+                job_id=job.job_id,
+                platform=audit_platform,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="skipped",
+                filter_reason="already_applied",
+                detail=(outcome.detail or "")[:200],
+                rank_score=rank_score,
+            )
         elif outcome.status == ApplicationStatus.NEEDS_REVIEW:
             self.stats.bump(profile.name, "needs_review", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            _questions = "; ".join(
+                (q.get("text", "") if isinstance(q, dict) else getattr(q, "text", str(q)))
+                for q in (outcome.unanswered_questions or [])
+            )
+            await self.repo.record_audit(
+                run_id=self.run_id,
+                job_id=job.job_id,
+                platform=audit_platform,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="needs_review",
+                filter_reason="unanswered_question",
+                detail=_questions[:400] or (outcome.detail or "")[:200],
+                rank_score=rank_score,
+            )
             if not outcome.unanswered_questions:
                 # A review with no captured questions teaches the KB nothing
                 # (run 424: Guenstiger.de left zero question rows). Loud so the
@@ -1740,6 +1871,17 @@ class Orchestrator:
             # detail-stage filter fails): bucketed by platform so no outcome
             # is ever invisible in per-platform stats (run 362 gap).
             self.stats.bump(profile.name, "filtered_out", platform=platform_name)
+            await self.repo.record_audit(
+                run_id=self.run_id,
+                job_id=job.job_id,
+                platform=audit_platform,
+                title=job.title or "",
+                company=job.company or "",
+                outcome="skipped",
+                filter_reason=outcome.reason.value if outcome.reason else "filtered_out",
+                detail=(outcome.detail or "")[:200],
+                rank_score=rank_score,
+            )
 
         try:
             await self.repo.record_outcome(

@@ -972,17 +972,65 @@ def audit(
     days: int = typer.Option(3, "--days", "-d", help="Look-back window in days (default: 3)."),
 ) -> None:
     """
-    Show agent quality report for the last N days.
+    Show agent quality report for the last N days from the database.
 
     \b
     Examples:
       naukri-agent audit              # last 3 days
       naukri-agent audit --days 7    # last 7 days
     """
-    from .core.audit import generate_report
 
-    setup_logging("INFO", json_logs=False)
-    console.print(generate_report(days))
+    async def _main() -> None:
+        settings, config = _bootstrap(config_path=None)
+        await run_migrations()
+        repo = await Repository.create()
+        try:
+            rows = await repo.audit_report(days)
+            if not rows:
+                console.print(f"[yellow]No audit records found in the last {days} days.[/yellow]")
+                return
+
+            from collections import Counter, defaultdict
+            by_run = defaultdict(list)
+            for r in rows:
+                by_run[r["run_id"]].append(r)
+
+            console.print(f"\n[bold]=== AGENT QUALITY REPORT (last {days} days) ===[/bold]\n")
+            for run_id in sorted(by_run, reverse=True):
+                run_records = by_run[run_id]
+                outcomes = Counter(r["outcome"] for r in run_records)
+                console.print(f"[bold]Run #{run_id}:[/bold] {len(run_records)} jobs seen")
+                console.print(f"  Outcomes: {dict(outcomes)}")
+
+                skipped_reasons = Counter(
+                    r["filter_reason"] or "other"
+                    for r in run_records
+                    if r["outcome"] == "skipped"
+                )
+                if skipped_reasons:
+                    console.print(f"  Skip reasons: {dict(skipped_reasons)}")
+
+                for outcome_type in ("applied", "failed", "needs_review", "external", "skipped"):
+                    items = [r for r in run_records if r["outcome"] == outcome_type]
+                    if items:
+                        console.print(f"\n  [bold]{outcome_type.upper()} ({len(items)}):[/bold]")
+                        for r in items[:10]:
+                            title = (r.get("title") or "")[:50]
+                            company = (r.get("company") or "")[:25]
+                            line = f"    [{(r.get('platform') or '?')[:4]}] {title} @ {company}"
+                            if r.get("filter_reason"):
+                                line += f" — {r['filter_reason']}"
+                            if r.get("detail"):
+                                line += f": {(r['detail'] or '')[:60]}"
+                            console.print(line)
+                        if len(items) > 10:
+                            console.print(f"    ... and {len(items)-10} more")
+                console.print("")
+
+        finally:
+            await close_pool()
+
+    _run(_main())
 
 
 @app.command()

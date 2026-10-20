@@ -31,6 +31,32 @@ from .pool import get_pool
 log = get_logger(__name__)
 
 
+# One row per (run, job, platform). The scraped pass inserts, the outcome pass
+# upserts, so a job appears exactly once no matter how many times it is seen.
+_AUDIT_UPSERT_SQL = """
+INSERT INTO run_audits
+    (run_id, job_id, platform, title, company, outcome,
+     filter_reason, detail, rank_score, location,
+     experience_text, salary_text)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+ON CONFLICT (run_id, job_id, platform) DO UPDATE SET
+    outcome      = CASE WHEN EXCLUDED.outcome = 'scraped'
+                         AND run_audits.outcome <> 'scraped'
+                         THEN run_audits.outcome
+                         ELSE EXCLUDED.outcome END,
+    filter_reason = CASE WHEN EXCLUDED.outcome = 'scraped'
+                         THEN run_audits.filter_reason
+                         ELSE EXCLUDED.filter_reason END,
+    detail       = COALESCE(NULLIF(EXCLUDED.detail, ''), run_audits.detail),
+    rank_score   = COALESCE(EXCLUDED.rank_score, run_audits.rank_score),
+    title        = COALESCE(NULLIF(EXCLUDED.title, ''), run_audits.title),
+    company      = COALESCE(NULLIF(EXCLUDED.company, ''), run_audits.company),
+    location     = COALESCE(NULLIF(EXCLUDED.location, ''), run_audits.location),
+    experience_text = COALESCE(NULLIF(EXCLUDED.experience_text, ''), run_audits.experience_text),
+    salary_text  = COALESCE(NULLIF(EXCLUDED.salary_text, ''), run_audits.salary_text)
+"""
+
+
 class Repository:
     def __init__(
         self,
@@ -262,6 +288,80 @@ class Repository:
             )
         except Exception as exc:  # pragma: no cover - telemetry must not raise
             log.warning("db.event_log_failed", error=str(exc), logged_event=event)
+
+    async def record_audit(
+        self,
+        run_id: int,
+        job_id: str,
+        platform: str,
+        title: str = "",
+        company: str = "",
+        outcome: str = "pending",
+        filter_reason: str = "",
+        detail: str = "",
+        rank_score: float | None = None,
+        location: str = "",
+        experience_text: str = "",
+        salary_text: str = "",
+    ) -> None:
+        """Record a per-job audit trail entry (best-effort, never raises)."""
+        try:
+            await self.pool.execute(
+                _AUDIT_UPSERT_SQL,
+                run_id, job_id, platform, title, company, outcome,
+                filter_reason, detail[:500] if detail else "",
+                rank_score, location, experience_text, salary_text,
+            )
+        except Exception as exc:
+            log.warning("db.audit_record_failed", error=str(exc)[:120])
+
+    async def record_audits(
+        self,
+        run_id: int,
+        platform: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        """Batch-record audit rows in one round-trip (best-effort, never raises)."""
+        if not rows:
+            return
+        try:
+            await self.pool.executemany(
+                _AUDIT_UPSERT_SQL,
+                [
+                    (
+                        run_id,
+                        r["job_id"],
+                        platform,
+                        r.get("title", ""),
+                        r.get("company", ""),
+                        r.get("outcome", "scraped"),
+                        r.get("filter_reason", ""),
+                        (r.get("detail") or "")[:500],
+                        r.get("rank_score"),
+                        r.get("location", ""),
+                        r.get("experience_text", ""),
+                        r.get("salary_text", ""),
+                    )
+                    for r in rows
+                ],
+            )
+        except Exception as exc:
+            log.warning("db.audit_batch_failed", error=str(exc)[:120], count=len(rows))
+
+    async def audit_report(self, days: int = 3) -> list[dict[str, Any]]:
+        """Fetch audit records for the last N days."""
+        rows = await self.pool.fetch(
+            """
+            SELECT run_id, job_id, platform, title, company, outcome,
+                   filter_reason, detail, rank_score, location,
+                   experience_text, salary_text, scraped_at
+              FROM run_audits
+             WHERE scraped_at > now() - ($1 || ' days')::interval
+             ORDER BY run_id DESC, scraped_at DESC
+            """,
+            str(days),
+        )
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------ jobs
     async def upsert_job(self, job: Job, platform: str | Any = "naukri") -> bool:
@@ -1390,6 +1490,20 @@ class Repository:
         except Exception as exc:
             log.warning("db.platform_pause_age_failed", error=str(exc), platform=platform)
             return None
+
+    async def prune_audit_data(self, keep_days: int = 30) -> int:
+        """Delete audit records older than keep_days. Returns count deleted."""
+        try:
+            status = await self.pool.execute(
+                "DELETE FROM run_audits WHERE scraped_at < now() - ($1 || ' days')::interval",
+                str(keep_days),
+            )
+            deleted = int(status.rsplit(" ", 1)[-1]) if status else 0
+            log.info("db.audit_pruned", deleted=deleted)
+            return deleted
+        except Exception as exc:
+            log.warning("db.audit_prune_failed", error=str(exc)[:120])
+            return 0
 
     async def pause_platform(self, account: str, platform: str, reason: str) -> None:
         await self.pool.execute(
