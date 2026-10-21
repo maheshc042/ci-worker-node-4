@@ -1383,8 +1383,12 @@ class Orchestrator:
         # Step 5: Dry Run Gate — Stop before ApplyEngine
         if self.dry_run:
             log.info("dry_run.complete", selected_count=len(plan.selected_jobs))
-            self.stats.bump(profile.name, "considered", s.collected_count, platform=platform.platform_name)
-            self.stats.bump(profile.name, "filtered_out", s.rejected_count, platform=platform.platform_name)
+            # Dry run never enters the apply engine, so the population that
+            # would have been considered is exactly the plan's eligible set.
+            # Rejects are already in `plan_rejected`; bumping `filtered_out`
+            # here as well counted them twice and broke the run identity:
+            #   scraped == filtered_out + plan_rejected + considered
+            self.stats.bump(profile.name, "considered", s.eligible_count, platform=platform.platform_name)
             duration = time.monotonic() - profile_start_time
             exporter.export_summary_json(
                 plan,
@@ -1405,6 +1409,10 @@ class Orchestrator:
         t_apply_loop_0 = time.perf_counter()
         # Iterate through ranked eligible jobs until the target application cap is satisfied
         candidate_queue = plan.eligible_jobs
+        # Count accounted queue entries from the stats counters rather than
+        # from loop iterations: a job that raises out of `_process_job` may
+        # already have been counted (or not), and only the counters know.
+        accounted_before = self._accounted_jobs(platform.platform_name)
         try:
             for rjob in candidate_queue:
                 self._check_global_limits()
@@ -1431,6 +1439,7 @@ class Orchestrator:
                         reason=SkipReason.DAILY_CAP,
                         detail=f"company daily cap reached ({company_key}, max {self.config.run.max_applications_per_company_per_day}/day)",
                     )
+                    self.stats.bump(profile.name, "considered", platform=platform.platform_name)
                     await self._record(job, profile, outcome, platform.platform_name, rank_score=rjob.score)
                     log.info("job.company_cap_reached", job_id=job.job_id, company=job.company[:40])
                     failed_outcomes.append((job, outcome))
@@ -1441,6 +1450,7 @@ class Orchestrator:
                         reason=SkipReason.SEEN_RECENTLY,
                         detail=f"same company+title already queued this run ({job.company[:40]} / {job.title[:40]})",
                     )
+                    self.stats.bump(profile.name, "considered", platform=platform.platform_name)
                     await self._record(job, profile, outcome, platform.platform_name, rank_score=rjob.score)
                     log.info("job.repost_collapsed", job_id=job.job_id, company=job.company[:40])
                     failed_outcomes.append((job, outcome))
@@ -1524,6 +1534,10 @@ class Orchestrator:
             pass
         finally:
             self.metrics.total_apply_phase_s += time.perf_counter() - t_apply_loop_0
+            accounted = self._accounted_jobs(platform.platform_name) - accounted_before
+            self._count_unprocessed_queue(
+                profile.name, platform.platform_name, len(candidate_queue), accounted
+            )
 
         # Step 6.5: needs_review retry. known_job_ids already lets answered
         # reviews back through, but only if the feed re-surfaces the job —
@@ -1563,6 +1577,7 @@ class Orchestrator:
                 try:
                     outcome = await self._process_job(
                         job, profile, filters, platform, page, artifacts,
+                        count_metrics=False,
                     )
                 except (FatalAgentError, StopRun):
                     raise
@@ -1613,11 +1628,12 @@ class Orchestrator:
         page,
         artifacts: ArtifactStore,
         rank_score: float | None = None,
+        *,
+        count_metrics: bool = True,
     ) -> ApplyOutcome:
         assert self.repo is not None
         bind_context(job_id=job.job_id)
         platform_name = getattr(platform, "platform_name", str(platform)).capitalize()
-        self.stats.bump(profile.name, "considered", platform=platform_name)
 
         # Phase 1: free, card-level filtering.
         decision = filters.evaluate_card(job)
@@ -1627,7 +1643,8 @@ class Orchestrator:
                 reason=decision.reason,
                 detail=decision.detail,
             )
-            self.stats.bump(profile.name, "filtered_out", platform=platform_name)
+            if count_metrics:
+                self.stats.bump(profile.name, "filtered_out", platform=platform_name)
             if decision.reason == SkipReason.BANGALORE_WALKIN_ALERT:
                 self.stats.walkin_alerts.append(
                     {
@@ -1656,6 +1673,12 @@ class Orchestrator:
                 rank_score=rank_score,
             )
             return outcome
+
+        # Counted only once the job actually enters the apply engine. Counting
+        # it before the card filter double-counted every card-level rejection
+        # (bumped in both `considered` and `filtered_out`).
+        if count_metrics:
+            self.stats.bump(profile.name, "considered", platform=platform_name)
 
         try:
             # Phase 2 runs INSIDE apply_to_job(): the platform loads the job page,
@@ -1714,6 +1737,42 @@ class Orchestrator:
         # a second totals-only row here doubled every applied job in the report.
         await self._record(job, profile, outcome, platform.platform_name, rank_score=rank_score)
         return outcome
+
+    def _accounted_jobs(self, platform_name: str) -> int:
+        """Queue entries already booked as `considered` or `filtered_out`."""
+        bucket = self.stats.per_platform.get(platform_name.lower(), {})
+        return bucket.get("considered", 0) + bucket.get("filtered_out", 0)
+
+    def _count_unprocessed_queue(
+        self,
+        profile_name: str,
+        platform_name: str,
+        queued: int,
+        accounted: int,
+    ) -> int:
+        """Account for queue entries a cap/time budget/abort cut off.
+
+        Those jobs never reach `_process_job`, so they are neither considered
+        nor filtered. Counting them as plan-level rejections keeps the run
+        identity exact::
+
+            scraped == filtered_out + plan_rejected + considered
+        """
+        unprocessed = max(0, queued - accounted)
+        if unprocessed:
+            log.info(
+                "profile.queue_truncated",
+                profile=profile_name,
+                unprocessed=unprocessed,
+                platform=platform_name,
+            )
+            self.stats.bump(
+                profile_name,
+                "plan_rejected",
+                unprocessed,
+                platform=platform_name,
+            )
+        return unprocessed
 
     async def _record(
         self,
@@ -2109,5 +2168,5 @@ class Orchestrator:
             f"{self.stats.applied} applied"
         )
         t_notif_0 = time.perf_counter()
-        await self.notifier.send(title, body, is_error=is_error)
+        await self.notifier.send(title, body, is_error=is_error, level=status.value)
         self.metrics.telegram_s += time.perf_counter() - t_notif_0

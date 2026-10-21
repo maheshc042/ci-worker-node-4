@@ -177,6 +177,37 @@ class ApplyEngine:
 
         return "unknown"
 
+    async def _visible_action_labels(self, limit: int = 6) -> list[str]:
+        """Visible button/link labels on the page (diagnostics only).
+
+        Run 589 failed one job with a bare "Apply button not resolvable within
+        SLA". The artefact HTML is kept, but alert triage should not require
+        fetching it: recording what the page actually rendered (plus the URL)
+        makes a classification miss explainable at a glance. Never raises.
+        """
+        out: list[str] = []
+        try:
+            loc = self.page.locator("button:visible, a:visible")
+            count = min(await loc.count(), 80)
+        except Exception:
+            return out
+        seen: set[str] = set()
+        for i in range(count):
+            try:
+                text = ((await loc.nth(i).inner_text(timeout=300)) or "").strip()
+            except Exception:
+                continue
+            if not text or len(text) > 60:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+            if len(out) >= limit:
+                break
+        return out
+
     async def _is_walkin_page(self) -> bool:
         """True when the loaded job page is a walk-in posting.
 
@@ -272,7 +303,19 @@ class ApplyEngine:
                     log.info("naukri.apply.walkin_by_title", job_id=job.job_id,
                              title=job.title[:70])
                     return "walkin"
-                raise PWTimeoutError("Apply button not resolvable within SLA")
+                labels = await self._visible_action_labels()
+                try:
+                    url = (self.page.url or "")[:120]
+                except Exception:
+                    url = ""
+                log.warning("naukri.apply.classification_unknown", job_id=job.job_id,
+                            title=job.title[:70], url=url, buttons=labels)
+                detail = "Apply button not resolvable within SLA"
+                if labels:
+                    detail += f" | buttons={labels}"
+                if url:
+                    detail += f" | url={url}"
+                raise PWTimeoutError(detail)
             return state
 
         try:
@@ -287,7 +330,7 @@ class ApplyEngine:
             jt.total_s = time.perf_counter() - t_job_start
             if self.metrics:
                 self.metrics.job_timings.append(jt)
-            return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Page classification failed: {str(exc)[:100]}", screenshot_path=shot, attempts=attempt_used)
+            return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Page classification failed: {str(exc)[:300]}", screenshot_path=shot, attempts=attempt_used)
 
         if state == "already_applied":
             jt.total_s = time.perf_counter() - t_job_start

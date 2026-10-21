@@ -152,7 +152,7 @@ def _numeric_label_cue(label_low: str) -> bool:
     if any(w in label_low for w in (
         "whole number", "between 0 and", "years", "experience", "months",
         "notice", "days", "rating", "scale", "rate", "ctc", "salary",
-        "how many", "integer"
+        "how many", "integer", "number of", "count of",
     )):
         return True
     # Q#48: "Yoe in ..." labels missed every cue above and fell through to
@@ -517,6 +517,55 @@ class LinkedInPlatform(BaseJobPlatform):
             return out
         except Exception:
             return []
+
+    @staticmethod
+    async def _empty_required_fields(modal, limit: int = 8) -> list[str]:
+        """Name the controls behind LinkedIn's generic "Required field unfilled".
+
+        Run 590 (SRS): four questions were answered, the step still refused to
+        advance, and the audit detail only said "Required field unfilled" —
+        leaving no way to tell which control was actually blocking. This
+        reports visible, empty text/select controls with their label (and a
+        ``required`` marker) so the next run's log is actionable. Never raises.
+        """
+        out: list[str] = []
+        try:
+            controls = await modal.locator(
+                "input:not([type='hidden']):not([type='file']), select, textarea"
+            ).all()
+        except Exception:
+            return out
+        for ctrl in controls:
+            try:
+                if not await ctrl.is_visible():
+                    continue
+                tag = (await ctrl.evaluate("el => el.tagName.toLowerCase()")) or ""
+                typ = ((await ctrl.get_attribute("type")) or "").lower()
+                if tag == "input" and typ in {"checkbox", "radio", "submit", "button", "file"}:
+                    continue
+                if ((await ctrl.input_value()) or "").strip():
+                    continue
+                label = ((await ctrl.get_attribute("aria-label")) or "").strip()
+                if not label:
+                    label = await ctrl.evaluate(
+                        "el => { const f = el.closest('.jobs-easy-apply-form-element,"
+                        " .fb-dash-form-element, .artdeco-text-input--container,"
+                        " [data-test-form-element]');"
+                        " const l = f && f.querySelector('label, legend');"
+                        " return l ? (l.innerText || '').trim() : ''; }"
+                    ) or ""
+                required = bool(await ctrl.evaluate(
+                    "el => !!(el.required || el.getAttribute('aria-required') === 'true')"
+                ))
+                out.append(
+                    f"{'required ' if required else ''}{tag}"
+                    f"[{typ}]:{(label or 'unlabeled')[:80]}"
+                )
+                if len(out) >= limit:
+                    break
+            except Exception:
+                continue
+        return out
 
     @classmethod
     async def _fallback_action_button(cls, modal):
@@ -1610,12 +1659,20 @@ class LinkedInPlatform(BaseJobPlatform):
                     except Exception:
                         pass
                     log.warning("linkedin.apply.step_stuck", step=step, error=err_txt, buttons=btn_labels)
+                    empty_fields = await self._empty_required_fields(modal)
+                    if empty_fields:
+                        log.warning(
+                            "linkedin.apply.step_stuck_empty_fields",
+                            step=step,
+                            fields=empty_fields,
+                        )
                     blocked_qs = await self._extract_blocked_questions(modal, form_text)
                     if not blocked_qs:
                         await self._dismiss_modal()
                         _record_timing()
                         btn_detail = f" buttons={btn_labels}" if btn_labels else ""
-                        return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}{btn_detail}")
+                        empty_detail = f" | empty={empty_fields}" if empty_fields else ""
+                        return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Step {step} blocked: {err_txt} | step={step_sig}{btn_detail}{empty_detail}")
                     await self._dismiss_modal()
                     _record_timing()
                     return ApplyOutcome(
@@ -2582,6 +2639,9 @@ class LinkedInPlatform(BaseJobPlatform):
                             # closed instead of submitting a blank/literal.
                             log.warning("linkedin.apply.error_recovery_no_config_value")
                             continue
+                        _maxlen_raw = await inp.get_attribute("maxlength")
+                        _maxlen = int(_maxlen_raw) if _maxlen_raw and str(_maxlen_raw).strip().isdigit() else None
+                        new_val = _fit_field_length(new_val, _maxlen)
                         await inp.fill("")
                         await inp.fill(new_val)
                         await inp.dispatch_event("input")

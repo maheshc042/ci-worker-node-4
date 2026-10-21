@@ -268,6 +268,37 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
+    def test_fullstack_blocks_unrelated_backend_stacks(self):
+        """Run 591 applied to Sugar CRM and Scala roles.
+
+        Both titles cleared the generic "software engineer" include rule but
+        the work is a different hiring pool: SugarCRM is PHP/Salesforce-family
+        and Scala is a JVM track. Blocked stacks are already excluded by name
+        (php, java, salesforce), so these belong in the same list. Boundary-safe
+        matching must keep "JavaScript"/"Scalable" unaffected."""
+        engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+
+        def passes(title: str) -> bool:
+            job = Job(
+                job_id=f"test-fs-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            return engine.evaluate_card(job).passed
+
+        for title in ("Software Engineer (Sugar CRM)", "Software Engineer- Scala Developer"):
+            self.assertFalse(passes(title), f"{title} should be blocked")
+        for title in (
+            "Developer Support Engineer",
+            "Full Stack Developer Web & Backend Applications",
+            "JavaScript Developer",
+            "Scalable Backend Engineer",
+        ):
+            self.assertTrue(passes(title), f"{title} should still pass")
+
     def test_ai_profile_breadth_policy(self):
         """Product policy: the AI profile is breadth-first for interviews.
 
@@ -1725,6 +1756,45 @@ class TestReviewRetryQuery(unittest.IsolatedAsyncioTestCase):
             jobs = await repo.needs_review_retries("P", "naukri", "primary")
         self.assertEqual(jobs, [])
 
+    async def test_caps_on_accumulated_attempts_not_row_count(self):
+        """Run 590: six LinkedIn jobs retried 8-9 times because the guard
+        counted `needs_review` rows, and `applications` is one row per job —
+        so the count was always 1. The cap must read `attempts`."""
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[])
+        repo = Repository(pool)
+        await repo.needs_review_retries("P", "linkedin", "primary", max_attempts=3)
+
+        sql = pool.fetch.await_args.args[0]
+        args = pool.fetch.await_args.args
+        self.assertIn("a.attempts < $5", sql)
+        self.assertNotIn("COUNT(*) FROM applications", sql)
+        self.assertEqual(args[-1], 3)
+
+    async def test_feed_dedupe_honours_attempt_budget(self):
+        """The needs_review carve-out must expire too.
+
+        Capping only the retry pass leaves the hole open: a stuck job that
+        re-appears in the feed is excluded from `known_job_ids` because all
+        of its questions are resolved, so it would be re-applied forever.
+        """
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[])
+        repo = Repository(pool)
+        await repo.known_job_ids("P", 30, "primary", "linkedin", max_attempts=3)
+
+        sql = pool.fetch.await_args.args[0]
+        self.assertIn("a.attempts < $4", sql)
+        self.assertEqual(pool.fetch.await_args.args[-1], 3)
+
 
 class TestResumeGate(unittest.IsolatedAsyncioTestCase):
     """The Naukri profile must carry the running account's CV.
@@ -2717,7 +2787,12 @@ class TestLinkedInFieldGuards(unittest.TestCase):
                       "Yoe in building Production AI Agent applications?",
                       "YOE in MLops",
                       "Total yr of experience", "Notice period (days)",
-                      "Current CTC (LPA)"]:
+                      "Current CTC (LPA)",
+                      # Run 590 (FDE): a 136-char bio landed in a 20-char
+                      # "Number of ..." box because "number of" was not a
+                      # numeric cue and fell through to the generic bio.
+                      "Number of successful Customer Deployments",
+                      "Number of months of FDE experience"]:
             self.assertTrue(_numeric_label_cue(label.lower()), label)
         for label in ["Area of expertise", "Expected joining bonus",
                       "Describe yourself", "Primary skill"]:
@@ -2730,6 +2805,46 @@ class TestLinkedInFieldGuards(unittest.TestCase):
         self.assertEqual(_fit_field_length("Bengaluru", None), "Bengaluru")
         self.assertEqual(_fit_field_length("x" * 140, 20), "x" * 20)
         self.assertEqual(_fit_field_length("x" * 20, 20), "x" * 20)
+
+
+class TestNotifierHeaderLevel(unittest.IsolatedAsyncioTestCase):
+    """Run 589 was paged as "🚨 FAILED ... partial — 3 applied".
+
+    `is_error` still decides whether we notify; the header must describe the
+    actual run outcome so a partial run does not read as a catastrophe.
+    """
+
+    def test_level_prefixes(self):
+        from naukri_agent.notify.notifier import header_prefix
+
+        self.assertEqual(header_prefix("failed", is_error=True), "🚨 FAILED")
+        self.assertEqual(header_prefix("partial", is_error=True), "⚠️ PARTIAL")
+        self.assertEqual(header_prefix("success", is_error=False), "🚀 SUCCESS")
+
+    def test_missing_level_falls_back_to_is_error(self):
+        from naukri_agent.notify.notifier import header_prefix
+
+        self.assertEqual(header_prefix(None, is_error=True), "🚨 FAILED")
+        self.assertEqual(header_prefix(None, is_error=False), "🚀 SUCCESS")
+        self.assertEqual(header_prefix("running"), "🚀 SUCCESS")
+
+    async def test_telegram_uses_partial_prefix_on_job_failures(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from naukri_agent.notify.notifier import TelegramNotifier
+
+        sent = {}
+
+        async def fake_post(self, url, json):  # noqa: A002 - httpx signature
+            sent.update(json)
+            return MagicMock(status_code=200, text="ok")
+
+        with patch("httpx.AsyncClient.post", new=fake_post):
+            await TelegramNotifier("token", "chat").send(
+                "Naukri agent", "body", is_error=True, level="partial"
+            )
+        self.assertIn("⚠️ PARTIAL: Naukri agent", sent["text"])
+        self.assertNotIn("🚨", sent["text"])
 
 
 class TestLinkedInVerifySubmit(unittest.IsolatedAsyncioTestCase):
@@ -2860,6 +2975,10 @@ class TestWalkinByTitle(unittest.IsolatedAsyncioTestCase):
         out = await self._classify("Software Engineer")
         self.assertEqual(out.status, ApplicationStatus.FAILED)
         self.assertIn("not resolvable", out.detail)
+        # Run 589's failure was opaque. The detail must now carry the page
+        # identity even when no button labels are readable, so alert triage
+        # can tell a dead page from an unrecognised apply UI.
+        self.assertIn("job-listings-1", out.detail)
 
 
 class TestCityAndBasedQuestions(unittest.TestCase):
@@ -3599,6 +3718,130 @@ class TestHiringCafeCleanPageContract(unittest.IsolatedAsyncioTestCase):
         manager = BrowserManager(BrowserConfig(hiringcafe_clean_context=True))
         with self.assertRaises(RuntimeError):
             await manager.new_hiringcafe_page()
+
+
+class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
+    """Guards the run identity printed in every summary::
+
+        scraped == filtered_out + plan_rejected + considered
+
+    `considered` used to be bumped before the card filter, so every
+    card-level rejection was also counted as considered. That phantom surplus
+    matched the exact discrepancy in runs 589 (+2 walk-ins) and 591 (+1).
+    """
+
+    @staticmethod
+    def _orchestrator():
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import RunStats
+        from naukri_agent.core.orchestrator import Orchestrator
+
+        orch = object.__new__(Orchestrator)
+        orch.stats = RunStats()
+        orch.run_id = 1
+        orch.account_key = "primary"
+        orch.repo = MagicMock()
+        orch.repo.record_outcome = AsyncMock()
+        return orch
+
+    @staticmethod
+    def _profile():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(name="Full Stack / Web Developer")
+
+    @staticmethod
+    def _platform():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(platform_name="naukri")
+
+    @staticmethod
+    def _rejecting_filters():
+        from types import SimpleNamespace
+
+        from naukri_agent.core.models import SkipReason
+
+        return SimpleNamespace(
+            evaluate_card=lambda job: SimpleNamespace(
+                passed=False, reason=SkipReason.FILTER_TITLE, detail="title"
+            )
+        )
+
+    async def test_card_rejection_is_filtered_not_considered(self):
+        from naukri_agent.core.models import Job
+
+        orch = self._orchestrator()
+        orch.stats.bump("Full Stack / Web Developer", "scraped", 1)
+        job = Job(job_id="j1", title="Data Scientist", company="Acme", url="u")
+
+        outcome = await orch._process_job(
+            job,
+            self._profile(),
+            self._rejecting_filters(),
+            self._platform(),
+            page=None,
+            artifacts=MagicMock(),
+        )
+
+        self.assertEqual(outcome.status.value, "skipped")
+        self.assertEqual(orch.stats.filtered_out, 1)
+        self.assertEqual(orch.stats.considered, 0)
+        self.assertEqual(
+            orch.stats.scraped,
+            orch.stats.filtered_out + orch.stats.plan_rejected + orch.stats.considered,
+        )
+
+    async def test_retry_pass_does_not_double_count(self):
+        from naukri_agent.core.models import Job
+
+        orch = self._orchestrator()
+        job = Job(job_id="j2", title="Data Scientist", company="Acme", url="u")
+
+        await orch._process_job(
+            job,
+            self._profile(),
+            self._rejecting_filters(),
+            self._platform(),
+            page=None,
+            artifacts=MagicMock(),
+            count_metrics=False,
+        )
+
+        self.assertEqual(orch.stats.filtered_out, 0)
+        self.assertEqual(orch.stats.considered, 0)
+
+    def test_unprocessed_queue_closes_the_identity(self):
+        orch = self._orchestrator()
+        profile = "Full Stack / Web Developer"
+        orch.stats.bump(profile, "scraped", 10)
+        orch.stats.bump(profile, "plan_rejected", 2)   # planner hard rejects
+        orch.stats.bump(profile, "filtered_out", 3)    # card-level rejects
+        orch.stats.bump(profile, "considered", 3)      # entered the engine
+
+        # Cap hit after 6 of the 8 eligible jobs: 3 card rejects + 3 engine
+        # entries were accounted for, 2 never got the chance.
+        self.assertEqual(
+            orch._count_unprocessed_queue(profile, "naukri", queued=8, accounted=6), 2
+        )
+        self.assertEqual(orch.stats.plan_rejected, 4)
+        self.assertEqual(
+            orch.stats.scraped,
+            orch.stats.filtered_out + orch.stats.plan_rejected + orch.stats.considered,
+        )
+
+    def test_accounted_jobs_tracks_counters_not_iterations(self):
+        """An aborted job may or may not have been counted before raising;
+        the loop must read the counters so the remainder cannot be
+        mis-attributed."""
+        orch = self._orchestrator()
+        profile = "Full Stack / Web Developer"
+        self.assertEqual(orch._accounted_jobs("naukri"), 0)
+        orch.stats.bump(profile, "considered", platform="naukri")
+        orch.stats.bump(profile, "filtered_out", 2, platform="naukri")
+        self.assertEqual(orch._accounted_jobs("NAUKRI"), 3)
+        self.assertEqual(orch._accounted_jobs("linkedin"), 0)
 
 
 if __name__ == "__main__":

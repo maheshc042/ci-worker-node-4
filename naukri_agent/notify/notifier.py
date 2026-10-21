@@ -30,17 +30,52 @@ log = get_logger(__name__)
 TELEGRAM_LIMIT = 4_000
 
 
+_LEVEL_PREFIXES = {
+    "failed": "🚨 FAILED",
+    "partial": "⚠️ PARTIAL",
+    "success": "🚀 SUCCESS",
+}
+
+
+def header_prefix(level: str | None, *, is_error: bool = False) -> str:
+    """Run-status-aware notification header.
+
+    ``is_error`` still decides *whether* to notify (config gates), but the
+    prefix must describe the run: a partial run with a few job-level
+    failures is not a failed run (Q#589 was paged as "FAILED ... partial").
+    Unknown/missing levels fall back to the binary behaviour.
+    """
+    if level in _LEVEL_PREFIXES:
+        return _LEVEL_PREFIXES[level]
+    return _LEVEL_PREFIXES["failed" if is_error else "success"]
+
+
 class Notifier(ABC):
     @abstractmethod
-    async def send(self, title: str, body: str, *, is_error: bool = False) -> None: ...
+    async def send(
+        self,
+        title: str,
+        body: str,
+        *,
+        is_error: bool = False,
+        level: str | None = None,
+    ) -> None: ...
 
     async def close(self) -> None:  # pragma: no cover - optional hook
         return None
 
 
 class ConsoleNotifier(Notifier):
-    async def send(self, title: str, body: str, *, is_error: bool = False) -> None:
-        log_fn = log.error if is_error else log.info
+    async def send(
+        self,
+        title: str,
+        body: str,
+        *,
+        is_error: bool = False,
+        level: str | None = None,
+    ) -> None:
+        level = level or ("failed" if is_error else "success")
+        log_fn = log.error if level == "failed" else (log.warning if level == "partial" else log.info)
         log_fn("notify.console", title=title, body=body)
 
 
@@ -60,8 +95,15 @@ class TelegramNotifier(Notifier):
         token = self._bot_token or ""
         return text.replace(token, "[redacted]") if token else text
 
-    async def send(self, title: str, body: str, *, is_error: bool = False) -> None:
-        prefix = "🚨 FAILED" if is_error else "🚀 SUCCESS"
+    async def send(
+        self,
+        title: str,
+        body: str,
+        *,
+        is_error: bool = False,
+        level: str | None = None,
+    ) -> None:
+        prefix = header_prefix(level, is_error=is_error)
         title_esc = html.escape(title)
         header = f"<b>{prefix}: {title_esc}</b>\n\n<pre>"
         footer = "</pre>"
@@ -103,10 +145,17 @@ class CompositeNotifier(Notifier):
     def __init__(self, channels: list[Notifier]) -> None:
         self.channels = channels
 
-    async def send(self, title: str, body: str, *, is_error: bool = False) -> None:
+    async def send(
+        self,
+        title: str,
+        body: str,
+        *,
+        is_error: bool = False,
+        level: str | None = None,
+    ) -> None:
         for channel in self.channels:
             try:
-                await channel.send(title, body, is_error=is_error)
+                await channel.send(title, body, is_error=is_error, level=level)
             except Exception as exc:  # a broken channel must not break the run
                 log.warning(
                     "notify.channel_failed",

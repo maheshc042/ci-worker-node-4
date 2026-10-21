@@ -31,6 +31,13 @@ from .pool import get_pool
 log = get_logger(__name__)
 
 
+# A needs_review job is re-opened once its questions are answered, but only
+# while it still has budget. Past this many attempts the failure is structural
+# (modal/field behaviour), so both the retry pass and the feed-level dedupe
+# treat the job as decided. Keep the two SQL paths on one constant.
+MAX_NEEDS_REVIEW_ATTEMPTS = 3
+
+
 # One row per (run, job, platform). The scraped pass inserts, the outcome pass
 # upserts, so a job appears exactly once no matter how many times it is seen.
 _AUDIT_UPSERT_SQL = """
@@ -421,8 +428,17 @@ class Repository:
         window_days: int,
         account: str = "primary",
         platform: str = "naukri",
+        max_attempts: int = MAX_NEEDS_REVIEW_ATTEMPTS,
     ) -> set[str]:
-        """Jobs already decided for this account and platform inside the window."""
+        """Jobs already decided for this account and platform inside the window.
+
+        A ``needs_review`` job is normally re-opened once all of its questions
+        are answered, so it can be retried. That carve-out has to respect the
+        same attempt budget as :meth:`needs_review_retries`: a job that has
+        already burned ``max_attempts`` is structurally stuck, and repeatedly
+        re-surfacing in the feed must not keep spending apply budget on it
+        (run 590 retried six LinkedIn jobs 8-9 times this way).
+        """
         try:
             rows = await self._fetch_with_retry(
                 """
@@ -434,6 +450,7 @@ class Repository:
                    AND a.created_at > now() - ($1 || ' days')::interval
                    AND NOT (
                          a.status = 'needs_review'
+                     AND a.attempts < $4
                      AND NOT EXISTS (
                               SELECT 1
                                 FROM question_review q
@@ -445,6 +462,7 @@ class Repository:
                 str(window_days),
                 platform,
                 account,
+                max_attempts,
             )
             return {row["job_id"] for row in rows}
         except Exception as exc:
@@ -458,6 +476,7 @@ class Repository:
         account: str = "primary",
         window_days: int = 90,
         limit: int = 5,
+        max_attempts: int = MAX_NEEDS_REVIEW_ATTEMPTS,
     ) -> list[Job]:
         """Jobs stranded on needs_review whose blockers are now all answered.
 
@@ -465,8 +484,10 @@ class Repository:
         hoping the feed re-surfaces the job, return it for direct re-processing.
         A job qualifies only when it has at least one review row and ZERO
         unresolved ones for this profile, has no terminal outcome
-        (applied/already_applied/external) anywhere, and has fewer than 3
-        prior needs_review rows (a twice-retried struggler stays stranded).
+        (applied/already_applied/external) anywhere, and has fewer than
+        ``max_attempts`` recorded attempts. Attempts live on the single
+        per-job `applications` row, so a row-count guard can never trip —
+        the accumulative `attempts` counter is the real signal.
         Freshest first; never raises.
         """
         try:
@@ -484,6 +505,7 @@ class Repository:
                           WHERE a.job_id = j.job_id
                             AND a.profile = $1
                             AND a.status = 'needs_review'
+                            AND a.attempts < $5
                        )
                    AND EXISTS (
                          SELECT 1 FROM question_review q
@@ -501,12 +523,6 @@ class Repository:
                           WHERE a2.job_id = j.job_id
                             AND a2.status IN ('applied', 'already_applied', 'external')
                        )
-                   AND (
-                         SELECT COUNT(*) FROM applications a3
-                          WHERE a3.job_id = j.job_id
-                            AND a3.profile = $1
-                            AND a3.status = 'needs_review'
-                       ) < 3
                    AND j.last_seen_at > now() - ($3 || ' days')::interval
                  ORDER BY j.last_seen_at DESC
                  LIMIT $4
@@ -515,6 +531,7 @@ class Repository:
                 platform,
                 str(window_days),
                 limit,
+                max_attempts,
             )
         except Exception as exc:
             log.warning("db.review_retries_failed", error=str(exc))
