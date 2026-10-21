@@ -131,16 +131,16 @@ class ColdEmailer:
         if ml_track:
             proof = (
                 f"Over the past {who.experience_label}, I have focused on building and deploying production AI systems, "
-                "scalable Python backends, and cloud-based ML pipelines."
+                "scalable Python backends, and cloud-deployed AI services."
             )
-            skills = "Python, FastAPI, PyTorch, LangChain, Vector Search, AWS, Docker"
-            domain_label = "Machine Learning & AI Engineering"
+            skills = "Python, FastAPI, LangChain, Vector Search, AWS, Docker"
+            domain_label = "AI Application Engineering"
         elif ai_track:
             proof = (
                 f"Over the past {who.experience_label}, I have focused on production GenAI "
                 "workflows—building low-latency FastAPI services, RAG retrieval pipelines, and scalable cloud microservices."
             )
-            skills = "Python, FastAPI, LangChain, RAG, PyTorch, AWS, PostgreSQL"
+            skills = "Python, FastAPI, LangChain, RAG, AWS, PostgreSQL"
             domain_label = "AI & Backend Development"
         elif backend_track:
             proof = (

@@ -85,11 +85,6 @@ DEDICATED_AI_KEYWORDS = (
     "ai specialist", "ai lead", "ai researcher",
 )
 
-DATA_ROLES_KEYWORDS = (
-    "data engineer", "data engineering", "big data", "etl developer", "etl engineer",
-    "data warehouse", "snowflake developer", "databricks developer",
-)
-
 DISJOINT_SPECIALIZATIONS = (
     "big data", "etl developer", "etl engineer",
     "data warehouse", "data warehousing", "snowflake developer", "snowflake engineer",
@@ -146,18 +141,6 @@ HYBRID_AI_TITLE_MARKERS = (
     "full stack", "fullstack", "mern", "mean", "frontend", "backend",
     "react", "node", "sde", "software engineer", "software developer",
     "web developer",
-)
-
-# Wanted families gated by level (gate 7b): QA / DevOps / support /
-# data-developer roles are in-scope only below ~2y stated minimum.
-JUNIOR_FAMILY_KEYWORDS = (
-    "qa", "automation", "sdet", "quality analyst", "quality engineer",
-    "test engineer", "manual testing", "automation testing",
-    "devops", "devops engineer", "platform engineer", "cloud engineer",
-    "site reliability", "sre",
-    "database developer", "sql developer", "data engineer", "data analyst",
-    "technical support", "support engineer", "application support",
-    "desktop support", "customer success",
 )
 
 # Same keyword set the LinkedIn card scraper uses to impute 5.0y/10.0y when no
@@ -280,11 +263,16 @@ class FilterEngine:
         stated bands can newly reject.
         """
         rules = self.rules
-        # 7. AI / ML & Data Engineering Recruiter Reality Gate
+        # 7. Dedicated AI/ML Recruiter Reality Gate
         # Candidate has 3y total software experience with 2y commercial AI.
-        # Recruiters for DEDICATED AI or Data Engineering roles requiring >
-        # 2.0 years will immediately reject for lack of tenure — the 2.0y cap
-        # stays for pure AI/ML titles.
+        # Recruiters for DEDICATED AI/ML titles requiring > 2.0 years will
+        # immediately reject for lack of tenure — the 2.0y cap stays for pure
+        # AI/ML titles only.
+        #
+        # Adjacent engineering families (data engineering, QA/testing, DevOps,
+        # cloud, platform/SRE, database/SQL, support) are SOFTWARE roles, judged
+        # on the candidate's 3y software tenure. They deliberately flow through
+        # the general 0-3.5y gates (8/9) instead of an AI-domain cap.
         #
         # HYBRID titles (full-stack/software markers alongside AI terms, e.g.
         # "Applied AI Engineer with Fullstack") hire a software engineer first:
@@ -296,7 +284,6 @@ class FilterEngine:
         # seniority; otherwise the job flows to ranking/suitability scoring, which
         # still down-weights it via experience decay. Unknown data never rejects.
         is_ai_role = any(term in title for term in DEDICATED_AI_KEYWORDS)
-        is_data_role = any(term in title for term in DATA_ROLES_KEYWORDS)
         is_hybrid_ai = is_ai_role and any(
             term in title for term in HYBRID_AI_TITLE_MARKERS
         )
@@ -304,25 +291,11 @@ class FilterEngine:
             not job.experience_imputed or _title_suggests_senior(job.title)
         )
         ai_cap = rules.dedicated_ai_max_years
-        if (is_ai_role or is_data_role) and not is_hybrid_ai and exp_trusted and job.min_experience > ai_cap:
-            role_type = "AI/ML" if is_ai_role else "Data Engineering"
+        if is_ai_role and not is_hybrid_ai and exp_trusted and job.min_experience > ai_cap:
             return FilterDecision(
                 False,
                 SkipReason.FILTER_EXPERIENCE,
-                f"{role_type} role requires {job.min_experience}y > candidate's {ai_cap:g}y AI / domain experience (recruiter will reject)",
-            )
-
-        # 7b. Junior-family level gate (QA / DevOps / support / data-developer).
-        # These families are wanted, but only below ~2y: with 3y total and
-        # 2y AI, a 2y+ QA/DevOps requisition is a wasted slot. Same provenance
-        # guard as gate 7: trusted numbers only, unknown flows to ranking.
-        is_junior_family = _contains_any(title, JUNIOR_FAMILY_KEYWORDS) is not None
-        junior_cap = rules.junior_family_max_years
-        if is_junior_family and exp_trusted and job.min_experience > junior_cap:
-            return FilterDecision(
-                False,
-                SkipReason.FILTER_EXPERIENCE,
-                f"junior-family role requires {job.min_experience}y > {junior_cap:g}y cap (low-probability slot)",
+                f"dedicated AI/ML role requires {job.min_experience}y > candidate's {ai_cap:g}y AI experience (recruiter will reject)",
             )
 
         # 8. Numeric experience bounds (provenance-guarded: see gate 7)

@@ -236,10 +236,11 @@ answers:
   experience in docker: "3"
   experience in ci/cd: "3"
 
-  # AI / Python track: 2 years hands-on.
+  # AI / Python track: 2 years of application work (RAG, LLM apps, FastAPI).
+  # Model-training tooling is 0 — the resume does not support it.
   experience in ai: "2"
   experience in artificial intelligence: "2"
-  experience in machine learning: "2"
+  experience in machine learning: "0"
   experience in python: "2"
   experience in llm: "2"
   experience in generative ai: "2"
@@ -249,15 +250,15 @@ answers:
   experience in langchain: "2"
   experience in langgraph: "2"
   experience in fastapi: "2"
-  experience in mlops: "2"
+  experience in mlops: "0"
   experience in prompt engineering: "2"
   experience in vector database: "2"
   experience in embeddings: "2"
-  experience in hugging face: "2"
-  experience in pytorch: "2"
-  experience in deep learning: "2"
+  experience in hugging face: "0"
+  experience in pytorch: "0"
+  experience in deep learning: "0"
   experience in openai: "2"
-  experience in transformers: "2"
+  experience in transformers: "0"
   experience in mcp: "2"
   experience in .net: "0"
   experience in java: "0"
@@ -507,14 +508,14 @@ experience:
     spring boot: 0
     spring framework: 0
     hibernate: 0
-    # AI / Python track: 2 years hands-on. Recruiters cross-check these
-    # against the resume, so anything outside this list falls back to
-    # default_years (1) — honest for new tools, never inflated.
+    # AI / Python track: 2 years of application work. Model-training tooling
+    # (PyTorch/TensorFlow/Hugging Face/MLOps) is 0 because the resume does not
+    # support it. Anything outside this list falls back to default_years (1).
     ai: 2
     artificial intelligence: 2
     agentic ai: 2
     agentic: 2
-    machine learning: 2
+    machine learning: 0
     python: 2
     llm: 2
     generative ai: 2
@@ -528,15 +529,15 @@ experience:
     language models: 2
     ai engineer: 2
     rag: 2
-    mlops: 2
+    mlops: 0
     prompt engineering: 2
     vector database: 2
     embeddings: 2
-    hugging face: 2
-    pytorch: 2
-    deep learning: 2
+    hugging face: 0
+    pytorch: 0
+    deep learning: 0
     openai: 2
-    transformers: 2
+    transformers: 0
     mcp: 2
     front end: 3
     frontend: 3
@@ -656,7 +657,7 @@ profiles:
 
     # Primary skills required: AT LEAST ONE of core_skills MUST match in every job
     # Explicit title keywords for scoring (so it doesn't divide by 50)
-    title_keywords: ["full stack", "mern", "react", "node", "frontend", "backend", "software engineer", "developer", "web", "qa", "automation", "sdet", "next", "cloud engineer", "devops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "associate"]
+    title_keywords: ["full stack", "mern", "react", "node", "frontend", "backend", "software engineer", "developer", "web", "qa", "automation", "sdet", "next", "cloud engineer", "devops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "associate", "sre", "test automation", "quality analyst", "data engineer", "data analyst", "analytics engineer"]
 
     # Condensed to Top 14 so math allows a high score
     core_skills: ["react", "node", "javascript", "typescript", "python", "fastapi", "django", "frontend", "backend", "full stack", "mern", "ui", "aws", "docker", "nextjs"]
@@ -664,8 +665,8 @@ profiles:
     bonus_skills: ["testing", "pytest", "jest", "playwright", "cypress", "git", "github", "jira", "agile", "scrum", "code review", "debugging"]
 
     filters:
-      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality engineer, test engineer, manual testing, automation testing, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability]
-      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml engineer, deep learning, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist]
+      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality engineer, test engineer, manual testing, automation testing, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability, sre, quality analyst, test automation, automation engineer, data engineer, data analyst, analytics engineer, data analytics, data developer]
+      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
@@ -725,16 +726,20 @@ profiles:
     resume_file: "resumes/CV_Mahesh_Chitakoti_2026.pdf"
 
     # Explicit title keywords for scoring (so it doesn't divide by 33)
-    title_keywords: ["ai", "python", "machine learning", "ml", "genai", "llm", "backend", "full stack", "software engineer", "developer", "sde", "chatbot", "rag", "nlp", "agent", "qa", "automation", "sdet", "quality analyst", "cloud engineer", "devops", "mlops", "platform engineer", "database developer", "sql developer", "fde", "forward deployment", "data analyst"]
+    # AI-application and backend first, plus the adjacent software families this
+    # resume can genuinely defend (Python/SQL/data plumbing, QA automation,
+    # Docker/AWS/GitHub-Actions DevOps, cloud/platform/SRE). Core ML, CV, MLOps
+    # research and tool-only BI stay out: there is no model-training history.
+    title_keywords: ["ai", "python", "generative ai", "genai", "llm", "rag", "chatbot", "agent", "backend", "backend engineer", "full stack", "software engineer", "developer", "sde", "fde", "forward deployment", "integration engineer", "devops", "cloud engineer", "platform engineer", "site reliability", "sre", "qa", "sdet", "test automation", "data engineer", "data analyst", "analytics engineer", "sql developer", "database developer"]
 
-    # Condensed to Top 13 so math allows a high score
-    core_skills: ["python", "fastapi", "django", "ai", "artificial intelligence", "machine learning", "ml", "generative ai", "genai", "llm", "rag", "langchain", "openai", "chatbot", "nlp"]
-    secondary_skills: ["react", "node", "javascript", "typescript", "frontend", "backend", "api", "rest", "postgresql", "mongodb", "aws", "docker", "kubernetes", "vector database", "pinecone", "chromadb", "embeddings", "semantic retrieval", "computer vision", "agent", "qa", "automation", "playwright", "selenium"]
+    # Condensed to Top 15 so math allows a high score
+    core_skills: ["python", "fastapi", "django", "ai", "artificial intelligence", "generative ai", "genai", "llm", "rag", "langchain", "langgraph", "openai", "chatbot", "embeddings", "vector database"]
+    secondary_skills: ["react", "node", "javascript", "typescript", "frontend", "backend", "api", "rest", "postgresql", "mongodb", "aws", "docker", "kubernetes", "qdrant", "pgvector", "pydantic", "pinecone", "chromadb", "semantic retrieval", "hybrid search", "agent", "claude", "gemini"]
     bonus_skills: ["testing", "pytest", "jest", "git", "github", "jira", "agile", "scrum", "debugging"]
 
     filters:
-      title_must_include_any: [ai, artificial intelligence, machine learning, machine learning engineer, machine learning developer, ml, python, django, mongodb, llm, genai, generative ai, nlp, chatbot, prompt, ai agent, llm agent, agentic, python developer, ai engineer, ml engineer, ai software engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality analyst, quality engineer, test automation, manual testing, automation testing, cloud engineer, devops, devops engineer, mlops, mlops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, junior data engineer, data engineer, site reliability engineer, customer success engineer, data analyst, technical support engineer, support engineer, product support, application support, automation engineer, test automation engineer]
-      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher, automation anywhere, rpa, data analytics]
+      title_must_include_any: [ai, artificial intelligence, llm, genai, generative ai, chatbot, prompt, ai agent, llm agent, agentic, rag, python, django, mongodb, python developer, ai engineer, ai software engineer, genai engineer, generative ai engineer, llm engineer, ai application engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, qa, qa engineer, quality assurance, quality analyst, quality engineer, test engineer, software tester, tester, sdet, software development engineer in test, test automation engineer, manual testing, automation testing, test automation, automation engineer, devops, devops engineer, cloud engineer, platform engineer, site reliability, sre, site reliability engineer, database developer, database engineer, sql developer, data engineer, data analyst, analytics engineer, data analytics, data developer]
+      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher, automation anywhere, rpa, machine learning, ml, ml developer, deep learning, nlp, computer vision, prompt engineer, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, ux, designer, scala, sugar crm, sugarcrm]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
@@ -767,7 +772,7 @@ profiles:
       hands-on experience in generative ai/llm: "2"
       hands-on experience in generative ai/llm development: "2"
       experience in generative ai/llm: "2"
-      experience in llm development: "0"
+      experience in llm development: "2"
       generative ai/llm development: "2"
       proficiency in python, typescript: "Proficient in Python and TypeScript with 3 years of experience building APIs, backend services, and web applications."
       proficiency in python: "Proficient in Python with hands-on experience in FastAPI, Django, and AI applications."
@@ -779,11 +784,11 @@ profiles:
       experience in langgraph: "2"
       experience in fastapi: "2"
       experience in tensorflow: "0"
-      experience in pytorch: "2"
+      experience in pytorch: "0"
       experience in transformers: "0"
       experience in rag: "2"
-      experience in mlops: "2"
-      experience in hugging face: "2"
+      experience in mlops: "0"
+      experience in hugging face: "0"
       experience in openai: "2"
       experience in data science: "0"
       current ctc: "4"

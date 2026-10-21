@@ -253,9 +253,11 @@ def applicant_snapshot() -> ApplicantSnapshot:
                 except (TypeError, ValueError):
                     continue
         # Core technical skills to prioritize ahead of generic meta-skills (e.g. agile, algorithms)
+        # Only stack names the resume can actually defend; listing a skill here
+        # merely reorders it, so an unsupported name would surface it first.
         core_priority = {
-            "python", "pytorch", "langchain", "fastapi", "rag", "docker", "aws",
-            "machine learning", "ml", "genai", "generative ai", "llm", "vector search",
+            "python", "langchain", "langgraph", "fastapi", "rag", "docker", "aws",
+            "genai", "generative ai", "llm", "embeddings", "vector search",
             "react", "react.js", "node.js", "nodejs", "typescript", "javascript",
             "postgresql", "mongodb", "rest apis", "django",
         }
@@ -347,6 +349,50 @@ def fix_signoff(text: str, name: str, github: str = "", linkedin: str = "") -> s
     return text_no_links
 
 
+# Tooling the resume does not support (no model training, MLOps or CV work).
+# The prompt no longer offers these, but a model can still invent them; the
+# sanitizer below guarantees they never appear in a candidate snapshot.
+UNSUPPORTED_CLAIM_TOOLS: tuple[str, ...] = (
+    "pytorch",
+    "tensorflow",
+    "hugging face",
+    "huggingface",
+    "transformers",
+    "mlops",
+    "keras",
+    "scikit-learn",
+    "scikit learn",
+)
+
+SAFE_AI_STACK = "Python, LangChain, Vector Search, FastAPI, AWS, Docker"
+
+_AI_STACK_PATTERN = re.compile(r"\b(ai|ml|rag|langchain|langgraph|vector|llm)\b")
+
+
+def _sanitize_stack_line(m: re.Match, require_ai: bool = False) -> str:
+    """Drop unsupported tool claims from a ``Primary Stack:`` bullet.
+
+    ``require_ai`` keeps the ML-role safeguard: if stripping leaves a stack
+    with no AI/LLM term, fall back to the known-safe application-AI stack.
+    """
+    prefix, stack = m.group(1), m.group(2)
+    stack_low = stack.lower()
+    if require_ai and not _AI_STACK_PATTERN.search(stack_low):
+        # ML-titled role with no AI/LLM term at all: use the known-safe stack.
+        return f"{prefix}{SAFE_AI_STACK}"
+    if not any(bad in stack_low for bad in UNSUPPORTED_CLAIM_TOOLS):
+        # Nothing to scrub; keep the line byte-for-byte (avoids splitting
+        # parenthesised groups such as "AWS (EC2, S3)").
+        return m.group(0)
+    kept = [
+        part.strip()
+        for part in stack.split(",")
+        if part.strip()
+        and not any(bad in part.lower() for bad in UNSUPPORTED_CLAIM_TOOLS)
+    ]
+    return f"{prefix}{', '.join(kept) or SAFE_AI_STACK}"
+
+
 def finalize_email_body(text: str, who: ApplicantSnapshot | None = None, role_name: str = "") -> str:
     """Post-process email copy produced by Gemini.
     Guarantees clean formatting, non-fluffy wording, proper Contact single line,
@@ -430,32 +476,26 @@ def finalize_email_body(text: str, who: ApplicantSnapshot | None = None, role_na
     if is_ml:
         cleaned = re.sub(
             r"(\bTotal Experience:[^\n()]+)\((?:AI & Backend Development|Full Stack[^)]*)\)",
-            r"\1(Machine Learning & AI Engineering)",
+            r"\1(AI Application Engineering)",
             cleaned,
             flags=re.IGNORECASE,
         )
         # If intro erroneously mentions React/frontend for an ML position, replace with ML pitch
         cleaned = re.sub(
             r"developing responsive (?:user )?interfaces in React and scalable backend services using Python[^\n.]*",
-            "building and deploying production AI systems, scalable Python backends, and cloud-based ML pipelines",
+            "building and deploying production AI systems, scalable Python backends, and cloud-deployed AI services",
             cleaned,
             flags=re.IGNORECASE,
         )
-        # Ensure Primary Stack includes core ML keywords
-        def _ensure_ml_stack(m: re.Match) -> str:
-            prefix = m.group(1)
-            stack_text = m.group(2)
-            has_ml = any(k in stack_text.lower() for k in ["pytorch", "langchain", "ml", "learning", "rag", "vector", "tensorflow"])
-            if not has_ml:
-                return f"{prefix}Primary Stack: Python, PyTorch, LangChain, Vector Search, FastAPI, AWS, Docker"
-            return m.group(0)
 
-        cleaned = re.sub(
-            r"([•\-\*]\s*)Primary Stack:\s*([^\n]+)",
-            _ensure_ml_stack,
-            cleaned,
-            flags=re.IGNORECASE,
-        )
+    # Ensure Primary Stack is safe: strip tooling the resume cannot back, and
+    # for ML-titled roles keep at least one real AI/LLM term.
+    cleaned = re.sub(
+        r"([•\-\*]\s*Primary Stack:\s*)([^\n]+)",
+        lambda m: _sanitize_stack_line(m, require_ai=is_ml),
+        cleaned,
+        flags=re.IGNORECASE,
+    )
 
     # 7. Enforce sign-off and portfolio links
     cleaned = fix_signoff(
@@ -541,8 +581,8 @@ class GeminiWriter:
             )
         )
         if ml_track:
-            domain_label = "Machine Learning & AI Engineering"
-            stack_example = "Python, PyTorch, LangChain, Vector Search, FastAPI, AWS, Docker"
+            domain_label = "AI Application Engineering"
+            stack_example = "Python, LangChain, Vector Search, FastAPI, AWS, Docker"
         elif ai_track:
             domain_label = "AI & Backend Development"
             stack_example = "Python, FastAPI, LangChain, RAG, AWS, Docker"
@@ -559,7 +599,7 @@ class GeminiWriter:
                 f'"{role_name}" role at "{company_name or "your company"}".'
             )
             if ml_track:
-                intro_specialty = "building and deploying production AI systems and scalable cloud ML pipelines"
+                intro_specialty = "building and deploying production AI systems and scalable cloud services"
             elif ai_track:
                 intro_specialty = "building scalable Python backends, FastAPI services, and GenAI workflows"
             elif backend_track:
@@ -588,11 +628,11 @@ class GeminiWriter:
             if ml_track:
                 intro_specialty = (
                     "focused on building and deploying production AI systems, scalable Python backends, "
-                    "and cloud-based ML pipelines"
+                    "and cloud-deployed AI services"
                 )
                 extra_role_guidance = (
-                    "CRITICAL: For Machine Learning roles, DO NOT mention React or frontend UI development. "
-                    "Focus strictly on ML systems, Python, PyTorch/LangChain, vector search, and scalable backend/API infrastructure. "
+                    "CRITICAL: For AI-focused roles, DO NOT mention React or frontend UI development. "
+                    "Focus strictly on AI application systems, Python, LangChain, vector search, and scalable backend/API infrastructure. "
                 )
             elif ai_track:
                 intro_specialty = (
@@ -752,7 +792,7 @@ RULES FOR THE WELLFOUND PITCH:
    • Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations using LangChain and FastAPI for low-latency, context-rich responses.
    • Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS, handling asynchronous workloads and database integrations.
    • Fast Delivery: Comfortable owning features end-to-end, from data ingestion and API design to cloud deployment in fast-paced startup environments.
-   (Adapt specific tech names to match their requirements, e.g. FastAPI, LangChain, PyTorch, Django, AWS, Postgres, etc.)
+   (Adapt specific tech names to match their requirements, e.g. FastAPI, LangChain, Django, AWS, Postgres, etc.)
 4. Availability (1 sentence): State you are based in {who.location} and available to join immediately (0-day notice).
 5. Call to Action (1 sentence): Ask if they are open to a quick 10-minute chat this week to discuss how you can contribute to {clean_co or 'the team'}'s product roadmap.
 6. Sign-off:

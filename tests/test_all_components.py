@@ -132,17 +132,23 @@ class TestSpelledOutSeniority(unittest.TestCase):
         cfg = AgentConfig.load()
         for meth in ("get_unified_instahyre_profile",
                      "get_unified_cutshort_profile",
+                     "get_unified_hiringcafe_profile",
                      "get_unified_wellfound_profile"):
             profile = getattr(cfg, meth)()
             engine = FilterEngine(profile.filters_for("recommended"))
-            blocked = engine.evaluate_card(Job(
-                job_id="t", title="ML Engineer", company="C",
-                location="Bengaluru", url="http://test.com", platform="x"))
-            wanted = engine.evaluate_card(Job(
-                job_id="t", title="AI Engineer", company="C",
-                location="Bengaluru", url="http://test.com", platform="x"))
-            self.assertFalse(blocked.passed, meth)
-            self.assertTrue(wanted.passed, meth)
+
+            def decision(title):
+                return engine.evaluate_card(Job(
+                    job_id="t", title=title, company="C",
+                    location="Bengaluru", url="http://test.com", platform="x"))
+
+            for blocked in ("ML Engineer", "Data Scientist",
+                            "Software Engineer- Scala Developer",
+                            "Software Engineer (Sugar CRM)"):
+                self.assertFalse(decision(blocked).passed, f"{meth}: {blocked}")
+            for wanted in ("AI Engineer", "Full Stack Developer",
+                           "Data Engineer", "QA Engineer", "DevOps Engineer"):
+                self.assertTrue(decision(wanted).passed, f"{meth}: {wanted}")
 
 
 class TestRoleHeadCheck(unittest.TestCase):
@@ -160,11 +166,16 @@ class TestRoleHeadCheck(unittest.TestCase):
             self.assertFalse(self._decision(title).passed, title)
 
     def test_breadth_heads_untouched(self):
-        # Breadth policy: analyst heads pass with or without garnish.
-        for title in ["Business Analyst (Python)", "Data Analyst",
-                      "AI Engineer", "AI Engineer (Python, Remote)"]:
+        # Software/AI/analyst-engineering heads pass with or without garnish;
+        # non-technical heads still fail. Data-engineering and analytics titles
+        # are in scope now that the profile covers the Python/SQL data plumbing
+        # this resume can defend (it still excludes BI/warehouse tooling).
+        for title in ["Business Analyst (Python)",
+                      "AI Engineer", "AI Engineer (Python, Remote)",
+                      "Data Analyst", "Analytics Engineer"]:
             decision = self._decision(title)
             self.assertTrue(decision.passed, f"{title}: {decision.reason}")
+        self.assertFalse(self._decision("Business Intelligence Analyst").passed)
 
 
 class TestDetailStageRegate(unittest.TestCase):
@@ -300,12 +311,15 @@ class TestFilterEngine(unittest.TestCase):
             self.assertTrue(passes(title), f"{title} should still pass")
 
     def test_ai_profile_breadth_policy(self):
-        """Product policy: the AI profile is breadth-first for interviews.
+        """Product policy: the AI profile targets AI-application, backend, and
+        every adjacent software family this resume can defend.
 
-        Analyst/support families PASS (Python transfers, details get sorted at
-        interview) and core-ML/GenAI titles PASS too — they are the profile's
-        own subject matter, so excluding them only wasted the daily window.
-        Genuinely unrelated or over-senior tracks stay blocked."""
+        The resume is a Python/FastAPI + Postgres/Redis + Docker/AWS/GitHub
+        Actions engineer with RAG/LLM application work. That supports backend,
+        data-engineering/SQL, QA-automation, DevOps/cloud/platform/SRE and
+        integration/FDE titles, so those are experience-gated inclusions. Core
+        ML (model training, CV, NLP research, MLOps), tool-only BI/warehouse,
+        RPA, support, UX, mobile and foreign stacks stay excluded."""
         engine = FilterEngine(self.ai_profile.filters_for("recommended"))
 
         def passes(title: str) -> bool:
@@ -320,30 +334,53 @@ class TestFilterEngine(unittest.TestCase):
             return engine.evaluate_card(job).passed
 
         for title in [
-            "Data Analyst",
-            "Technical Support Engineer",
-            "Product Support Executive",
-            "Customer Success Engineer",
-            "Machine Learning Engineer",
-            "Senior Machine Learning Engineer",
-            "ML Engineer",
-            "Gen AI Engineer",
-            "LLM Engineer",
-            "NLP Engineer",
-            "Prompt Engineer",
             "AI Engineer",
+            "AI Engineer (Python, Remote)",
+            "GenAI Engineer",
+            "LLM Engineer",
+            "AI Backend Developer",
+            "Python Backend Developer",
             "Python Developer",
+            "Forward Deployed Engineer",
+            # Adjacent families the resume genuinely supports.
+            "QA Engineer",
+            "SDET",
+            "Software Tester",
+            "Test Automation Engineer",
+            "Manual QA Engineer",
             "Data Engineer",
+            "Data Analyst",
+            "Analytics Engineer",
+            "Data Analytics Executive",
+            "DevOps Engineer",
+            "Cloud Engineer",
+            "Platform Engineer",
+            "Site Reliability Engineer",
+            "Platform & Integration Engineer",
+            "Database Developer",
+            "SQL Developer",
         ]:
             self.assertTrue(passes(title), f"{title!r} must pass the AI profile")
 
         for title in [
-            "Data Scientist",
+            "Machine Learning Engineer",
+            "Senior Machine Learning Engineer",
+            "ML Engineer",
+            "ML Developer",
+            "NLP Engineer",
             "Computer Vision Engineer",
+            "Prompt Engineer",
+            "Technical Support Engineer",
+            "Product Support Executive",
+            "Customer Success Engineer",
+            "UX Designer - AI Native",
+            "Research Associate",
+            "RPA Developer",
+            "MLOps Engineer",
+            "Data Scientist",
             "AI Researcher",
             "Research Scientist",
-            "Data Analytics Executive",
-            "RPA Developer",
+            "Business Intelligence Analyst",
             "Associate",
             "Android Developer",
         ]:
@@ -390,30 +427,42 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertFalse(decision.passed, f"{blocked_title} should have been blocked!")
 
-    def test_universal_junior_family_cap(self):
-        """QA/DevOps/support roles above 2y must fail on EVERY profile's rules.
+    def test_adjacent_family_uses_general_experience_gate(self):
+        """QA/DevOps/data roles are experience-gated, not family-capped.
 
-        All platforms share FilterEngine, so the junior-family cap holds
-        everywhere by construction (run 388: Manual QA applied only because
-        its card carried no experience signal, never a rule gap).
+        The candidate has ~3y total software tenure, so a 2-4y adjacent role is
+        a defensible shortlist (recruiter view: Python/SQL/Docker/AWS/CI all
+        transfer). A 6-9y requisition still reads senior and must be rejected by
+        the general gates on every profile — all platforms share FilterEngine,
+        so the behaviour holds by construction.
         """
         for prof in (self.fs_profile, self.ai_profile):
             engine = FilterEngine(prof.filters_for("recommended"))
-            job = Job(
-                job_id="test-junior-cap",
-                title="Manual QA Engineer",
-                company="Test Corp",
-                location="Bengaluru",
-                url="http://test.com",
-                platform="linkedin",
-                min_experience=3.0,
-                max_experience=5.0,
-            )
-            decision = engine.evaluate_card(job)
-            self.assertFalse(
-                decision.passed,
-                f"{prof.name}: Manual QA at 3-5y must be rejected, got {decision.reason}",
-            )
+
+            def decision(title, lo, hi):
+                return engine.evaluate_card(Job(
+                    job_id="test-family-gate",
+                    title=title,
+                    company="Test Corp",
+                    location="Bengaluru",
+                    url="http://test.com",
+                    platform="linkedin",
+                    min_experience=lo,
+                    max_experience=hi,
+                ))
+
+            for title in ("Manual QA Engineer", "DevOps Engineer",
+                          "Data Engineer", "Site Reliability Engineer"):
+                ok = decision(title, 2.0, 4.0)
+                self.assertTrue(
+                    ok.passed,
+                    f"{prof.name}: {title} at 2-4y must pass, got {ok.reason}",
+                )
+                senior = decision(title, 6.0, 9.0)
+                self.assertFalse(
+                    senior.passed,
+                    f"{prof.name}: {title} at 6-9y must be rejected",
+                )
 
     def test_strategist_titles_blocked(self):
         """Strategy/advisory titles are not engineering even with an AI
@@ -707,15 +756,18 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
             decision = self.engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"Job {company} - {title} failed: {decision.reason}")
 
-    def test_unified_profile_rejects_mobile_sre_phd(self):
-        """Unified Instahyre profile must reject Mobile (React Native/Android/iOS/Flutter), pure SRE, and PhD."""
+    def test_unified_profile_rejects_mobile_and_phd(self):
+        """Unified Instahyre profile rejects mobile, foreign stacks, and PhD.
+
+        Site-reliability/DevOps/cloud titles are in scope (Docker/AWS/CI on the
+        resume); `infrastructure engineer` and research roles stay out.
+        """
         forbidden_roles = [
             ("Bhanzu", "App Developer - React Native"),
             ("PhonePe", "Android Developer"),
             ("CRED", "iOS Engineer"),
             ("Groww", "Flutter Developer"),
-            ("Uber", "Site Reliability Engineer"),
-            ("Google", "SRE"),
+            ("Acme", "Infrastructure Engineer"),
             ("Microsoft Research", "PhD Research Scientist"),
         ]
         for company, title in forbidden_roles:
@@ -729,6 +781,20 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
             )
             decision = self.engine.evaluate_card(job)
             self.assertFalse(decision.passed, f"Job {company} - {title} should have been rejected!")
+
+    def test_unified_profile_accepts_adjacent_families(self):
+        for title in ("Site Reliability Engineer", "DevOps Engineer",
+                      "Data Engineer", "QA Engineer"):
+            job = Job(
+                job_id=f"test-adjacent-{title}",
+                title=title,
+                company="Acme",
+                location="Bengaluru",
+                url="https://www.instahyre.com/candidate/opportunities/",
+                platform="instahyre",
+            )
+            decision = self.engine.evaluate_card(job)
+            self.assertTrue(decision.passed, f"{title} should pass: {decision.reason}")
 
 
 class TestHiringCafeUnifiedConfiguration(unittest.TestCase):
@@ -1331,8 +1397,9 @@ class TestGeminiPrompt(unittest.TestCase):
 
     def test_ml_role_prompt_shape(self):
         prompt = self._prompt_text(role_name="Machine Learning Engineer", recipient_name="Mohammed")
-        self.assertIn("Machine Learning & AI Engineering", prompt)
-        self.assertIn("Python, PyTorch, LangChain, Vector Search, FastAPI, AWS, Docker", prompt)
+        self.assertIn("AI Application Engineering", prompt)
+        self.assertIn("Python, LangChain, Vector Search, FastAPI, AWS, Docker", prompt)
+        self.assertNotIn("PyTorch", prompt)
         self.assertIn("DO NOT mention React or frontend UI development", prompt)
         self.assertIn('Salutation: "Hi Mohammed,"', prompt)
 
@@ -1376,8 +1443,9 @@ Best regards,
 Mahesh Chitakoti
 """
         finalized = finalize_email_body(raw, who=who, role_name="Machine Learning Engineer")
-        self.assertIn("Machine Learning & AI Engineering", finalized)
-        self.assertIn("PyTorch", finalized)
+        self.assertIn("AI Application Engineering", finalized)
+        self.assertNotIn("PyTorch", finalized)
+        self.assertNotIn("Machine Learning & AI Engineering", finalized)
         self.assertNotIn("responsive user interfaces in React", finalized)
         self.assertIn("building and deploying production AI systems", finalized)
         self.assertNotIn("maheshchitakoti@gmail.com", finalized)
@@ -1386,6 +1454,41 @@ Mahesh Chitakoti
         self.assertIn("- Contact: +91 9481777227 | maheshrwd042@gmail.com", finalized)
         self.assertIn("GitHub: https://github.com/maheshchichkoti", finalized)
         self.assertIn("LinkedIn: https://www.linkedin.com/in/maheshchitakoti", finalized)
+
+    def test_finalize_email_body_strips_unsupported_ml_claims(self):
+        """Generated copy must never claim model-training tooling the resume lacks."""
+        from naukri_agent.core.gemini_writer import finalize_email_body, applicant_snapshot
+
+        who = applicant_snapshot()
+        raw = """Hi Priya,
+
+I am writing regarding the AI Engineer role.
+
+Candidate Snapshot:
+• Total Experience: 2.5 years (AI Application Engineering)
+• Primary Stack: PyTorch, TensorFlow, MLOps, Python, FastAPI
+• Notice Period: Immediate (0 days)
+
+Best regards,
+Mahesh Chitakoti
+"""
+        finalized = finalize_email_body(raw, who=who, role_name="AI Engineer")
+        self.assertNotIn("PyTorch", finalized)
+        self.assertNotIn("TensorFlow", finalized)
+        self.assertNotIn("MLOps", finalized)
+        self.assertIn("Python", finalized)
+        self.assertIn("FastAPI", finalized)
+
+        # An ML-titled role whose stack is only unsupported tooling falls back
+        # to the known-safe application-AI stack rather than an empty bullet.
+        raw_only_unsupported = raw.replace(
+            "PyTorch, TensorFlow, MLOps, Python, FastAPI",
+            "PyTorch, TensorFlow, MLOps",
+        )
+        fallback = finalize_email_body(raw_only_unsupported, who=who, role_name="ML Engineer")
+        self.assertNotIn("PyTorch", fallback)
+        self.assertIn("LangChain", fallback)
+        self.assertIn("FastAPI", fallback)
 
     def test_ml_subject_and_body_in_mailer(self):
         from naukri_agent.core.mailer import ColdEmailer
@@ -3461,19 +3564,24 @@ class TestSpacedTitleVariants(unittest.TestCase):
         )
 
     def test_spaced_variants_pass_both_profiles(self):
+        shared = ["Front End Developer", "Back End Developer", "Application Developer"]
         for prof in (self.fs_profile, self.ai_profile):
             engine = FilterEngine(prof.filters_for("recommended"))
-            for title in [
-                "Front End Developer",
-                "Back End Developer",
-                "Application Developer",
-                "Database Engineer",
-            ]:
+            for title in shared:
                 decision = engine.evaluate_card(self._job(title))
                 self.assertTrue(
                     decision.passed,
                     f"{prof.name}: {title!r} should pass, got {decision.detail}",
                 )
+
+        # Database/infra titles are in scope on both profiles now: the resume
+        # carries Postgres/Redis/SQL and Docker/AWS, so database engineering is
+        # defensible. `infrastructure engineer` stays excluded as pure infra.
+        fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+        self.assertTrue(fs_engine.evaluate_card(self._job("Database Engineer")).passed)
+        ai_engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        self.assertTrue(ai_engine.evaluate_card(self._job("Database Engineer")).passed)
+        self.assertFalse(ai_engine.evaluate_card(self._job("Infrastructure Engineer")).passed)
 
 
 class TestPhantomSalaryGuard(unittest.TestCase):

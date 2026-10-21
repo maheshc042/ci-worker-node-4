@@ -577,10 +577,12 @@ class FilterRules(_Model):
     # Previously hardcoded in core/filters.py across three gates; override any
     # of these per-profile under `filters:` in config.yaml, e.g.
     # `dedicated_ai_max_years: 3.0`. Unified platform profiles inherit these.
-    # Pure AI/ML & Data roles above this are skipped (recruiter will reject).
+    # Dedicated (non-hybrid) AI/ML titles above this are skipped: the candidate
+    # has ~2y commercial AI work, so a >2y pure AI/ML requisition is a recruiter
+    # reject. Adjacent software families (data engineering, QA, DevOps, cloud,
+    # platform/SRE, database, support) are judged on total software tenure via
+    # the general experience gates instead of a family-specific cap.
     dedicated_ai_max_years: float = Field(default=2.0, ge=0, le=50)
-    # QA / DevOps / support / data-developer family roles above this are skipped.
-    junior_family_max_years: float = Field(default=2.0, ge=0, le=50)
     # Upper end of wide startup bands (e.g. "2-10 years") at or below this is
     # shortlisted; above it the requisition reads senior. Bands starting above
     # the 3.5y general ceiling keep a fixed 6.0y net in the engine.
@@ -1092,14 +1094,21 @@ class AgentConfig(_Model):
             # Pure mobile development (no candidate skills)
             "android", "ios", "react native", "mobile developer", "mobile engineer",
             "flutter", "swift", "kotlin",
-            # Pure SRE / Infra (keep DevOps/Cloud, exclude pure SRE/infra)
-            "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
+            # Infra-only roles stay out; DevOps/Cloud/SRE are in scope.
+            "infrastructure engineer",
             # PhD / Research
             "phd", "ph.d", "research scientist", "ai researcher",
-            # Core ML: applied-AI background burns slots on these (recruiter
-            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
-            # roles stay eligible; only explicit ML titles block.
-            "machine learning", "ml engineer", "ml developer",
+            # Core ML / research / tool-only-data titles: this resume has no
+            # model training, CV, MLOps, or BI/ETL/warehouse history, so these
+            # burn quota on recruiter rejections. AI-application roles stay
+            # eligible; data-engineering, QA, DevOps and SRE titles are in scope
+            # and are deliberately absent from this list.
+            "machine learning", "ml", "ml engineer", "ml developer",
+            "deep learning", "nlp", "computer vision", "prompt engineer",
+            "research associate", "research analyst", "applied scientist",
+            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "scala", "sugar crm", "sugarcrm",
+            "ux designer", "ui designer", "product designer", "graphic designer",
         }
 
         c_skills = [
@@ -1197,13 +1206,20 @@ class AgentConfig(_Model):
             "oracle dba", "content writer", "seo",
             "android", "ios", "react native", "mobile developer", "mobile engineer",
             "flutter", "swift", "kotlin",
-            # Pure SRE / Infra (keep DevOps/Cloud, exclude pure SRE/infra)
-            "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
+            # Infra-only roles stay out; DevOps/Cloud/SRE are in scope.
+            "infrastructure engineer",
             "phd", "ph.d", "research scientist", "ai researcher",
-            # Core ML: applied-AI background burns slots on these (recruiter
-            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
-            # roles stay eligible; only explicit ML titles block.
-            "machine learning", "ml engineer", "ml developer",
+            # Core ML / research / tool-only-data titles: this resume has no
+            # model training, CV, MLOps, or BI/ETL/warehouse history, so these
+            # burn quota on recruiter rejections. AI-application roles stay
+            # eligible; data-engineering, QA, DevOps and SRE titles are in scope
+            # and are deliberately absent from this list.
+            "machine learning", "ml", "ml engineer", "ml developer",
+            "deep learning", "nlp", "computer vision", "prompt engineer",
+            "research associate", "research analyst", "applied scientist",
+            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "scala", "sugar crm", "sugarcrm",
+            "ux designer", "ui designer", "product designer", "graphic designer",
         }
 
         c_skills = [
@@ -1337,6 +1353,17 @@ class AgentConfig(_Model):
                     "trainer", "sales", "presales", "pre-sales", "bpo",
                     "php", "wordpress", ".net", "dotnet", "dot net",
                     "intern", "internship",
+                    # Core ML / research / tool-only-data roles: no resume
+                    # support, so they waste the queue. Data-engineering, QA and
+                    # SRE titles are in scope (see unified profile notes).
+                    "machine learning", "ml", "ml engineer", "ml developer",
+                    "deep learning", "nlp", "computer vision", "prompt engineer",
+                    "research associate", "research analyst", "applied scientist",
+                    "mlops", "mlops engineer", "rpa", "automation anywhere",
+                    "golang", "java",
+                    "android", "ios", "flutter", "swift", "kotlin",
+                    "scala", "sugar crm", "sugarcrm",
+                    "ux designer", "ui designer", "product designer", "graphic designer",
                 ],
                 description_must_exclude_any=[
                     "bpo", "commission only", "unpaid", "registration fee", "security deposit",
@@ -1395,12 +1422,19 @@ class AgentConfig(_Model):
             "oracle dba", "content writer", "seo",
             "android", "ios", "react native", "mobile developer", "mobile engineer",
             "flutter", "swift", "kotlin",
-            "site reliability", "sre", "site reliability engineer", "infrastructure engineer",
+            "infrastructure engineer",
             "phd", "ph.d", "research scientist", "ai researcher",
-            # Core ML: applied-AI background burns slots on these (recruiter
-            # rejects) — mirrors the Naukri AI-profile exclusion. AI-titled
-            # roles stay eligible; only explicit ML titles block.
-            "machine learning", "ml engineer", "ml developer",
+            # Core ML / research / tool-only-data titles: this resume has no
+            # model training, CV, MLOps, or BI/ETL/warehouse history, so these
+            # burn quota on recruiter rejections. AI-application roles stay
+            # eligible; data-engineering, QA, DevOps and SRE titles are in scope
+            # and are deliberately absent from this list.
+            "machine learning", "ml", "ml engineer", "ml developer",
+            "deep learning", "nlp", "computer vision", "prompt engineer",
+            "research associate", "research analyst", "applied scientist",
+            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "scala", "sugar crm", "sugarcrm",
+            "ux designer", "ui designer", "product designer", "graphic designer",
         }
 
         c_skills = [
