@@ -15,7 +15,7 @@ Design decisions
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 
 from ..core.models import ScreeningQuestion
@@ -227,6 +227,16 @@ class ExperienceAnswers:
     default_years: float | None = None
     multi_skill_strategy: str = "max"
     skills: dict[str, float] | None = None
+    # Hybrid skill-absence policy (run 604 fix, user-approved): a screening
+    # question names a skill the resume map does NOT cover. Judge it by
+    # adjacency to the claimed core stack instead of a blanket No:
+    #   - `unclaimed_yes`: tokens that are adjacent to the claimed stack
+    #     (tooling/frames around tech the resume does claim) -> "Yes".
+    #   - `unclaimed_no`: tokens of clearly unrelated specialisations the
+    #     recruiter would cross-check against the resume -> "No".
+    # Anything matching neither list defaults to "No" (safe).
+    unclaimed_yes: list[str] = field(default_factory=list)
+    unclaimed_no: list[str] = field(default_factory=list)
 
     def merged_with(self, override: ExperienceAnswers | None) -> ExperienceAnswers:
         if override is None:
@@ -238,7 +248,30 @@ class ExperienceAnswers:
             default_years=(override.default_years if override.default_years is not None else self.default_years),
             multi_skill_strategy=override.multi_skill_strategy or self.multi_skill_strategy,
             skills=skills,
+            unclaimed_yes=list(self.unclaimed_yes) + list(override.unclaimed_yes),
+            unclaimed_no=list(self.unclaimed_no) + list(override.unclaimed_no),
         )
+
+    def unclaimed_verdict(self, skill_fragment: str) -> str | None:
+        """Classification of an unclaimed skill: "yes", "no", or None (unknown).
+
+        Matching is word-boundary aware on the normalised fragment, plus the
+        reverse containment (claimed-style multiword lists like "web
+        development" should also hit a fragment named "web development
+        services").
+        """
+        low = _normalise(skill_fragment)
+        if not low:
+            return None
+        for needle in self.unclaimed_yes:
+            phrase = _normalise(needle)
+            if phrase and (_contains_word(low, phrase) or _contains_word(phrase, low)):
+                return "yes"
+        for needle in self.unclaimed_no:
+            phrase = _normalise(needle)
+            if phrase and (_contains_word(low, phrase) or _contains_word(phrase, low)):
+                return "no"
+        return None
 
 
 @dataclass(slots=True)
@@ -1169,15 +1202,52 @@ class AnswerEngine:
             return fitted
         return None
 
-    def _resolve_skill_absence(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
-        """"Do you have X experience?" where X is in no skill map.
+    # Framing words that never name the skill itself. If the captured
+    # fragment holds nothing else ("hands-on experience building X"), the
+    # whole question is scanned for claimed skills instead.
+    _SKILL_FILLER = frozenset({
+        "hands", "hand", "on", "relevant", "any", "professional", "working",
+        "building", "developing", "using", "similar", "related", "strong",
+    })
 
-        Answering an honest "No" keeps an otherwise-eligible application
-        alive. Fires only when the named skill shares no token with any
-        configured skill map; known skills keep flowing to the tenure stages.
+    def _skill_tenure_in(self, fragment: str) -> tuple[bool, bool]:
+        """(has_positive, has_zero) for mapped skills named in ``fragment``."""
+        low = _normalise(fragment)
+        if not low:
+            return False, False
+        positive = zero = False
+        for skill, years in (self.experience.skills or {}).items():
+            phrase = _normalise(skill)
+            if not phrase or not _contains_word(low, phrase):
+                continue
+            try:
+                claimed = float(years or 0)
+            except (TypeError, ValueError):
+                continue
+            if claimed > 0:
+                positive = True
+            else:
+                zero = True
+        return positive, zero
+
+    def _resolve_skill_absence(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """"Do you have X experience?" answered from the skill map.
+
+        The answer is derived, never assumed: a skill with claimed tenure ->
+        Yes, an explicit 0 -> No, and a skill the map never mentions is
+        judged HYBRID (user-approved policy): adjacent to the claimed core
+        stack -> Yes; a clearly unrelated specialisation -> No; unmatched ->
+        No. A blanket No on unclaimed-but-adjacent skills (run 604 fix era)
+        wasted apply slots on roles the resume honestly supports.
         """
         m = re.search(
-            r"\b(?:do\s+you\s+have|have\s+you\s+(?:any\s+|got\s+)?)(?:\s+hands[\s-]?on)?\s+(.+?)\s+(?:experience|knowledge|expertise|skills?)\b",
+            r"\b(?:do\s+you\s+have|have\s+you(?:\s+got)?)\b[^?]{0,24}?"
+            r"\b(?:experience|knowledge|expertise|skills?)\s+"
+            r"(?:in|with|of|using)\s+(.+?)\s*\??$",
+            text,
+        ) or re.search(
+            r"\b(?:do\s+you\s+have|have\s+you(?:\s+got)?)\b[^?]{0,24}?"
+            r"\b(.+?)\s+(?:experience|knowledge|expertise|skills?)\b",
             text,
         )
         if not m:
@@ -1185,19 +1255,43 @@ class AnswerEngine:
         skill = (m.group(1) or "").strip()
         if not skill or len(skill) > 40:
             return None
-        known: set[str] = set()
-        for s in (self.experience.skills or {}):
-            known |= _tokenise(s)
-        for entry in self.entries:
-            if "experience" in entry.pattern:
-                known |= set(entry.tokens)
-        # For matched jobs, answer "Yes" to skill experience questions so ATS screening
-        # doesn't auto-reject the application before reaching the recruiter.
-        fitted = self._fit_to_options("Yes", question, f"skill-affirmative:{skill[:40]}", "skill-map")
+
+        frag = " ".join(t for t in _tokenise(skill) if t not in self._SKILL_FILLER)
+        positive, zero = self._skill_tenure_in(frag)
+        if not frag or (not positive and not zero):
+            # The named fragment was only framing ("hands-on experience
+            # building AI agents, RAG pipelines ..."). Judge the question.
+            positive, zero = self._skill_tenure_in(text)
+
+        if positive:
+            fitted = self._fit_to_options("Yes", question, f"skill-claimed:{skill[:40]}", "skill-map")
+            if fitted is not None:
+                log.info("answers.skill_claimed", question=question.text[:120], skill=skill[:40])
+                return fitted
+        label = "skill-zero" if zero else "skill-absent"
+        if not zero:
+            # Unclaimed skill: hybrid adjacency rule decides Yes/No. The
+            # verdict runs on the captured phrase itself — not on the
+            # token-join: `_tokenise` yields an unordered frozenset (plus
+            # stemmed variants), which scrambles multi-word skills and
+            # would miss multi-word list entries ("web technologies").
+            verdict = self.experience.unclaimed_verdict(skill)
+            if verdict == "yes":
+                fitted = self._fit_to_options("Yes", question, f"skill-adjacent:{skill[:40]}", "skill-map")
+                if fitted is not None:
+                    log.info("answers.skill_unclaimed_adjacent", question=question.text[:120],
+                             skill=skill[:40])
+                    return fitted
+                # A "yes" verdict must never degrade to a fitted "No" just
+                # because the form offered no affirmative option yet.
+                log.info("answers.skill_unclaimed_adjacent_unfitted", question=question.text[:120],
+                         skill=skill[:40], options=len(question.options or ()))
+                return None
+        fitted = self._fit_to_options("No", question, f"{label}:{skill[:40]}", "skill-map")
         if fitted is not None:
-            log.info("answers.skill_affirmative", question=question.text[:120], skill=skill[:40])
-            return fitted
-        return None
+            log.info("answers.skill_not_claimed", question=question.text[:120],
+                     skill=skill[:40], reason=label)
+        return fitted
 
     def _fit_to_options(self, answer: str, question: ScreeningQuestion, pattern: str, source: str) -> ResolvedAnswer | None:
         if not question.options:

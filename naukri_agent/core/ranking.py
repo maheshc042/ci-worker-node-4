@@ -78,8 +78,8 @@ class RankingWeights:
     bonus_skill_weight: float = 4.0
 
     # Recruiter Experience Decay Parameters
-    exp_under_decay_lambda: float = 0.7  # Penalty rate when candidate < job min_exp
-    exp_over_decay_lambda: float = 0.3   # Gentle penalty rate when candidate > job max_exp
+    exp_under_decay_lambda: float = 0.7  # Retained (unused): experience is filter-only, no decay
+    exp_over_decay_lambda: float = 0.3   # Retained (unused): experience is filter-only, no decay
 
     # Smooth Decay Parameters
     freshness_decay_lambda: float = 0.35  # Smooth exponential freshness decay
@@ -471,42 +471,32 @@ class RankingEngine:
         return breakdown, reasons
 
     def _score_experience(self, job: Job) -> tuple[float, str]:
+        # Experience-length is a PASS/FILTER gate (filters.py gates 7-9:
+        # min-years ceiling, AI-role ai_cap, fresher-only band), never a
+        # ranking lever. Every role that reaches the ranker survived those
+        # gates, so short-tenure secondary families (the 2y AI/Python track
+        # beside the 3y full-stack track) earn the same experience credit
+        # as longer-tenure requisitions — a junior-friendly band must not
+        # lose to a senior one purely for fitting the shorter profile.
         w = self.weights
         target = float(self.candidate.target_experience_years)
-        if target <= 0:
-            # Tenure target unset (no config value): score neutrally instead
-            # of assuming the candidate's years of experience.
-            return round(w.experience_max * 0.5, 2), "○ Experience target not configured"
         min_e = float(job.min_experience) if job.min_experience is not None else None
         max_e = float(job.max_experience) if job.max_experience is not None else None
 
         if min_e is None and max_e is None:
-            # Completeness discount: stated numbers outrank silence. An
-            # undisclosed band could be perfect — or senior-only — so it
-            # scores below close fits but above proven mismatches. Ordering
-            # only; never a reject.
-            return round(w.experience_max * 0.5, 2), "○ Experience requirements undisclosed"
-
+            return w.experience_max, "✓ Experience gate passed (band undisclosed, filter-only)"
         min_bound = min_e if min_e is not None else 0.0
         max_bound = max_e if max_e is not None else 99.0
 
+        if target <= 0:
+            # No tenure target configured: the gates still ran on band
+            # sanity, so credit is equal, not discounted.
+            return w.experience_max, "✓ Experience gate passed (target unset, filter-only)"
         if min_bound <= target <= max_bound:
-            return w.experience_max, "✓ Experience range perfectly fits role"
-
+            return w.experience_max, "✓ Experience band covers target"
         if target < min_bound:
-            diff = min_bound - target
-            decay = _exponential_decay(diff, w.exp_under_decay_lambda)
-            score = round(w.experience_max * decay, 2)
-            if diff <= 1.0:
-                return score, "✓ Experience closely aligns with minimum requirement"
-            return score, "✓ Below target experience requirement"
-
-        diff = target - max_bound
-        decay = _exponential_decay(diff, w.exp_over_decay_lambda)
-        score = round(w.experience_max * decay, 2)
-        if diff <= 1.5:
-            return score, "✓ Slightly above target experience range"
-        return score, "✓ Overqualified for role experience cap"
+            return w.experience_max, "✓ Below role minimum (inside filter ceiling)"
+        return w.experience_max, "✓ Above role cap (inside filter ceiling)"
 
     def _score_freshness(self, job: Job) -> tuple[float, str]:
         w = self.weights

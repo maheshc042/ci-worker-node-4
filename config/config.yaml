@@ -89,7 +89,7 @@ instahyre:
     - "JavaScript"
     - "LangChain"
     - "LangGraph"
-    - "MLOps"
+    - "Docker"
     - "AWS Bedrock"
     - "API Testing"
     - "Quality Assurance"
@@ -184,8 +184,13 @@ answers:
   "how many years of experience do you have in .net?": "0"
   "experience in angular or react ?": "3"
   "how many years of experience do you have in spring boot?": "0"
-  # Notice Period & Availability
-  serving notice: "Yes"
+  # Notice Period & Availability — already exited (LWD was 30/04/2026), so
+  # "serving notice" is No and the join window is immediate.
+  serving notice: "No"
+  # LWD passed 30/04/2026 — same fact, asked in employment-status wording.
+  # Run 574 originally captured "Yes"; flipped because it contradicted
+  # notice=No + immediate joiner=Yes.
+  "are you currently working": "No"
   immediate joiner: "Yes"
   notice period: "0 days"
   how soon can you join: "0 days"
@@ -233,7 +238,10 @@ answers:
   experience in typescript: "3"
   experience in full stack: "3"
   experience in aws: "3"
-  experience in cloud: "3"
+  # No generic "experience in cloud" entry: it token-matched Google Cloud
+  # Platform questions and returned 3 years, overriding skill_years.gcp (1).
+  # The skill map below answers "cloud" (AWS, 3y) and "gcp"/"google cloud"
+  # (1y) by specificity instead.
   experience in testing: "3"
   experience in software testing: "3"
   experience in sql: "3"
@@ -351,6 +359,11 @@ answers:
   # Both spellings: recruiters type this one wrong at least as often as not.
   need special accommodation for interview: "No"
   need specifal accomodation for interview: "No"
+
+  # Run 603 #334 (Full Stack profile): "Are you from a Product-Based
+  # Organisation?" — user confirmed Yes on 2026-10-22. Global so every
+  # profile answers it, not just the AI profile that already carried it.
+  "are you from a product-based organisation": "Yes"
 
   # Reason for Change
   reason for job change: "Looking for better technical growth, challenging engineering problems, and career advancement."
@@ -563,8 +576,10 @@ experience:
     emerging technologies: 3
     cloud services: 3
     cloud platforms: 3
-    azure: 3
-    microsoft azure: 3
+    azure: 1
+    microsoft azure: 1
+    gcp: 1
+    google cloud: 1
     unix: 3
     linux: 3
     data structures: 3
@@ -574,6 +589,197 @@ experience:
     aws: 3
     aml: 0
     fircosoft: 0
+    # --- Resume-backed skills that were missing from this map ------------
+    # Without these, "years in Redis?" fell through to the unlisted default
+    # (1) even though the resume claims Postgres/Redis and CI/CD delivery.
+    redis: 3
+    ci/cd: 3
+    cicd: 3
+    github actions: 3
+    pytest: 3
+    playwright: 3
+    qdrant: 2
+    pgvector: 2
+    gemini: 2
+    google gemini: 2
+    # --- Technologies the resume does NOT support: explicit 0 ------------
+    # A true 0 protects the candidate when a recruiter cross-checks the
+    # resume. These are per-key zeros, NOT a blanket change to default_years;
+    # adjacent tools stay unlisted and keep the calibrated 1y default.
+    kubernetes: 0
+    k8s: 0
+    terraform: 0
+    ansible: 0
+    jenkins: 0
+    kafka: 0
+    rabbitmq: 0
+    spark: 0
+    apache spark: 0
+    hadoop: 0
+    snowflake: 0
+    databricks: 0
+    tableau: 0
+    power bi: 0
+    salesforce: 0
+    sap: 0
+    uipath: 0
+    blue prism: 0
+    power automate: 0
+    rpa: 0
+    selenium: 0
+
+  # --- Hybrid unclaimed-skill policy (user-approved) ------------------------
+  # When a screening question names a skill that is NOT in `skills` above and
+  # NOT covered by any framing claim, the answer is judged by adjacency:
+  #   yes-list  -> answer "Yes": adjacent to the claimed core stack (tools
+  #                sitting immediately around tech the resume does claim).
+  #   no-list   -> answer "No": a separate specialisation the resume cannot
+  #                support and a recruiter would cross-check.
+  #   neither   -> answer "No" (default, safe).
+  # Skills with explicit 0s above never consult these lists — a truthful
+  # zero stays a truthful zero. Keep both lists conservative: a Yes here
+  # must survive the recruiter opening the resume.
+  unclaimed_yes:
+    # Web/full-stack orbit around the claimed MERN stack.
+    - "web development"
+    - "web application development"
+    - "web technologies"
+    - "web design"
+    - "responsive design"
+    - "es6"
+    - "npm"
+    - "yarn"
+    - "redux"
+    - "vitest"
+    - "svelte"
+    - "tailwind css"
+    - "bootstrap"
+    - "material ui"
+    # Python orbit around the claimed AI/app track.
+    - "python programming"
+    - "pandas"
+    - "numpy"
+    - "flask"
+    - "pip"
+    - "virtualenv"
+    - "celery"
+    - "pydantic"
+    - "scikit"
+    - "nltk"
+    - "spaCy"
+    # Infrastructure / delivery orbit around claimed AWS, Docker, CI/CD.
+    - "aws lambda"
+    - "aws s3"
+    - "s3"
+    - "lambda"
+    - "ec2"
+    - "serverless"
+    - "gitlab"
+    - "gitlab ci"
+    - "bitbucket"
+    - "bash"
+    - "shell scripting"
+    - "nginx"
+    - "heroku"
+    - "vercel"
+    - "netlify"
+    # Data-store orbit around claimed Postgres/Mongo/Redis/SQL.
+    - "mysql"
+    - "sql server"
+    - "sqlite"
+    - "elasticsearch"
+    - "dynamo"
+    # AI-app orbit around claimed RAG/LangChain/OpenAI/Gemini/vector stores.
+    - "chatbot development"
+    - "conversational ai development"
+    - "prompt"
+    - "function calling"
+    - "tools calling"
+    - "retrieval augmented"
+    - "semantic search"
+    - "openai api"
+    - "anthropic"
+    - "claude"
+    - "groq"
+    - "perplexity"
+    - "ollama"
+    - "chroma"
+    - "milvus"
+    - "weaviate"
+    - "faiss"
+    - "pinecone"
+    - "llama"
+    - "hugging face api"
+    - "api integration"
+    - "websocket"
+    - "real time communication"
+  unclaimed_no:
+    # Separate language ecosystems (Java kept 0 in the map; unlisted kin here).
+    - "j2ee"
+    - "struts"
+    - "jsf"
+    - "php"
+    - "laravel"
+    - "codeigniter"
+    - "symfony"
+    - "ruby"
+    - "rails"
+    - "perl"
+    - "matlab"
+    - "rust"
+    # Mobile native ecosystems (the claimed stack is web).
+    - "android"
+    - "kotlin"
+    - "ios"
+    - "swift"
+    - "flutter"
+    - "dart"
+    - "react native"
+    - "xamarin"
+    # Embedded / hardware / mechanical domains.
+    - "embedded"
+    - "microcontroller"
+    - "vlsi"
+    - "iot"
+    - "firmware"
+    - "hardware"
+    - "mechanical"
+    - "autocad"
+    - "solidworks"
+    - "civil"
+    - "architectural"
+    # Training-heavy ML / CV specialisations the resume never claims.
+    - "computer vision"
+    - "opencv"
+    - "cnn"
+    - "rnn"
+    - "gan"
+    - "reinforcement learning"
+    - "data science"
+    - "data mining"
+    - "big data"
+    - "statistical modeling"
+    - "sas"
+    - "stata"
+    # ERP / enterprise suites.
+    - "sap"
+    - "oracle erp"
+    - "salesforce administrator"
+    - "dynamics"
+    # Legacy / niche stacks.
+    - "mainframe"
+    - "cobol"
+    - "blockchain"
+    - "solidity"
+    - "game development"
+    - "unity"
+    - "unreal"
+    # BI/reporting tools (kept 0 in the map; unlisted kin here).
+    - "qlik"
+    - "looker"
+    - "superset"
+    - "metabase"
+    - "grafana"
 
 # ---------------------------------------------------------------------------
 # Centralized candidate profile — single source of truth for ALL platforms.
@@ -668,12 +874,12 @@ profiles:
 
     # Condensed to Top 14 so math allows a high score
     core_skills: ["react", "node", "javascript", "typescript", "python", "fastapi", "django", "frontend", "backend", "full stack", "mern", "ui", "aws", "docker", "nextjs"]
-    secondary_skills: ["api", "rest", "graphql", "postgresql", "mongodb", "redis", "database", "gcp", "azure", "kubernetes", "ci/cd", "microservices", "html", "css", "tailwind", "qa", "automation", "selenium"]
+    secondary_skills: ["api", "rest", "graphql", "postgresql", "mongodb", "redis", "database", "ci/cd", "microservices", "html", "css", "tailwind", "qa", "automation", "selenium"]
     bonus_skills: ["testing", "pytest", "jest", "playwright", "cypress", "git", "github", "jira", "agile", "scrum", "code review", "debugging"]
 
     filters:
-      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, qa, automation, sdet, tester, software tester, qa engineer, quality assurance, quality engineer, test engineer, manual testing, automation testing, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability, sre, quality analyst, test automation, automation engineer, data engineer, data analyst, analytics engineer, data analytics, data developer, web engineer, js developer, api developer, rest api, microservices, microservice, saas developer, ui developer, ui engineer, startup engineer, programmer, test analyst, cloud developer, aws engineer, platform developer, reliability engineer, build engineer, release engineer, deployment engineer, ci/cd, postgres, postgresql, sql engineer, database programmer, fastapi, flask, django]
-      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist]
+      title_must_include_any: [full stack, fullstack, mern, mean, mean stack, react, reactjs, node, nodejs, nextjs, javascript, typescript, frontend, backend, mongodb, web developer, website developer, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, software development engineer in test, backend developer, backend engineer, frontend developer, frontend engineer, front end, back end, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, automation, sdet, automation testing, qa automation, next, cloud engineer, devops, devops engineer, platform engineer, database developer, database engineer, sql developer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, technical support, technical support engineer, support engineer, product support, application support, desktop support, site reliability, sre, test automation, automation engineer, data engineer, data analyst, analytics engineer, data analytics, data developer, web engineer, js developer, api developer, rest api, microservices, microservice, saas developer, ui developer, ui engineer, startup engineer, programmer, cloud developer, aws engineer, platform developer, reliability engineer, build engineer, release engineer, deployment engineer, ci/cd, postgres, postgresql, sql engineer, database programmer, fastapi, flask, django]
+      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
@@ -691,6 +897,10 @@ profiles:
       skip_walkin: true
 
     answers:
+      # Run 602 #333: Naukri's location multi-select. A bare "Bengaluru" was
+      # rejected by the widget; the user picked "Anywhere in India" from its
+      # own option list on 2026-10-22, so the value mirrors that option.
+      "which of these locations are you willing to relocate to?": "Anywhere in India"
       relevant experience: "3"
       total experience: "3"
       proficiency in python, typescript: "Proficient in Python and TypeScript with 3 years of commercial experience building web applications and APIs."
@@ -741,12 +951,12 @@ profiles:
 
     # Condensed to Top 15 so math allows a high score
     core_skills: ["python", "fastapi", "django", "ai", "artificial intelligence", "generative ai", "genai", "llm", "rag", "langchain", "langgraph", "openai", "chatbot", "embeddings", "vector database"]
-    secondary_skills: ["react", "node", "javascript", "typescript", "frontend", "backend", "api", "rest", "postgresql", "mongodb", "aws", "docker", "kubernetes", "qdrant", "pgvector", "pydantic", "pinecone", "chromadb", "semantic retrieval", "hybrid search", "agent", "claude", "gemini"]
+    secondary_skills: ["react", "node", "javascript", "typescript", "frontend", "backend", "api", "rest", "postgresql", "mongodb", "aws", "docker", "qdrant", "pgvector", "pydantic", "pinecone", "chromadb", "semantic retrieval", "hybrid search", "agent", "claude", "gemini"]
     bonus_skills: ["testing", "pytest", "jest", "git", "github", "jira", "agile", "scrum", "debugging"]
 
     filters:
-      title_must_include_any: [ai, artificial intelligence, llm, genai, generative ai, chatbot, prompt, ai agent, llm agent, agentic, rag, python, django, mongodb, python developer, ai engineer, ai software engineer, genai engineer, generative ai engineer, llm engineer, ai application engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, qa, qa engineer, quality assurance, quality analyst, quality engineer, test engineer, software tester, tester, sdet, software development engineer in test, test automation engineer, manual testing, automation testing, test automation, automation engineer, devops, devops engineer, cloud engineer, platform engineer, site reliability, sre, site reliability engineer, database developer, database engineer, sql developer, data engineer, data analyst, analytics engineer, data analytics, data developer, fastapi, flask, api developer, rest api, microservices, microservice, sql engineer, postgres, postgresql, cloud developer, platform developer, reliability engineer, aws engineer, test analyst]
-      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher, automation anywhere, rpa, machine learning, ml, ml developer, deep learning, nlp, computer vision, prompt engineer, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, ux, designer, scala, sugar crm, sugarcrm]
+      title_must_include_any: [ai, artificial intelligence, llm, genai, generative ai, chatbot, prompt, ai agent, llm agent, agentic, rag, python, django, mongodb, python developer, ai engineer, ai software engineer, genai engineer, generative ai engineer, llm engineer, ai application engineer, full stack ai engineer, backend engineer, backend developer, front end, back end, full stack, fullstack, mern, mean, mean stack, web developer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, founding engineer, product engineer, software craftsperson, software craftsman, software engineer, software developer, software development engineer, software development engineer 1, software development engineer 2, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer, application engineer, application developer, associate engineer, associate software engineer, associate developer, technical associate, junior engineer, fresher, test engineer, sdet, software development engineer in test, test automation engineer, automation testing, test automation, automation engineer, automation tester, qa automation, playwright, devops, devops engineer, cloud engineer, platform engineer, site reliability, sre, site reliability engineer, database developer, database engineer, sql developer, data engineer, data analyst, analytics engineer, data analytics, data developer, fastapi, flask, api developer, rest api, microservices, microservice, sql engineer, postgres, postgresql, cloud developer, platform developer, reliability engineer, aws engineer]
+      title_must_exclude_any: [lead, principal, staff, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, ai researcher, automation anywhere, rpa, uipath, ui path, blue prism, blueprism, power automate, flexcube, machine learning, ml, ml developer, deep learning, nlp, computer vision, prompt engineer, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, ux, designer, scala, sugar crm, sugarcrm]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
@@ -766,6 +976,9 @@ profiles:
     # Honest split: 3 years total, 2 specifically in AI/Python.
     # Recruiters cross-check these against the resume, so they must match it.
     answers:
+      # Run 602 #333: same location multi-select as the Full Stack profile —
+      # "Bengaluru" was rejected by the widget, user chose "Anywhere in India".
+      "which of these locations are you willing to relocate to?": "Anywhere in India"
       total experience: "3"
       relevant experience: "2"
       experience in ai: "2"
@@ -840,8 +1053,11 @@ profiles:
       "have you personally worked with ci/cd pipelines": "Yes"
       # Run 572 #118: IaC (Terraform/CloudFormation/CDK) — not on resume.
       "have you used infrastructure as code": "No"
-      # Run 574 #128: currently employed.
-      "are you currently working": "Yes"
+      # Run 574 #128: employment status. LWD passed 30/04/2026, notice = No,
+      # immediate joiner = Yes — so "currently working" is No. The old "Yes"
+      # contradicted the availability block and was captured before that
+      # became the agreed story.
+      "are you currently working": "No"
       # Run 574 #129: Agentic AI architecture.
       "have you designed, architected agentic ai systems": "Yes"
       # Run 574 #130: product-based organisation — user confirmed Yes.
@@ -855,7 +1071,8 @@ profiles:
       # Run 577 #171: immediate joiner (typo variant).
       "are your a immediate joiner": "Yes"
       "are you a immediate joiner": "Yes"
-      # Run 577 #172: serving notice (garbled "30 or serving" = 30-day notice).
+      # Run 577 #172: garbled "are you serving notice" wording. LWD has
+      # already passed (30/04/2026), so the candidate is not serving notice.
       "are you a 30 or serving": "No"
       "are you serving 30": "No"
       # Run 587/590 (#261-#267) and run 590 (#288-#290): long-form LinkedIn

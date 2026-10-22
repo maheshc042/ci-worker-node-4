@@ -626,6 +626,13 @@ class ExperienceConfig(_Model):
     default_years: float | None = Field(default=None, ge=0, le=50)
     multi_skill_strategy: str = "max"
     skills: dict[str, float] = Field(default_factory=dict)
+    # Hybrid unclaimed-skill policy (adjacency lists, see answers.py):
+    # token lists judged against screening questions naming skills the map
+    # never mentions. "Yes" = adjacent to the claimed stack; "No" = clearly
+    # unrelated specialisation the resume cannot support; anything else
+    # defaults to "No".
+    unclaimed_yes: list[str] = Field(default_factory=list)
+    unclaimed_no: list[str] = Field(default_factory=list)
 
     @field_validator("multi_skill_strategy")
     @classmethod
@@ -659,6 +666,8 @@ class ExperienceConfig(_Model):
             default_years=self.default_years,
             multi_skill_strategy=self.multi_skill_strategy,
             skills=dict(self.skills),
+            unclaimed_yes=list(self.unclaimed_yes),
+            unclaimed_no=list(self.unclaimed_no),
         )
 
 
@@ -1106,7 +1115,7 @@ class AgentConfig(_Model):
             "machine learning", "ml", "ml engineer", "ml developer",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
-            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
             "scala", "sugar crm", "sugarcrm",
             "ux designer", "ui designer", "product designer", "graphic designer",
         }
@@ -1217,7 +1226,7 @@ class AgentConfig(_Model):
             "machine learning", "ml", "ml engineer", "ml developer",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
-            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
             "scala", "sugar crm", "sugarcrm",
             "ux designer", "ui designer", "product designer", "graphic designer",
         }
@@ -1359,7 +1368,7 @@ class AgentConfig(_Model):
                     "machine learning", "ml", "ml engineer", "ml developer",
                     "deep learning", "nlp", "computer vision", "prompt engineer",
                     "research associate", "research analyst", "applied scientist",
-                    "mlops", "mlops engineer", "rpa", "automation anywhere",
+                    "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
                     "golang", "java",
                     "android", "ios", "flutter", "swift", "kotlin",
                     "scala", "sugar crm", "sugarcrm",
@@ -1432,7 +1441,7 @@ class AgentConfig(_Model):
             "machine learning", "ml", "ml engineer", "ml developer",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
-            "mlops", "mlops engineer", "rpa", "automation anywhere",
+            "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
             "scala", "sugar crm", "sugarcrm",
             "ux designer", "ui designer", "product designer", "graphic designer",
         }

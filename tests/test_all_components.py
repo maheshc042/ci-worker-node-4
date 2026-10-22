@@ -147,7 +147,8 @@ class TestSpelledOutSeniority(unittest.TestCase):
                             "Software Engineer (Sugar CRM)"):
                 self.assertFalse(decision(blocked).passed, f"{meth}: {blocked}")
             for wanted in ("AI Engineer", "Full Stack Developer",
-                           "Data Engineer", "QA Engineer", "DevOps Engineer"):
+                           "Data Engineer", "QA Automation Engineer",
+                           "DevOps Engineer"):
                 self.assertTrue(decision(wanted).passed, f"{meth}: {wanted}")
 
 
@@ -264,7 +265,7 @@ class TestFilterEngine(unittest.TestCase):
             "Software Development Engineer 1",
             "Software Development Engineer 2",
             "Software Development Engineer in Test",
-            "Quality Engineer",
+            "QA Automation Engineer",
             "Implementation Engineer",
         ]:
 
@@ -342,12 +343,13 @@ class TestFilterEngine(unittest.TestCase):
             "Python Backend Developer",
             "Python Developer",
             "Forward Deployed Engineer",
-            # Adjacent families the resume genuinely supports.
-            "QA Engineer",
+            # Adjacent families the resume genuinely supports. QA is limited
+            # to automation: manual-QA titles are not backed by the resume
+            # (pytest/Playwright/Selenium only).
+            "QA Automation Engineer",
             "SDET",
-            "Software Tester",
+            "Automation Test Engineer",
             "Test Automation Engineer",
-            "Manual QA Engineer",
             "Data Engineer",
             "Data Analyst",
             "Analytics Engineer",
@@ -451,7 +453,7 @@ class TestFilterEngine(unittest.TestCase):
                     max_experience=hi,
                 ))
 
-            for title in ("Manual QA Engineer", "DevOps Engineer",
+            for title in ("QA Automation Engineer", "DevOps Engineer",
                           "Data Engineer", "Site Reliability Engineer"):
                 ok = decision(title, 2.0, 4.0)
                 self.assertTrue(
@@ -685,7 +687,7 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
         expected_skills = [
             "SDET", "Python", "Node.js", "React.js", "TypeScript",
             "FastAPI", "Next.js", "Generative AI", "JavaScript",
-            "LangChain", "LangGraph", "MLOps", "AWS Bedrock",
+            "LangChain", "LangGraph", "Docker", "AWS Bedrock",
             "API Testing", "Quality Assurance",
         ]
         self.assertEqual(self.cfg.instahyre.skills, expected_skills)
@@ -784,7 +786,7 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
 
     def test_unified_profile_accepts_adjacent_families(self):
         for title in ("Site Reliability Engineer", "DevOps Engineer",
-                      "Data Engineer", "QA Engineer"):
+                      "Data Engineer", "QA Automation Engineer"):
             job = Job(
                 job_id=f"test-adjacent-{title}",
                 title=title,
@@ -2878,6 +2880,108 @@ class TestRun569Unanswered(unittest.TestCase):
         self.assertEqual(_fit_field_length("no limit", None), "no limit")
 
 
+class TestUnclaimedSkillPolicy(unittest.TestCase):
+    """Run-604 era: blanket No for every unclaimed skill wasted apply
+    slots on roles the resume honestly supports. Hybrid policy
+    (user-approved): an adjacent instrument of the claimed stack answers
+    Yes, a clearly unrelated specialisation answers No, and anything the
+    lists do not name defaults to No. An explicit 0 in the map keeps
+    precedence over both lists — a truthful zero stays a truthful zero."""
+
+    def _ea(self, **kw):
+        from naukri_agent.core.answers import ExperienceAnswers
+
+        base = dict(
+            skills={"python": 2.5, "react": 2.0},
+            unclaimed_yes=["playwright", "web development", "web technologies"],
+            unclaimed_no=["java", "spring"],
+        )
+        base.update(kw)
+        return ExperienceAnswers(**base)
+
+    # --- pure verdict table -------------------------------------------------
+
+    def test_verdict_adjacent_is_yes(self):
+        self.assertEqual(self._ea().unclaimed_verdict("Playwright automation"), "yes")
+
+    def test_verdict_unrelated_is_no(self):
+        self.assertEqual(self._ea().unclaimed_verdict("Core Java servlets"), "no")
+
+    def test_verdict_unmatched_is_none(self):
+        self.assertIsNone(self._ea().unclaimed_verdict("Knitting"))
+
+    def test_verdict_reverse_containment(self):
+        # List phrase may be broader than the question's terminology.
+        self.assertEqual(self._ea().unclaimed_verdict("web development services"), "yes")
+
+    def test_verdict_empty_fragment_is_none(self):
+        self.assertIsNone(self._ea().unclaimed_verdict("   "))
+
+    # --- end-to-end answer derivation ---------------------------------------
+
+    def _eng(self, **kw):
+        from naukri_agent.core.answers import AnswerEngine
+
+        return AnswerEngine(kb=[], profile_answers={}, strict=True,
+                            experience=self._ea(**kw))
+
+    def test_engine_adjacent_named_yes(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Do you have experience with Playwright automation?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "Yes")
+        self.assertIn("skill-adjacent", r.matched_pattern)
+
+    def test_engine_unrelated_named_no(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Do you have experience with Core Java servlets?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+        self.assertIn("skill-absent", r.matched_pattern)
+
+    def test_engine_unmatched_defaults_no(self):
+        # Neither list names it: the safe default (No) must hold.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Do you have experience with knitting?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+        self.assertIn("skill-absent", r.matched_pattern)
+
+    def test_engine_yes_verdict_without_yes_option_falls_through(self):
+        # A "yes" verdict must never degrade to a fitted "No" just because
+        # the form did not offer an affirmative option yet — leave it
+        # unresolved (later heuristics/question-family logic get a chance).
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Do you have experience with web technologies?",
+            kind="radio", options=["No", "Maybe"]))
+        self.assertIsNone(r)
+
+    def test_engine_explicit_zero_beats_adjacency_list(self):
+        # "java: 0" stays a truthful zero even if someone also put java on
+        # the adjacency yes-list.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng(skills={"python": 2.5, "react": 2.0, "java": 0.0},
+                      unclaimed_yes=["playwright", "java"],
+                      unclaimed_no=[]).resolve(ScreeningQuestion(
+            text="Do you have experience with Java?",
+            kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+        self.assertIn("skill-zero", r.matched_pattern)
+
+
 class TestLinkedInFieldGuards(unittest.TestCase):
     """Q#40: typo'd/singular numeric labels fell through to the 140-char
     generic bio and died on maxlength validation."""
@@ -3447,11 +3551,18 @@ class TestCompletenessDiscount(unittest.TestCase):
         base.update(kw)
         return Job(**base)
 
-    def test_unknown_exp_below_close_fit(self):
+    def test_experience_is_filter_only_full_credit(self):
+        """User-approved decision (2026-10): experience band may act as a
+        FILTER, never a rank penalty — "2y applies to many roles like
+        Claude AI etc; less exp alone doesn't mean it should rank less".
+        A close stated band, a non-covering stated band, and an
+        undisclosed band all earn identical full credit."""
         eng = self._ranker()
         stated, _ = eng._score_experience(self._job(min_experience=2.0, max_experience=4.0))
+        below, _ = eng._score_experience(self._job(min_experience=0.5, max_experience=1.5))
         unknown, reason = eng._score_experience(self._job())
-        self.assertLess(unknown, stated)
+        self.assertEqual(unknown, stated)
+        self.assertEqual(below, stated)
         self.assertIn("undisclosed", reason)
 
     def test_unknown_date_below_dated(self):
