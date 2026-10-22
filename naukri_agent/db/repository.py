@@ -312,6 +312,10 @@ class Repository:
         salary_text: str = "",
     ) -> None:
         """Record a per-job audit trail entry (best-effort, never raises)."""
+        # `platform` is part of the upsert key. Normalise here so a caller
+        # passing "Naukri" and another passing "naukri" can never create two
+        # rows for the same job.
+        platform = str(platform).lower()
         try:
             await self.pool.execute(
                 _AUDIT_UPSERT_SQL,
@@ -331,6 +335,8 @@ class Repository:
         """Batch-record audit rows in one round-trip (best-effort, never raises)."""
         if not rows:
             return
+        # Same upsert-key normalisation as `record_audit`.
+        platform = str(platform).lower()
         try:
             await self.pool.executemany(
                 _AUDIT_UPSERT_SQL,

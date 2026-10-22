@@ -171,6 +171,13 @@ answers:
   "how many years of experience do you have as agentic ai ?": "2"
   "to proceed with the further steps, please fill out the form.(mandatory):https://forms.gle/5eezfamwmpj2epz29": "Yes -Filled the form"
   "how many years of ai backend developer?": "2"
+  # PranaTree (#311-315) — grounded in profile: 2 yrs AI, production GenAI/RAG
+  # agents in LangChain/LangGraph on FastAPI, deployed on AWS (EC2/S3 + Docker).
+  "how many years of hands-on experience do you have in ai/ml, generative ai, or ai engineering?": "2"
+  "do you have hands-on experience building and deploying production-grade ai/genai applications?": "Yes"
+  "do you have hands-on experience with llms, rag, or agentic ai frameworks?": "Yes"
+  "do you have hands-on experience deploying ai applications on aws?": "Yes"
+  "are you comfortable working directly with customers to understand requirements and deploy customized ai solutions?": "Yes"
   "are you comfortable attending interviews in person on weekdays?": "Yes"
   "how many years of experience do you have in .net core?": "0"
   "how many years of experience do you have in html, css, javascript?": "3"

@@ -3851,6 +3851,7 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
         orch.account_key = "primary"
         orch.repo = MagicMock()
         orch.repo.record_outcome = AsyncMock()
+        orch.repo.record_audit = AsyncMock()
         return orch
 
     @staticmethod
@@ -3901,6 +3902,35 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
             orch.stats.filtered_out + orch.stats.plan_rejected + orch.stats.considered,
         )
 
+    async def test_card_rejection_writes_audit_row(self):
+        """Every job that reaches the apply loop must leave a `run_audits`
+        row, even when it is rejected before `_record`.
+
+        Run 593 had application row `reco-050826036146` (status=skipped,
+        filter_title) with no matching audit row, because the card-level
+        reject path called `record_outcome` and returned."""
+        from naukri_agent.core.models import Job
+
+        orch = self._orchestrator()
+        job = Job(job_id="j5", title="Data Scientist", company="Acme", url="u")
+
+        await orch._process_job(
+            job,
+            self._profile(),
+            self._rejecting_filters(),
+            self._platform(),
+            page=None,
+            artifacts=MagicMock(),
+        )
+
+        orch.repo.record_audit.assert_awaited_once()
+        kwargs = orch.repo.record_audit.await_args.kwargs
+        self.assertEqual(kwargs["run_id"], 1)
+        self.assertEqual(kwargs["job_id"], "j5")
+        self.assertEqual(kwargs["platform"], "naukri")
+        self.assertEqual(kwargs["outcome"], "skipped")
+        self.assertEqual(kwargs["filter_reason"], "filter_title")
+
     async def test_retry_pass_does_not_double_count(self):
         from naukri_agent.core.models import Job
 
@@ -3914,6 +3944,71 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
             self._platform(),
             page=None,
             artifacts=MagicMock(),
+            count_metrics=False,
+        )
+
+        self.assertEqual(orch.stats.filtered_out, 0)
+        self.assertEqual(orch.stats.considered, 0)
+
+    async def test_detail_stage_skip_moves_bucket_not_double_counts(self):
+        """A job the planner queued (bumped `considered`) that is then rejected
+        by `pre_submit_check` must move to `filtered_out`, never sit in both
+        buckets. Run 592 booked 164 naukri jobs against 162 scraped — exactly
+        the 2 `filter_experience` detail-stage skips."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job, SkipReason
+
+        orch = self._orchestrator()
+        orch.repo.record_audit = AsyncMock()
+        orch.settings = SimpleNamespace(matched_outreach_enabled=False)
+        orch._background_tasks = set()
+        profile = "Full Stack / Web Developer"
+
+        orch.stats.bump(profile, "scraped", 1)
+        orch.stats.bump(profile, "considered", 1, platform="naukri")
+
+        await orch._record(
+            Job(job_id="j3", title="Quality Engineer / SDET", company="Side", url="u"),
+            self._profile(),
+            ApplyOutcome(
+                status=ApplicationStatus.SKIPPED,
+                reason=SkipReason.FILTER_EXPERIENCE,
+                detail="requires 6 years, candidate has 3",
+            ),
+            "naukri",
+        )
+
+        self.assertEqual(orch.stats.filtered_out, 1)
+        self.assertEqual(orch.stats.considered, 0)
+        self.assertEqual(
+            orch.stats.scraped,
+            orch.stats.filtered_out + orch.stats.plan_rejected + orch.stats.considered,
+        )
+
+    async def test_retry_detail_skip_touches_no_bucket(self):
+        """Retry passes never booked `considered`, so a detail-stage skip there
+        must not create a phantom `filtered_out` either."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job, SkipReason
+
+        orch = self._orchestrator()
+        orch.repo.record_audit = AsyncMock()
+        orch.settings = SimpleNamespace(matched_outreach_enabled=False)
+        orch._background_tasks = set()
+
+        await orch._record(
+            Job(job_id="j4", title="SDET", company="Acme", url="u"),
+            self._profile(),
+            ApplyOutcome(
+                status=ApplicationStatus.SKIPPED,
+                reason=SkipReason.FILTER_EXPERIENCE,
+                detail="band",
+            ),
+            "naukri",
             count_metrics=False,
         )
 
@@ -3950,6 +4045,86 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
         orch.stats.bump(profile, "filtered_out", 2, platform="naukri")
         self.assertEqual(orch._accounted_jobs("NAUKRI"), 3)
         self.assertEqual(orch._accounted_jobs("linkedin"), 0)
+
+    async def test_dead_feed_retry_exports_outcomes(self):
+        """A retry that submits on a dead-feed path must reach the run CSV.
+
+        The empty-feed early returns sit before Step 3, so they never build
+        the exporter or call Step 7. Without `_retry_and_export` the
+        application would exist in Postgres and in `stats.applied` but be
+        missing from `applied_jobs.csv`."""
+        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job
+
+        orch = self._orchestrator()
+        job = Job(job_id="j9", title="Python Developer", company="Acme", url="u")
+        outcome = ApplyOutcome(status=ApplicationStatus.APPLIED)
+        exporter = MagicMock()
+
+        async def _retry(profile, platform, filters, page, artifacts, applied, failed):
+            applied.append((job, outcome))
+            return 1
+
+        orch._retry_needs_review = _retry
+
+        await orch._retry_and_export(
+            self._profile(), self._platform(), page=None,
+            artifacts=MagicMock(), exporter=exporter,
+        )
+
+        exporter.export_outcome_reports.assert_called_once_with(
+            [(job, outcome)], [],
+            profile_name="Full Stack / Web Developer",
+            platform="naukri",
+        )
+
+    async def test_dead_feed_retry_without_outcomes_writes_no_csv(self):
+        """An empty retry pass must not overwrite the profile's CSV with
+        empty content."""
+        orch = self._orchestrator()
+        exporter = MagicMock()
+
+        async def _retry(profile, platform, filters, page, artifacts, applied, failed):
+            return 0
+
+        orch._retry_needs_review = _retry
+
+        await orch._retry_and_export(
+            self._profile(), self._platform(), page=None,
+            artifacts=MagicMock(), exporter=exporter,
+        )
+
+        exporter.export_outcome_reports.assert_not_called()
+
+
+class TestAuditPlatformNormalisation(unittest.IsolatedAsyncioTestCase):
+    """`platform` is part of the audit upsert key, so mixed case must never
+    create a second row for the same job."""
+
+    async def test_record_audit_lowercases_platform(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        await Repository(pool).record_audit(run_id=1, job_id="j1", platform="Naukri")
+
+        # args = (sql, run_id, job_id, platform, ...)
+        self.assertEqual(pool.execute.await_args.args[3], "naukri")
+
+    async def test_record_audits_lowercases_platform_for_every_row(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        await Repository(pool).record_audits(
+            run_id=1,
+            platform="NAUKRI",
+            rows=[{"job_id": "j1"}, {"job_id": "j2"}],
+        )
+
+        sent = pool.executemany.await_args.args[1]
+        self.assertEqual([row[2] for row in sent], ["naukri", "naukri"])
 
 
 if __name__ == "__main__":

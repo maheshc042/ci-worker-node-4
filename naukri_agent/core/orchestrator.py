@@ -1088,6 +1088,10 @@ class Orchestrator:
             platform=platform.platform_name,
         )
 
+        # Built up-front, not at Step 3, so the dead-feed early returns below
+        # can still export any application made by the review-retry pass.
+        exporter = ReportExporter(PROJECT_ROOT / "analysis", run_id=self.run_id)
+
         known = await self.repo.known_job_ids(
             profile.name,
             self.config.run.dedupe_window_days,
@@ -1121,6 +1125,7 @@ class Orchestrator:
 
         if not collected_jobs:
             log.info("search.jobs_empty", profile=profile.name, platform=platform.platform_name)
+            await self._retry_and_export(profile, platform, page, artifacts, exporter)
             return
 
         # Record every scraped job for the audit log (DB, one batched insert).
@@ -1173,6 +1178,7 @@ class Orchestrator:
 
         if not collected_jobs:
             log.info("search.jobs_empty_after_dedupe", profile=profile.name, platform=platform.platform_name)
+            await self._retry_and_export(profile, platform, page, artifacts, exporter)
             return
 
         # =========================================================
@@ -1216,6 +1222,7 @@ class Orchestrator:
 
         if not collected_jobs:
             log.info("search.jobs_empty_after_strikes", profile=profile.name, platform=platform.platform_name)
+            await self._retry_and_export(profile, platform, page, artifacts, exporter)
             return
 
         # Universal seniority imputation: only LinkedIn imputes at scrape, so
@@ -1296,6 +1303,8 @@ class Orchestrator:
             collected_jobs = api_filtered_jobs
 
             if not collected_jobs:
+                log.info("search.jobs_empty_after_match_score", profile=profile.name, platform=platform.platform_name)
+                await self._retry_and_export(profile, platform, page, artifacts, exporter)
                 return
         # =========================================================
 
@@ -1357,8 +1366,6 @@ class Orchestrator:
         # Step 3: Export Plan CSV Reports & Enriched Summary
         profile_start_time = time.monotonic()
         t_exp_0 = time.perf_counter()
-        analysis_dir = PROJECT_ROOT / "analysis"
-        exporter = ReportExporter(analysis_dir, run_id=self.run_id)
         exporter.export_plan_reports(plan, collected_jobs, profile_name=profile.name, platform=platform.platform_name)
         self.metrics.reporting_s += time.perf_counter() - t_exp_0
 
@@ -1544,63 +1551,10 @@ class Orchestrator:
         # this pass re-processes them deterministically instead of hoping.
         # Bounded (5 freshest, caps + pacing identical to the main loop) so
         # it can never eat the run; skipped entirely without side effects.
-        if remaining() > 0 and self.policy.may_mutate:
-            assert self.repo is not None
-            try:
-                retry_jobs = await self.repo.needs_review_retries(
-                    profile.name,
-                    platform.platform_name,
-                    self.account_key,
-                    window_days=self.config.run.dedupe_window_days,
-                    limit=5,
-                )
-            except Exception as exc:
-                log.warning("profile.retry_fetch_failed", error=str(exc)[:150])
-                retry_jobs = []
-            if retry_jobs:
-                log.info("profile.review_retry_start", count=len(retry_jobs), profile=profile.name)
-            for job in retry_jobs:
-                try:
-                    self._check_global_limits()
-                    self._check_platform_limits(platform.platform_name)
-                except _CapReached:
-                    break
-                if remaining() <= 0:
-                    break
-                company_key = _normalize_company(job.company)
-                title_key = _normalize_title(job.title)
-                if self._company_applied.get(company_key, 0) >= self.config.run.max_applications_per_company_per_day:
-                    continue
-                if (company_key, title_key) in self._seen_company_title:
-                    continue
-                self._seen_company_title.add((company_key, title_key))
-                try:
-                    outcome = await self._process_job(
-                        job, profile, filters, platform, page, artifacts,
-                        count_metrics=False,
-                    )
-                except (FatalAgentError, StopRun):
-                    raise
-                except Exception as exc:
-                    log.exception("job.retry_unhandled_error", job_id=job.job_id, error=str(exc))
-                    continue
-                if outcome.reason == SkipReason.CLOUDFLARE_CHALLENGE:
-                    assert self.repo is not None
-                    await self.repo.pause_platform(
-                        self.account_key,
-                        platform.platform_name,
-                        (outcome.detail or "Cloudflare challenge wall")[:500],
-                    )
-                    raise StopRun(f"cloudflare wall on {platform.platform_name} — platform paused")
-                if outcome.status == ApplicationStatus.APPLIED:
-                    applied_this_profile += 1
-                    self.applied_today += 1
-                    self._profile_applied[profile.name] = applied_this_profile
-                    self._company_applied[_normalize_company(job.company)] = self._company_applied.get(_normalize_company(job.company), 0) + 1
-                    applied_outcomes.append((job, outcome))
-                    await self._pace()
-                else:
-                    failed_outcomes.append((job, outcome))
+        applied_this_profile += await self._retry_needs_review(
+            profile, platform, filters, page, artifacts,
+            applied_outcomes, failed_outcomes,
+        )
 
         # Step 7: Export Outcome Reports & Enriched Summary JSON
         duration = time.monotonic() - profile_start_time
@@ -1617,6 +1571,139 @@ class Orchestrator:
         )
         self.metrics.reporting_s += time.perf_counter() - t_exp_out_0
         log.info("profile.done", profile=profile.name, applied=applied_this_profile)
+
+    # ------------------------------------------------------------------ retry
+    async def _retry_needs_review(
+        self,
+        profile: JobProfile,
+        platform: BaseJobPlatform,
+        filters: FilterEngine | None,
+        page,
+        artifacts: ArtifactStore,
+        applied_outcomes: list[tuple[Job, ApplyOutcome]],
+        failed_outcomes: list[tuple[Job, ApplyOutcome]],
+    ) -> int:
+        """Re-process jobs stranded on needs_review whose blockers are answered.
+
+        Deliberately independent of the feed: on a quiet day every scraped card
+        is a cross-platform duplicate, and the dedupe early-return used to skip
+        this pass entirely (run 595: 8 jobs scraped, all duplicates, 0
+        retries). Reviews already answered by a human must not wait for a new
+        posting to appear.
+
+        Bounded (5 freshest, the same caps/pacing as the main loop) so it can
+        never eat the run. Returns the number applied; the caller folds that
+        into its local counter because its ``remaining()`` closes over it.
+        """
+        if not self.policy.may_mutate:
+            return 0
+        assert self.repo is not None
+
+        platform_limit = profile.platform_limits.get(
+            platform.platform_name, profile.max_applications_per_run
+        )
+
+        def remaining() -> int:
+            applied = self._profile_applied.get(profile.name, 0)
+            return min(
+                platform_limit - applied,
+                self.config.run.daily_application_cap - self.applied_today,
+            )
+
+        if remaining() <= 0:
+            return 0
+
+        try:
+            retry_jobs = await self.repo.needs_review_retries(
+                profile.name,
+                platform.platform_name,
+                self.account_key,
+                window_days=self.config.run.dedupe_window_days,
+                limit=5,
+            )
+        except Exception as exc:
+            log.warning("profile.retry_fetch_failed", error=str(exc)[:150])
+            return 0
+        if not retry_jobs:
+            return 0
+
+        if filters is None:
+            filters = FilterEngine(
+                profile.filters_for("recommended"),
+                candidate=profile.to_candidate_profile(self.config),
+            )
+
+        log.info("profile.review_retry_start", count=len(retry_jobs), profile=profile.name)
+        applied = 0
+        for job in retry_jobs:
+            try:
+                self._check_global_limits()
+                self._check_platform_limits(platform.platform_name)
+            except _CapReached:
+                break
+            if remaining() <= 0:
+                break
+            company_key = _normalize_company(job.company)
+            title_key = _normalize_title(job.title)
+            if self._company_applied.get(company_key, 0) >= self.config.run.max_applications_per_company_per_day:
+                continue
+            if (company_key, title_key) in self._seen_company_title:
+                continue
+            self._seen_company_title.add((company_key, title_key))
+            try:
+                outcome = await self._process_job(
+                    job, profile, filters, platform, page, artifacts,
+                    count_metrics=False,
+                )
+            except (FatalAgentError, StopRun):
+                raise
+            except Exception as exc:
+                log.exception("job.retry_unhandled_error", job_id=job.job_id, error=str(exc))
+                continue
+            if outcome.reason == SkipReason.CLOUDFLARE_CHALLENGE:
+                await self.repo.pause_platform(
+                    self.account_key,
+                    platform.platform_name,
+                    (outcome.detail or "Cloudflare challenge wall")[:500],
+                )
+                raise StopRun(f"cloudflare wall on {platform.platform_name} — platform paused")
+            if outcome.status == ApplicationStatus.APPLIED:
+                applied += 1
+                self.applied_today += 1
+                self._profile_applied[profile.name] = self._profile_applied.get(profile.name, 0) + 1
+                self._company_applied[company_key] = self._company_applied.get(company_key, 0) + 1
+                applied_outcomes.append((job, outcome))
+                await self._pace()
+            else:
+                failed_outcomes.append((job, outcome))
+        return applied
+
+    async def _retry_and_export(
+        self,
+        profile: JobProfile,
+        platform: BaseJobPlatform,
+        page,
+        artifacts: ArtifactStore,
+        exporter: ReportExporter,
+    ) -> None:
+        """Retry stranded reviews on a dead-feed path, then export the results.
+
+        The early returns before Step 3 never reach Step 7, so without this a
+        retried submission would land in Postgres and in ``stats.applied`` but
+        be missing from the run's ``applied_jobs.csv``.
+        """
+        applied: list[tuple[Job, ApplyOutcome]] = []
+        failed: list[tuple[Job, ApplyOutcome]] = []
+        await self._retry_needs_review(
+            profile, platform, None, page, artifacts, applied, failed
+        )
+        if applied or failed:
+            exporter.export_outcome_reports(
+                applied,
+                failed,
+                profile_name=profile.name,
+                platform=platform.platform_name,
+            )
 
     # ------------------------------------------------------------------- job
     async def _process_job(
@@ -1663,6 +1750,22 @@ class Orchestrator:
                     reason=decision.reason.value if decision.reason else "?",
                     detail=decision.detail,
                 )
+            # Card-level rejects bypass `_record` (they must not touch the
+            # considered bucket), so the audit row has to be written here.
+            # Without it a job that entered the apply loop could leave an
+            # `applications` row and no `run_audits` row at all (run 593:
+            # reco-050826036146, filter_title).
+            await self.repo.record_audit(
+                run_id=self.run_id,
+                job_id=job.job_id,
+                platform=str(platform.platform_name).lower(),
+                title=job.title or "",
+                company=job.company or "",
+                outcome="skipped",
+                filter_reason=decision.reason.value if decision.reason else "filtered_out",
+                detail=(decision.detail or "")[:200],
+                rank_score=rank_score,
+            )
             await self.repo.record_outcome(
                 job,
                 profile.name,
@@ -1735,7 +1838,14 @@ class Orchestrator:
 
         # NOTE: per-job timings are recorded once inside ApplyEngine.apply();
         # a second totals-only row here doubled every applied job in the report.
-        await self._record(job, profile, outcome, platform.platform_name, rank_score=rank_score)
+        await self._record(
+            job,
+            profile,
+            outcome,
+            platform.platform_name,
+            rank_score=rank_score,
+            count_metrics=count_metrics,
+        )
         return outcome
 
     def _accounted_jobs(self, platform_name: str) -> int:
@@ -1781,6 +1891,8 @@ class Orchestrator:
         outcome: ApplyOutcome,
         platform: str,
         rank_score: float | None = None,
+        *,
+        count_metrics: bool = True,
     ) -> None:
         assert self.repo is not None
 
@@ -1945,7 +2057,17 @@ class Orchestrator:
             # Post-fetch skips (stale cards, company cap, repost collapse,
             # detail-stage filter fails): bucketed by platform so no outcome
             # is ever invisible in per-platform stats (run 362 gap).
-            self.stats.bump(profile.name, "filtered_out", platform=platform_name)
+            #
+            # The job was already booked as `considered` before it entered the
+            # apply engine, so MOVE the bucket instead of adding a second one.
+            # Adding both made the run identity overshoot by one per
+            # detail-stage reject (run 592: naukri 164 accounted vs 162
+            # scraped, exactly the 2 `filter_experience` skips). Retry passes
+            # (`count_metrics=False`) never booked either bucket, so they must
+            # not bump one here.
+            if count_metrics:
+                self.stats.bump(profile.name, "considered", -1, platform=platform_name)
+                self.stats.bump(profile.name, "filtered_out", platform=platform_name)
             await self.repo.record_audit(
                 run_id=self.run_id,
                 job_id=job.job_id,
