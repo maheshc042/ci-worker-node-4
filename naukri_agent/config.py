@@ -417,6 +417,17 @@ class RunConfig(_Model):
     daily_application_cap: int = Field(default=60, ge=1, le=500)
     dedupe_window_days: int = Field(default=90, ge=1, le=3_650)
     max_consecutive_failures: int = Field(default=5, ge=1, le=100)
+    # Session-level breaker, tighter than max_consecutive_failures: repeated
+    # "Apply dialog never opened" dead clicks (run 605: 8 x ~80s SLA each)
+    # mean the browser session is wedged, not that these specific jobs are
+    # bad. Two dead clicks trip the platform for the rest of the run.
+    max_dialog_open_failures: int = Field(default=2, ge=1, le=50)
+    # A job that FAILED is still eligible for a later retry (known_job_ids
+    # excludes failed rows) — but re-offering it on the SAME day wastes
+    # apply slots when the failure is durable (dead click, missing marker).
+    # Failed rows younger than this many hours also count as known.
+    # 0 restores the old behaviour (failed jobs immediately re-eligible).
+    failed_retry_cooldown_hours: int = Field(default=12, ge=0, le=168)
     min_delay_between_applies_s: float = Field(default=8, ge=0)
     max_delay_between_applies_s: float = Field(default=25, ge=0)
     max_retries_per_job: int = Field(default=2, ge=1, le=5)

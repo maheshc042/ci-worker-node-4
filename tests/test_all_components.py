@@ -454,7 +454,7 @@ class TestFilterEngine(unittest.TestCase):
                 ))
 
             for title in ("QA Automation Engineer", "DevOps Engineer",
-                          "Data Engineer", "Site Reliability Engineer"):
+                          "Site Reliability Engineer"):
                 ok = decision(title, 2.0, 4.0)
                 self.assertTrue(
                     ok.passed,
@@ -464,6 +464,28 @@ class TestFilterEngine(unittest.TestCase):
                 self.assertFalse(
                     senior.passed,
                     f"{prof.name}: {title} at 6-9y must be rejected",
+                )
+
+            # 2026-10-23 profile division: data-family titles map to the AI /
+            # Python profile only. The Full-Stack profile rejects them by
+            # title; the AI profile experience-gates them like any adjacent
+            # family (2-4y shortlists, 6-9y senior rejects).
+            if "AI" in prof.name:
+                ok = decision("Data Engineer", 2.0, 4.0)
+                self.assertTrue(
+                    ok.passed,
+                    f"{prof.name}: Data Engineer at 2-4y must pass, got {ok.reason}",
+                )
+                self.assertFalse(
+                    decision("Data Engineer", 6.0, 9.0).passed,
+                    f"{prof.name}: Data Engineer at 6-9y must be rejected",
+                )
+            else:
+                ok = decision("Data Engineer", 2.0, 4.0)
+                self.assertFalse(
+                    ok.passed,
+                    f"{prof.name}: Data Engineer is AI-profile-only and must be "
+                    f"title-rejected, got {ok.reason}",
                 )
 
     def test_strategist_titles_blocked(self):
@@ -687,7 +709,7 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
         expected_skills = [
             "SDET", "Python", "Node.js", "React.js", "TypeScript",
             "FastAPI", "Next.js", "Generative AI", "JavaScript",
-            "LangChain", "LangGraph", "Docker", "AWS Bedrock",
+            "LangChain", "LangGraph", "PostgreSQL", "AWS Bedrock",
             "API Testing", "Quality Assurance",
         ]
         self.assertEqual(self.cfg.instahyre.skills, expected_skills)
@@ -1681,7 +1703,7 @@ class TestLateDrawerRecovery(unittest.IsolatedAsyncioTestCase):
              patch.object(engine, "_verify_post_submit", new=AsyncMock(return_value="unknown")):
             outcome = await engine._submit(self._job(), "P", 1, MagicMock())
         self.assertEqual(outcome.status, ApplicationStatus.FAILED)
-        self.assertIn("No success confirmation", outcome.detail)
+        self.assertIn("Apply dialog never opened", outcome.detail)
 
     async def test_handler_maps_unanswered_and_unfit(self):
         from unittest.mock import AsyncMock, MagicMock
@@ -1898,7 +1920,10 @@ class TestReviewRetryQuery(unittest.IsolatedAsyncioTestCase):
 
         sql = pool.fetch.await_args.args[0]
         self.assertIn("a.attempts < $4", sql)
-        self.assertEqual(pool.fetch.await_args.args[-1], 3)
+        args = pool.fetch.await_args.args
+        self.assertEqual(args[-2], 3)
+        # New trailing param from the failed-cooldown work: default 0 hours.
+        self.assertEqual(args[-1], 0)
 
 
 class TestResumeGate(unittest.IsolatedAsyncioTestCase):
@@ -2570,7 +2595,7 @@ class TestVerifiedClick(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clickbtn.click.await_count, 1)
         self.assertEqual(freshbtn.click.await_count, 1)
         self.assertEqual(outcome.status, ApplicationStatus.FAILED)
-        self.assertIn("No success confirmation", outcome.detail)
+        self.assertIn("Apply dialog never opened", outcome.detail)
 
 
 class TestContractionFit(unittest.TestCase):
@@ -4236,6 +4261,168 @@ class TestAuditPlatformNormalisation(unittest.IsolatedAsyncioTestCase):
 
         sent = pool.executemany.await_args.args[1]
         self.assertEqual([row[2] for row in sent], ["naukri", "naukri"])
+
+
+class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
+    """Run 605 diagnostics -> fixes:
+
+    A. Cross-account exact-ID dedupe: harvested Job objects carried a garbage
+       company ("Company rating 3.9" from the reco rating badge), which broke
+       the fuzzy company ratio for 4 jobs already applied by the OTHER Naukri
+       account.
+    B. Reco card parser must never emit a rating badge as the company name.
+    C. Dead-click deadringer: "Apply dialog never opened" failures must trip a
+       tighter session breaker than the generic 5-failure streak.
+    D. Failed jobs from the SAME day must not be re-offered immediately.
+    """
+
+    async def test_cross_dedupe_exact_job_id_beats_garbage_company(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import Job
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[{
+            "job_id": "reco-191026018627",
+            "company": "Softobiz",
+            "title": "Senior QA Automation Engineer",
+            "platform": "naukri",
+            "profile": "ai_python",
+            "status": "applied",
+        }])
+        repo = Repository(pool)
+
+        job = Job(
+            job_id="reco-191026018627",
+            title="Senior QA Automation Engineer",
+            company="Company rating 3.9",  # garbage from the reco badge
+            url="https://www.naukri.com/job-listings-191026018627",
+        )
+        out = await repo.filter_cross_platform_duplicates([job], 90, account="primary", profile="fs")
+        self.assertEqual(out, [], "exact same reco id must block even with a garbage company")
+
+        sql = pool.fetch.await_args.args[0]
+        self.assertIn("a.job_id,", sql, "must select a.job_id for exact-ID matching")
+
+    async def test_cross_dedupe_garbage_company_never_fuzzy_blocks_unrelated(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import Job
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[{
+            "job_id": "reco-222",
+            "company": "company rating 3.9",
+            "title": "Senior QA Automation Engineer",
+            "platform": "naukri",
+            "profile": "ai_python",
+            "status": "applied",
+        }])
+        repo = Repository(pool)
+
+        job = Job(
+            job_id="reco-111",
+            title="Senior QA Automation Engineer",
+            company="Company rating 4.2",
+            url="https://www.naukri.com/job-listings-0000111",
+        )
+        out = await repo.filter_cross_platform_duplicates([job], 90, account="primary", profile="fs")
+        self.assertEqual(out, [job], "different reco id + unreadable companies must never fuzzy-block")
+
+    async def test_cross_dedupe_still_fuzzy_blocks_clean_pair(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import Job
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[{
+            "job_id": "reco-222",
+            "company": "Softobiz Technologies",
+            "title": "Senior QA Automation Engineer",
+            "platform": "naukri",
+            "profile": "ai_python",
+            "status": "applied",
+        }])
+        repo = Repository(pool)
+
+        job = Job(
+            job_id="reco-111",
+            title="Senior QA automation engineer",
+            company="Softobiz Technologies",
+            url="https://www.naukri.com/job-listings-0000111",
+        )
+        out = await repo.filter_cross_platform_duplicates([job], 90, account="primary", profile="fs")
+        self.assertEqual(out, [], "clean fuzzy pair must still be blocked")
+
+    async def test_known_job_ids_failed_cooldown_clause(self):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(return_value=[])
+        repo = Repository(pool)
+
+        await repo.known_job_ids("fs", 30, "primary", "naukri",
+                                 max_attempts=3, failed_cooldown_hours=12)
+
+        sql = pool.fetch.await_args.args[0]
+        self.assertIn("OR a.created_at > now() - ($5 || ' hours')::interval", sql)
+        self.assertNotIn("WHERE a.status <> 'failed'", sql.split("AND (")[0])
+        args = pool.fetch.await_args.args
+        self.assertEqual(args[-1], 12, "cooldown hours must be bound as $5")
+
+        # Default (no explicit cooldown) preserves old behaviour: 0 hours.
+        pool.fetch = AsyncMock(return_value=[])
+        await repo.known_job_ids("fs", 30, "primary", "naukri")
+        self.assertEqual(pool.fetch.await_args.args[-1], 0)
+
+    def test_dialog_open_streak_trips_platform_breaker(self):
+        from types import SimpleNamespace
+
+        import time
+
+        from naukri_agent.core.orchestrator import Orchestrator, StopRun
+
+        def orch(streak):
+            o = Orchestrator.__new__(Orchestrator)
+            o.started_at = time.monotonic()
+            o.platform_time_budget_s = 0
+            o.platform_started_at = 0
+            o.platform_dialog_open_streak = streak
+            o.platform_consecutive_failures = streak  # below generic breaker
+            o.config = SimpleNamespace(run=SimpleNamespace(
+                run_timeout_minutes=90,
+                max_dialog_open_failures=2,
+                max_consecutive_failures=5,
+            ))
+            return o
+
+        with self.assertRaises(StopRun) as cm:
+            orch(2)._check_platform_limits("naukri")
+        self.assertIn("dialog never opened", str(cm.exception))
+
+        # One dead click alone must not stop the platform.
+        orch(1)._check_platform_limits("naukri")
+
+    def test_run_config_dialog_and_cooldown_defaults(self):
+        from naukri_agent.config import RunConfig
+
+        rc = RunConfig()
+        self.assertEqual(rc.max_dialog_open_failures, 2)
+        self.assertEqual(rc.failed_retry_cooldown_hours, 12)
+
+    def test_clean_company_text_rejects_rating_badge(self):
+        from naukri_agent.naukri.search import clean_company_text
+
+        self.assertEqual(clean_company_text("Company rating 3.9"), "")
+        self.assertEqual(clean_company_text("company rating 4.1"), "")
+        self.assertEqual(clean_company_text(" Softobiz "), "Softobiz")
+        self.assertEqual(clean_company_text(None), "")
+        self.assertEqual(clean_company_text("Rating granted 3.9"), "Rating granted 3.9")
 
 
 if __name__ == "__main__":

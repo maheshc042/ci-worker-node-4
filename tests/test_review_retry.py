@@ -61,6 +61,7 @@ def _orch(
             daily_application_cap=80,
             dedupe_window_days=90,
             max_applications_per_company_per_day=3,
+            failed_retry_cooldown_hours=12,
         )
     )
     orch.repo = _Repo(retries)
@@ -197,6 +198,7 @@ class TestEmptyFeedStillRetries:
             daily_application_cap=80,
             dedupe_window_days=90,
             max_applications_per_company_per_day=3,
+            failed_retry_cooldown_hours=12,
         )
         orch.retry_args = []
 

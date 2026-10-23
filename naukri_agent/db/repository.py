@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import socket
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
@@ -62,6 +63,13 @@ ON CONFLICT (run_id, job_id, platform) DO UPDATE SET
     experience_text = COALESCE(NULLIF(EXCLUDED.experience_text, ''), run_audits.experience_text),
     salary_text  = COALESCE(NULLIF(EXCLUDED.salary_text, ''), run_audits.salary_text)
 """
+
+# A reco card's rating badge ("Company rating 3.9") was once harvested as the
+# company name. The extractor now filters it (search.clean_company_text), but
+# historical DB rows may still carry it, and two such strings share a high
+# SequenceMatcher ratio — so either side matching this pattern must void the
+# fuzzy dedupe comparison, never drive it.
+_RATING_GARBAGE = re.compile(r"company\s*rating\s*[\d.]*", re.IGNORECASE)
 
 
 class Repository:
@@ -435,6 +443,7 @@ class Repository:
         account: str = "primary",
         platform: str = "naukri",
         max_attempts: int = MAX_NEEDS_REVIEW_ATTEMPTS,
+        failed_cooldown_hours: int = 0,
     ) -> set[str]:
         """Jobs already decided for this account and platform inside the window.
 
@@ -444,16 +453,26 @@ class Repository:
         already burned ``max_attempts`` is structurally stuck, and repeatedly
         re-surfacing in the feed must not keep spending apply budget on it
         (run 590 retried six LinkedIn jobs 8-9 times this way).
+
+        A ``failed`` job is normally re-offered on the next run — that is the
+        retry channel. But re-offering it on the SAME day wastes applies when
+        the failure is durable (run 602 -> run 605: the same dead-click jobs
+        re-attempted three times within hours). ``failed_cooldown_hours``
+        keeps failed rows inside the known set until they are that old;
+        0 keeps the old behaviour (failed rows immediately re-eligible).
         """
         try:
             rows = await self._fetch_with_retry(
                 """
                 SELECT a.job_id
                   FROM applications a
-                 WHERE a.status <> 'failed'
-                   AND a.platform = $2
+                 WHERE a.platform = $2
                    AND a.account = $3
                    AND a.created_at > now() - ($1 || ' days')::interval
+                   AND (
+                        a.status <> 'failed'
+                        OR a.created_at > now() - ($5 || ' hours')::interval
+                   )
                    AND NOT (
                          a.status = 'needs_review'
                      AND a.attempts < $4
@@ -469,6 +488,7 @@ class Repository:
                 platform,
                 account,
                 max_attempts,
+                failed_cooldown_hours,
             )
             return {row["job_id"] for row in rows}
         except Exception as exc:
@@ -607,7 +627,7 @@ class Repository:
         try:
             rows = await self._fetch_with_retry(
                 """
-                SELECT j.job_id, j.company, j.title, a.platform, a.profile, a.status
+                SELECT a.job_id, j.company, j.title, a.platform, a.profile, a.status
                   FROM applications a
                   JOIN jobs j ON j.job_id = a.job_id AND j.platform = a.platform
                  WHERE a.status IN ('applied', 'needs_review', 'external', 'already_applied')
@@ -623,27 +643,43 @@ class Repository:
         for row in rows:
             company = str(row["company"] or "").strip().lower()
             title = str(row["title"] or "").strip().lower()
-            if company and title:
-                recent.append((company, title, row["platform"],
-                               row["profile"], row["status"]))
+            recent.append((row["job_id"], company, title, row["platform"],
+                           row["profile"], row["status"]))
 
         def is_duplicate(job: Job) -> bool:
             j_company = str(job.company or "").strip().lower()
             j_title = str(job.title or "").strip().lower()
-            if not j_company or not j_title:
-                return False
 
-            for c_company, c_title, _prev_platform, row_profile, row_status in recent:
+            for r_job_id, c_company, c_title, _prev_platform, row_profile, row_status in recent:
                 # No same-platform exemption: known_job_ids is account-scoped,
-                # so only the fuzzy match sees same-platform cross-account
-                # pairs (primary applied X + secondary evaluating X). Exact
-                # same-ID pairs match here at ratio 1.0.
+                # so only this match sees same-platform cross-account pairs
+                # (primary applied X + secondary evaluating X).
+
+                # Another profile's stuck job: this profile's KB may
+                # resolve what the other could not — attempt, don't block
+                # (carve-out applies to exact-ID and fuzzy alike).
                 if row_status == "needs_review" and profile is not None \
                         and (row_profile or "") != profile:
-                    # Another profile's stuck job: this profile's KB may
-                    # resolve what the other could not — attempt, don't block.
                     continue
-                # Fuzzy match: same company (high similarity) and similar title
+
+                # Exact same job_id -> duplicate regardless of stored
+                # company/title text. Naukri reco ids (`reco-*`) are stable
+                # across accounts, and run 605 leaked 4 cross-account dupes
+                # because the harvested Job object carried a garbage company
+                # ("Company rating 3.9") that broke the fuzzy ratios — the
+                # DB row was clean, the in-memory object was not. Same
+                # recruiter posting, same human: block it.
+                if job.job_id == r_job_id:
+                    return True
+
+                # Fuzzy match needs readable text on BOTH sides; a garbage
+                # or empty side must never fuzzy-block (falls back above).
+                if not (j_company and j_title and c_company and c_title):
+                    continue
+                # Also void on rating-badge garbage — two such strings are
+                # near-identical to SequenceMatcher and would falsely block.
+                if _RATING_GARBAGE.fullmatch(j_company) or _RATING_GARBAGE.fullmatch(c_company):
+                    continue
                 comp_ratio = SequenceMatcher(None, j_company, c_company).ratio()
                 title_ratio = SequenceMatcher(None, j_title, c_title).ratio()
                 if comp_ratio > 0.85 and title_ratio > 0.8:

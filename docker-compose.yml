@@ -36,7 +36,10 @@ x-agent-base: &agent-base
     - ./config:/app/config:ro
     - ./resumes:/app/resumes:ro
     - agent-artifacts:/app/artifacts
-    - agent-logs:/app/logs
+    # Bind-mount the host logs dir so container runs land in the same
+    # logs/agent.log the CLI writes on the host. (Previously agent-logs:,
+    # a named volume that silently hid every container run from the host log.)
+    - ./logs:/app/logs
   # Chromium crashes with the default 64 MB /dev/shm.
   shm_size: "1gb"
   # Chromium spawns many short-lived processes; without a reaper they zombie.
@@ -72,4 +75,6 @@ services:
 
 volumes:
   agent-artifacts:
+  # agent-logs kept declared so existing volumes survive `docker compose up`,
+  # but no service mounts it any more (switched to ./logs bind mount).
   agent-logs:

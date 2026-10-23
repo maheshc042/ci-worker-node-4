@@ -574,7 +574,8 @@ class ApplyEngine:
         # untouched (same text, still enabled, same URL, no popup/drawer).
         # Double-submit risk is nil: a fired submit always disturbs something.
         await asyncio.sleep(2.5)
-        if not await self._submit_effect_seen(pre_click_state):
+        click_had_effect = await self._submit_effect_seen(pre_click_state)
+        if not click_had_effect:
             log.info("naukri.apply.no_click_effect_reclicking", job_id=job.job_id)
             try:
                 fresh = await first_visible(self.page, ["button#apply-button", *S.JD_APPLY_BUTTON], timeout_ms=4_000)
@@ -587,6 +588,7 @@ class ApplyEngine:
                         except Exception:
                             pass
                     await asyncio.sleep(2.5)
+                    click_had_effect = await self._submit_effect_seen(pre_click_state)
             except Exception:
                 pass
         jt.click_s += time.perf_counter() - t_click_0
@@ -684,6 +686,25 @@ class ApplyEngine:
                 status=ApplicationStatus.ALREADY_APPLIED,
                 reason=SkipReason.ALREADY_APPLIED,
                 detail="Already applied marker observed after submission check",
+                attempts=attempts,
+            )
+
+        # Dialog-never-opened short-circuit (run 605: 8 jobs x ~80s SLA each
+        # before the 5-streak breaker stopped the platform). If BOTH clicks
+        # provably had zero page effect (button text/enabled/URL untouched,
+        # no popup, no drawer) and no drawer exists now, the submit never
+        # fired — the verify-pass reload cannot find anything. Fail fast
+        # with a distinctive session-level detail; the orchestrator's
+        # dialog-open streak breaker trips on 2 of these instead of 5
+        # generic failures. This is a session defect, not a bad job.
+        if not click_had_effect and not await self._fast_check(S.CHATBOT_DRAWER):
+            shot = await self.artifacts.capture_failure(
+                self.page, "dialog-never-opened", profile, job.job_id
+            )
+            return ApplyOutcome(
+                status=ApplicationStatus.FAILED,
+                detail="Apply dialog never opened (click had no page effect)",
+                screenshot_path=shot,
                 attempts=attempts,
             )
 

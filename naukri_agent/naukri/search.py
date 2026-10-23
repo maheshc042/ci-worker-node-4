@@ -52,6 +52,22 @@ from .parser import (
 
 log = get_logger(__name__)
 
+# Run 605: reco "you might like" cards can render the company-rating badge
+# inside `span.subTitle` first; grabbing the first visible span there put
+# "Company rating 3.9" into job.company. That garbage broke cross-account
+# fuzzy dedupe for 4 real dupes (exact same reco id on both accounts still
+# passed the company-ratio test). Exact-ID dedupe now covers those pairs,
+# but the garbage must never reach the DB again — filter it at extraction.
+_COMPANY_RATING_GARBAGE = re.compile(r"company\s*rating\s*[\d.]*", re.IGNORECASE)
+
+
+def clean_company_text(text: str | None) -> str:
+    """Returns company text, or '' when it is a rating badge, not a name."""
+    cleaned = (text or "").strip()
+    if _COMPANY_RATING_GARBAGE.search(cleaned):
+        return ""
+    return cleaned
+
 # Non-job link patterns to filter out during card link discovery
 NON_JOB_URL_PATTERNS = frozenset(
     [
@@ -742,7 +758,7 @@ class JobSearcher:
                 ["span.subTitle", "span.companyWrapper span", "a.subTitle"] + S.CARD_COMPANY,
                 timeout_ms=200,
             )
-            company = await safe_text(company_el)
+            company = clean_company_text(await safe_text(company_el))
 
             exp_el = await first_visible(
                 card, ["li.experience span", "li.experience"] + S.CARD_EXPERIENCE, timeout_ms=200

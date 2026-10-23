@@ -232,6 +232,10 @@ class Orchestrator:
         self.api_client: NaukriApiClient | None = None
         self.consecutive_failures = 0
         self.platform_consecutive_failures = 0
+        # Session-level: consecutive "Apply dialog never opened" failures on
+        # the current platform. Dead clicks mean the browser session is
+        # wedged (run 605); 2 of these beat the generic 5-failure streak.
+        self.platform_dialog_open_streak = 0
         self.platform_started_at = 0.0
         self.platform_time_budget_s = 0.0
         self.current_platform_name = ""
@@ -278,6 +282,11 @@ class Orchestrator:
                 raise StopRun(
                     f"platform time budget of {round(self.platform_time_budget_s / 60, 1)}m reached for {platform_name}"
                 )
+        if self.platform_dialog_open_streak >= self.config.run.max_dialog_open_failures:
+            raise StopRun(
+                f"{self.platform_dialog_open_streak} 'Apply dialog never opened' failures on "
+                f"{platform_name} — browser session wedged, stopping platform harder than a re-click will fix"
+            )
         if self.platform_consecutive_failures >= self.config.run.max_consecutive_failures:
             raise StopRun(
                 f"{self.platform_consecutive_failures} consecutive failures on {platform_name} — stopping platform"
@@ -1097,6 +1106,7 @@ class Orchestrator:
             self.config.run.dedupe_window_days,
             account=self.account_key,
             platform=platform.platform_name,
+            failed_cooldown_hours=self.config.run.failed_retry_cooldown_hours,
         )
         applied_this_profile = self._profile_applied.get(profile.name, 0)
 
@@ -1927,6 +1937,7 @@ class Orchestrator:
             )
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            self.platform_dialog_open_streak = 0
         elif outcome.status == ApplicationStatus.FAILED:
             self.stats.bump(profile.name, "failed", platform=platform_name)
             if _is_infra_failure(outcome.detail):
@@ -1938,6 +1949,12 @@ class Orchestrator:
             else:
                 self.consecutive_failures += 1
                 self.platform_consecutive_failures += 1
+                if (outcome.detail or "").startswith("Apply dialog never opened"):
+                    # Session-level dead-click streak: each one makes the
+                    # whole platform session more suspect.
+                    self.platform_dialog_open_streak += 1
+                else:
+                    self.platform_dialog_open_streak = 0
             self.stats.errors.append(f"[{platform_name}] {job.title[:40]}: {outcome.detail[:120]}")
             # Record failed outcome for audit (DB)
             await self.repo.record_audit(
@@ -1954,6 +1971,7 @@ class Orchestrator:
             self.stats.bump(profile.name, "external", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            self.platform_dialog_open_streak = 0
             # Record external outcome for audit (DB)
             await self.repo.record_audit(
                 run_id=self.run_id,
@@ -1995,6 +2013,7 @@ class Orchestrator:
             self.stats.bump(profile.name, "already_applied", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            self.platform_dialog_open_streak = 0
             await self.repo.record_audit(
                 run_id=self.run_id,
                 job_id=job.job_id,
@@ -2010,6 +2029,7 @@ class Orchestrator:
             self.stats.bump(profile.name, "needs_review", platform=platform_name)
             self.consecutive_failures = 0
             self.platform_consecutive_failures = 0
+            self.platform_dialog_open_streak = 0
             _questions = "; ".join(
                 (q.get("text", "") if isinstance(q, dict) else getattr(q, "text", str(q)))
                 for q in (outcome.unanswered_questions or [])
