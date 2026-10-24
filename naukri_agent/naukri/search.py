@@ -60,11 +60,20 @@ log = get_logger(__name__)
 # but the garbage must never reach the DB again — filter it at extraction.
 _COMPANY_RATING_GARBAGE = re.compile(r"company\s*rating\s*[\d.]*", re.IGNORECASE)
 
+# Runs 611/612: the card walk can still land on the review-count link
+# ("53626 Reviews", "81359 Reviews") once the rating badge is dropped.
+# A whole-string "number + reviews/interviews/salaries" slot must be treated
+# as a badge too — real employer names never start with a bare count.
+_REVIEW_COUNT_GARBAGE = re.compile(
+    r"^\s*\d[\d.,]*k?\s*(reviews?|ratings?|salaries|interviews?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def clean_company_text(text: str | None) -> str:
-    """Returns company text, or '' when it is a rating badge, not a name."""
+    """Returns company text, or '' when it is a metric badge, not a name."""
     cleaned = (text or "").strip()
-    if _COMPANY_RATING_GARBAGE.search(cleaned):
+    if _COMPANY_RATING_GARBAGE.search(cleaned) or _REVIEW_COUNT_GARBAGE.match(cleaned):
         return ""
     return cleaned
 

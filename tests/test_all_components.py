@@ -4424,6 +4424,26 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clean_company_text(None), "")
         self.assertEqual(clean_company_text("Rating granted 3.9"), "Rating granted 3.9")
 
+    def test_clean_company_text_rejects_review_count_badges(self):
+        """Runs 611/612: after the rating badge is dropped, the card walk can
+        land on the review-count link ("53626 Reviews") and pass it off as
+        the company name — 235 garbage rows in run 612 even used them as
+        cap/dedupe cohort keys. Real employers never start with a bare
+        count, so a whole-string "N reviews" slot is a badge too.
+        Names that merely *contain* those words or digits elsewhere survive."""
+        from naukri_agent.naukri.search import clean_company_text
+
+        self.assertEqual(clean_company_text("53626 Reviews"), "")
+        self.assertEqual(clean_company_text("81359 reviews"), "")
+        self.assertEqual(clean_company_text(" 43 Reviews "), "")
+        self.assertEqual(clean_company_text("1.2k Reviews"), "")
+        self.assertEqual(clean_company_text("12 Interviews"), "")
+        self.assertEqual(clean_company_text("205 Salaries"), "")
+        self.assertEqual(clean_company_text("479,51 Reviews"), "")
+        # Legit names must survive.
+        self.assertEqual(clean_company_text("24/7 Customer Review Services"), "24/7 Customer Review Services")
+        self.assertEqual(clean_company_text("Review Analytics"), "Review Analytics")
+
 
 class TestRun607CompanyCohortFixes(unittest.IsolatedAsyncioTestCase):
     """Runs 607/608 diagnostics -> fixes:
