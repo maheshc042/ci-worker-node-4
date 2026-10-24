@@ -292,6 +292,24 @@ class Orchestrator:
                 f"{self.platform_consecutive_failures} consecutive failures on {platform_name} — stopping platform"
             )
 
+    def _company_rejection(self, company_key: str, title_key: str) -> SkipReason | None:
+        """Company-level pre-apply gates: per-company daily cap and same-run
+        repost collapse.
+
+        Empty company keys (badge-only cards whose real name could not be
+        recovered) are exempt: applying the cap there would funnel every
+        unnamed job into one fake "" cohort (run 607/608 false-skipped
+        distinct employers that way), and repost collapse there would merge
+        distinct employers that merely share a title.
+        """
+        if not company_key:
+            return None
+        if self._company_applied.get(company_key, 0) >= self.config.run.max_applications_per_company_per_day:
+            return SkipReason.DAILY_CAP
+        if (company_key, title_key) in self._seen_company_title:
+            return SkipReason.SEEN_RECENTLY
+        return None
+
     async def _pace(self) -> None:
         """Randomised gap between applications; the single most important
         anti-detection measure in the whole agent."""
@@ -1447,10 +1465,12 @@ class Orchestrator:
 
                 # Per-company daily cap + same-run repost collapse. Reposts
                 # carry different job IDs, so job-level dedupe cannot see
-                # them; company-level accounting can.
+                # them; company-level accounting can. Unnamed jobs
+                # (empty company_key) are exempt — see _company_rejection.
                 company_key = _normalize_company(job.company)
                 title_key = _normalize_title(job.title)
-                if self._company_applied.get(company_key, 0) >= self.config.run.max_applications_per_company_per_day:
+                company_rejection = self._company_rejection(company_key, title_key)
+                if company_rejection is SkipReason.DAILY_CAP:
                     outcome = ApplyOutcome(
                         status=ApplicationStatus.SKIPPED,
                         reason=SkipReason.DAILY_CAP,
@@ -1461,7 +1481,7 @@ class Orchestrator:
                     log.info("job.company_cap_reached", job_id=job.job_id, company=job.company[:40])
                     failed_outcomes.append((job, outcome))
                     continue
-                if (company_key, title_key) in self._seen_company_title:
+                if company_rejection is SkipReason.SEEN_RECENTLY:
                     outcome = ApplyOutcome(
                         status=ApplicationStatus.SKIPPED,
                         reason=SkipReason.SEEN_RECENTLY,
@@ -1472,7 +1492,8 @@ class Orchestrator:
                     log.info("job.repost_collapsed", job_id=job.job_id, company=job.company[:40])
                     failed_outcomes.append((job, outcome))
                     continue
-                self._seen_company_title.add((company_key, title_key))
+                if company_key:
+                    self._seen_company_title.add((company_key, title_key))
 
                 try:
                     outcome = await self._process_job(
@@ -1653,13 +1674,14 @@ class Orchestrator:
                 break
             if remaining() <= 0:
                 break
+            # Same empty-company exemption as the main loop — see
+            # _company_rejection.
             company_key = _normalize_company(job.company)
             title_key = _normalize_title(job.title)
-            if self._company_applied.get(company_key, 0) >= self.config.run.max_applications_per_company_per_day:
+            if self._company_rejection(company_key, title_key) is not None:
                 continue
-            if (company_key, title_key) in self._seen_company_title:
-                continue
-            self._seen_company_title.add((company_key, title_key))
+            if company_key:
+                self._seen_company_title.add((company_key, title_key))
             try:
                 outcome = await self._process_job(
                     job, profile, filters, platform, page, artifacts,

@@ -41,21 +41,38 @@ MAX_NEEDS_REVIEW_ATTEMPTS = 3
 
 # One row per (run, job, platform). The scraped pass inserts, the outcome pass
 # upserts, so a job appears exactly once no matter how many times it is seen.
-_AUDIT_UPSERT_SQL = """
+#
+# Decision precedence: once a real decision (applied / needs_review / failed /
+# already_applied / external) is recorded, a later pass that merely re-sees
+# the job (second profile, cross-platform dedupe, review-retry pass) must NOT
+# overwrite it with a skip row — run 609 showed an applied-pass decision being
+# clobbered to "cross-platform duplicate" with the applications row telling a
+# different story. A later decision always supersedes (failed -> applied), and
+# skip-detail refinement proceeds normally while no decision exists.
+_AUDIT_DECISION_OUTCOMES_SQL = (
+    "'applied', 'already_applied', 'external', 'needs_review', 'failed'"
+)
+_AUDIT_UPSERT_SQL = f"""
 INSERT INTO run_audits
     (run_id, job_id, platform, title, company, outcome,
      filter_reason, detail, rank_score, location,
      experience_text, salary_text)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (run_id, job_id, platform) DO UPDATE SET
-    outcome      = CASE WHEN EXCLUDED.outcome = 'scraped'
-                         AND run_audits.outcome <> 'scraped'
-                         THEN run_audits.outcome
-                         ELSE EXCLUDED.outcome END,
-    filter_reason = CASE WHEN EXCLUDED.outcome = 'scraped'
+    outcome      = CASE WHEN run_audits.outcome IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                             AND EXCLUDED.outcome NOT IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                        THEN run_audits.outcome
+                        ELSE EXCLUDED.outcome END,
+    filter_reason = CASE WHEN run_audits.outcome IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                              AND EXCLUDED.outcome NOT IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                         THEN run_audits.filter_reason
+                         WHEN EXCLUDED.outcome = 'scraped'
                          THEN run_audits.filter_reason
                          ELSE EXCLUDED.filter_reason END,
-    detail       = COALESCE(NULLIF(EXCLUDED.detail, ''), run_audits.detail),
+    detail       = CASE WHEN run_audits.outcome IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                             AND EXCLUDED.outcome NOT IN ({_AUDIT_DECISION_OUTCOMES_SQL})
+                        THEN run_audits.detail
+                        ELSE COALESCE(NULLIF(EXCLUDED.detail, ''), run_audits.detail) END,
     rank_score   = COALESCE(EXCLUDED.rank_score, run_audits.rank_score),
     title        = COALESCE(NULLIF(EXCLUDED.title, ''), run_audits.title),
     company      = COALESCE(NULLIF(EXCLUDED.company, ''), run_audits.company),
@@ -410,6 +427,17 @@ class Repository:
                        description_snippet = CASE
                            WHEN EXCLUDED.description_snippet <> '' THEN EXCLUDED.description_snippet
                            ELSE jobs.description_snippet
+                       END,
+                       -- Self-heal legacy rows whose company was scraped as a
+                       -- rating badge ("Company rating 3.9") before the
+                       -- parser was fixed: overwrite with a clean name when
+                       -- we get one; never downgrade a real name.
+                       company = CASE
+                           WHEN EXCLUDED.company = '' OR EXCLUDED.company ILIKE 'company rating%'
+                               THEN jobs.company
+                           WHEN jobs.company = '' OR jobs.company ILIKE 'company rating%'
+                               THEN EXCLUDED.company
+                           ELSE jobs.company
                        END
                 """,
                 row["job_id"],

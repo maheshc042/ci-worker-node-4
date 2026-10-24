@@ -68,6 +68,26 @@ def clean_company_text(text: str | None) -> str:
         return ""
     return cleaned
 
+
+_RECO_COMPANY_SELECTORS = ["span.subTitle", "span.companyWrapper span", "a.subTitle"]
+
+
+async def company_text_from_card(card: Any, timeout_ms: int = 200) -> str:
+    """Recover the company name from a reco card.
+
+    The first visible company element is frequently a rating badge
+    ("Company rating 3.9"), which clean_company_text() drops to ''. Walk
+    every company selector and keep the first name that survives cleaning
+    instead of stopping at the first visible element (runs 607/608: 19 of
+    35 company-cap skips funnelled under a fake "" cohort like this).
+    """
+    for selector in _RECO_COMPANY_SELECTORS + S.CARD_COMPANY:
+        company_el = await first_visible(card, [selector], timeout_ms=timeout_ms)
+        company = clean_company_text(await safe_text(company_el))
+        if company:
+            return company
+    return ""
+
 # Non-job link patterns to filter out during card link discovery
 NON_JOB_URL_PATTERNS = frozenset(
     [
@@ -753,12 +773,10 @@ class JobSearcher:
             if not _is_job_url(url):
                 return None
 
-            company_el = await first_visible(
-                card,
-                ["span.subTitle", "span.companyWrapper span", "a.subTitle"] + S.CARD_COMPANY,
-                timeout_ms=200,
-            )
-            company = clean_company_text(await safe_text(company_el))
+            # Company recovery: the first visible company element is often a
+            # rating badge ("Company rating 3.9"). company_text_from_card()
+            # walks every selector and keeps the first real name.
+            company = await company_text_from_card(card)
 
             exp_el = await first_visible(
                 card, ["li.experience span", "li.experience"] + S.CARD_EXPERIENCE, timeout_ms=200

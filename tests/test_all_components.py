@@ -4425,6 +4425,223 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clean_company_text("Rating granted 3.9"), "Rating granted 3.9")
 
 
+class TestRun607CompanyCohortFixes(unittest.IsolatedAsyncioTestCase):
+    """Runs 607/608 diagnostics -> fixes:
+
+    A. Empty-company cohort collapse: when a card's only visible company
+       element was a rating badge, `clean_company_text` returned "" and the
+       orchestrator funneled every unnamed job into one shared ""
+       company-cap cohort ("company daily cap reached (, max 2/day)") —
+       19 of 35 cap skips in 607/608 were this false skip.
+       Fix A1: company_text_from_card() walks every company selector and
+       keeps the first real name.
+       Fix A2: _company_rejection() exempts empty company keys from both
+       the per-company cap and the repost collapse.
+    B. Legacy jobs rows upserted as "Company rating 3.9" never self-healed
+       (ON CONFLICT ... DO NOTHING in spirit): the upsert now overwrites
+       company only when the existing value is empty/garbage and the new
+       value is clean.
+    """
+
+    # ------------------------------------------------------------ Fix A1
+
+    async def test_company_text_from_card_walks_selectors_until_real_name(self):
+        """First selector yields a rating badge -> helper must keep looking
+        and return the name found later. Conversely, a real name on the
+        first selector must stop the walk (later selectors unconsulted)."""
+        from unittest.mock import patch
+
+        from naukri_agent.naukri.search import company_text_from_card
+
+        badge_first = {"span.subTitle": "Company rating 3.9", "span.companyWrapper span": "Moative"}
+        with patch(
+            "naukri_agent.naukri.search.first_visible",
+            new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=badge_first),
+        ):
+            self.assertEqual(await company_text_from_card(card=None), "Moative")
+
+        clean_first = {"span.subTitle": " Moative "}
+        with patch(
+            "naukri_agent.naukri.search.first_visible",
+            new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=clean_first),
+        ):
+            self.assertEqual(await company_text_from_card(card=None), "Moative")
+
+        all_bad = {"span.subTitle": "Company rating 3.9"}
+        with patch(
+            "naukri_agent.naukri.search.first_visible",
+            new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=all_bad),
+        ):
+            self.assertEqual(await company_text_from_card(card=None), "")
+
+    # ------------------------------------------------------------ Fix A2
+
+    @staticmethod
+    def _orchestrator(max_per_company: int = 2):
+        from types import SimpleNamespace
+
+        from naukri_agent.core.orchestrator import Orchestrator
+
+        orch = object.__new__(Orchestrator)
+        orch.config = SimpleNamespace(run=SimpleNamespace(max_applications_per_company_per_day=max_per_company))
+        orch._company_applied = {}
+        orch._seen_company_title = set()
+        return orch
+
+    def test_empty_company_key_is_exempt_from_cap_and_repost_collapse(self):
+        """The fake "" cohort must not exist: 20 unnamed jobs sharing one
+        title must none of them be rejected by company-level gates."""
+        orch = self._orchestrator()
+        # Line 1517 increments _company_applied even for "" keys — the ""
+        # entry must still game no gates.
+        orch._company_applied[""] = 5
+        self.assertIsNone(orch._company_rejection("", "fullstack developer"))
+        # And it must not collapse against another unnamed job later.
+        self.assertIsNone(orch._company_rejection("", "fullstack developer"))
+        self.assertEqual(orch._seen_company_title, set())
+
+    def test_named_company_key_is_capped_after_limit(self):
+        from naukri_agent.core.models import SkipReason
+
+        orch = self._orchestrator(max_per_company=2)
+        orch._company_applied["moative"] = 2
+        self.assertIs(orch._company_rejection("moative", "fullstack developer"), SkipReason.DAILY_CAP)
+
+    def test_named_company_key_collapses_repost(self):
+        from naukri_agent.core.models import SkipReason
+
+        orch = self._orchestrator()
+        orch._seen_company_title.add(("moative", "fullstack developer"))
+        self.assertIs(orch._company_rejection("moative", "fullstack developer"), SkipReason.SEEN_RECENTLY)
+        self.assertIsNone(orch._company_rejection("moative", "backend developer"))
+
+    def test_caps_are_independent_per_named_company(self):
+        """The real deformation: 19 false-skips across DIFFERENT companies
+        under one "" key. Two named companies must not affect each other,
+        and a third unnamed one must sail through."""
+        from naukri_agent.core.models import SkipReason
+
+        orch = self._orchestrator(max_per_company=2)
+        orch._company_applied["hawk martech"] = 2
+        orch._company_applied["techolution"] = 0
+        self.assertIs(orch._company_rejection("hawk martech", "qa engineer"), SkipReason.DAILY_CAP)
+        self.assertIsNone(orch._company_rejection("techolution", "qa engineer"))
+        self.assertIsNone(orch._company_rejection("", "qa engineer"))
+
+    # ------------------------------------------------------------ Fix B
+
+    async def test_upsert_self_heals_garbage_company(self):
+        """The ON CONFLICT clause must overwrite company only when the
+        existing value is empty or a rating badge, and never when the new
+        value would be worse."""
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.core.models import Job
+        from naukri_agent.db.repository import Repository
+
+        seen = {}
+
+        async def capture(query, *args):
+            seen["query"] = query
+            return "INSERT 0 1"
+
+        pool = AsyncMock()
+        pool.execute = capture
+        repo = Repository(pool)
+        await repo.upsert_job(Job(job_id="j1", title="SDE", company="Acme", url="u"), platform="naukri")
+
+        query = seen["query"]
+        self.assertIn("company = CASE", query)
+        self.assertIn("EXCLUDED.company ILIKE 'company rating%'", query)
+        self.assertIn("WHEN jobs.company = '' OR jobs.company ILIKE 'company rating%'", query)
+        # A clean name must never downgrade: clean/other -> keeps old.
+        self.assertIn("ELSE jobs.company", query)
+
+
+def _mk_locator(page, selectors, table):
+    """Build a fake locator whose async context resolves the FIRST selector
+    found in `table`; mirrors first_visible() semantics for the patched
+    company branch test above."""
+
+    class _AwaitableLocator:
+        def __init__(self, text: str | None):
+            self._text = text
+
+        def __await__(self):
+            async def _resolve():
+                return None if self._text is None else FakeLocatorLike(self._text)
+
+            return _resolve().__await__()
+
+    class FakeLocatorLike:
+        def __init__(self, text: str):
+            self._text = text
+
+        async def count(self):
+            return 1
+
+        async def inner_text(self, timeout=None):
+            return self._text
+
+    if not selectors:
+        return _AwaitableLocator(None)
+    found = selectors[0] if selectors[0] in table else None
+    return _AwaitableLocator(None) if found is None else _AwaitableLocator(table[found])
+
+
+class TestRun609AuditDecisionPrecedence(unittest.IsolatedAsyncioTestCase):
+    """Run 609 forensics -> fix:
+
+    run_audits upserts one row per (run, platform, job_id), and a later pass
+    re-seeing the same job (second profile, review-retry pass, cross-platform
+    dedupe) used to overwrite a real decision (applied / needs_review / failed)
+    with a skip row — techolution 'AI Python Developer / Python AI Engineer'
+    was needs_review in applications but showed 'duplicate cross-platform' in
+    the audit. The upsert must preserve decision outcomes over skip writes
+    while letting a later decision (failed -> applied) supersede.
+    """
+
+    # The decision-outcome set shared by every guard clause in the UPSERT.
+    DECISIONS = "'applied', 'already_applied', 'external', 'needs_review', 'failed'"
+
+    async def _captured_query(self) -> str:
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        await Repository(pool).record_audits(
+            run_id=609,
+            platform="linkedin",
+            rows=[{"job_id": "linkedin-1", "outcome": "skipped", "filter_reason": "duplicate"}],
+        )
+        return pool.executemany.await_args.args[0]
+
+    async def test_skip_write_never_downgrades_decision_outcome(self):
+        query = await self._captured_query()
+        # outcome guard: existing decision + incoming skip must keep existing
+        self.assertIn(
+            f"run_audits.outcome IN ({self.DECISIONS})\n                             AND EXCLUDED.outcome NOT IN ({self.DECISIONS})",
+            query,
+        )
+        # reason + detail must stay consistent with the preserved outcome
+        self.assertIn("THEN run_audits.filter_reason", query)
+        self.assertIn("THEN run_audits.detail", query)
+
+    async def test_scraped_write_still_cannot_clobber_any_decision(self):
+        query = await self._captured_query()
+        # legacy scrape-shield: a scrape write keeps the existing reason
+        self.assertIn("WHEN EXCLUDED.outcome = 'scraped'\n                         THEN run_audits.filter_reason", query)
+
+    async def test_decision_writes_still_supersede_each_other_and_skips(self):
+        query = await self._captured_query()
+        # every decision-preserving CASE ends with "ELSE EXCLUDED..." so the
+        # final-wins semantics survive for applied/needs_review/failed swaps
+        # and for skip->skip detail refinement.
+        self.assertIn("ELSE EXCLUDED.outcome END", query)
+        self.assertIn("ELSE EXCLUDED.filter_reason END", query)
+
+
 if __name__ == "__main__":
     unittest.main()
 

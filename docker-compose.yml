@@ -35,7 +35,10 @@ x-agent-base: &agent-base
     # config.yaml is mounted read-only: the container must never rewrite rules.
     - ./config:/app/config:ro
     - ./resumes:/app/resumes:ro
-    - agent-artifacts:/app/artifacts
+    # Bind-mount artifacts so failure dumps (linkedin_stepN_stuck html/screenshots)
+    # land on the host. (Previously agent-artifacts:, a named volume that hid
+    # container-run diagnostics the same way agent-logs: hid the old log.)
+    - ./artifacts:/app/artifacts
     # Bind-mount the host logs dir so container runs land in the same
     # logs/agent.log the CLI writes on the host. (Previously agent-logs:,
     # a named volume that silently hid every container run from the host log.)
@@ -74,6 +77,8 @@ services:
         max-file: "5"
 
 volumes:
+  # agent-artifacts kept declared so existing volumes survive `docker compose up`,
+  # but no service mounts it any more (switched to ./artifacts bind mount).
   agent-artifacts:
   # agent-logs kept declared so existing volumes survive `docker compose up`,
   # but no service mounts it any more (switched to ./logs bind mount).
