@@ -507,6 +507,70 @@ class TestFilterEngine(unittest.TestCase):
                 f"{prof.name}: Strategist title must be rejected, got {decision.reason}",
             )
 
+    def test_ai_ml_compound_titles_pass_ai_profile(self):
+        """Bare 'ml' in the AI/Python exclude list blocked 'Ai ML Engineer'
+        (run 613) before the include gate could accept it. AI-ML compounds
+        must pass the AI profile; pure-ML titles stay out via the include
+        list, and Full Stack keeps rejecting every dedicated-AI title."""
+        from naukri_agent.core.models import Job, SkipReason
+
+        engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        for title in ("Ai ML Engineer", "AI/ML Engineer", "Full Stack AI/ML Engineer"):
+            job = Job(
+                job_id=f"test-aiml-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            decision = engine.evaluate_card(job)
+            self.assertNotEqual(
+                decision.reason,
+                SkipReason.FILTER_TITLE,
+                f"AI profile: '{title}' must not be title-rejected",
+            )
+            self.assertTrue(
+                decision.passed,
+                f"AI profile: '{title}' must be accepted, got {decision.reason}",
+            )
+
+        for title in ("ML Engineer", "ML Developer", "Machine Learning Engineer"):
+            job = Job(
+                job_id=f"test-pureml-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            decision = engine.evaluate_card(job)
+            self.assertFalse(
+                decision.passed,
+                f"AI profile: pure '{title}' must be rejected",
+            )
+            self.assertEqual(
+                decision.reason,
+                SkipReason.FILTER_TITLE,
+                f"AI profile: pure '{title}' must fail the title gate, got {decision.reason}",
+            )
+
+        fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+        job = Job(
+            job_id="test-aiml-fs",
+            title="AI/ML Engineer",
+            company="Test Corp",
+            location="Bengaluru",
+            url="http://test.com",
+            platform="naukri",
+        )
+        decision = fs_engine.evaluate_card(job)
+        self.assertFalse(
+            decision.passed,
+            "Full Stack must keep rejecting dedicated-AI titles (division rule)",
+        )
+        self.assertEqual(decision.reason, SkipReason.FILTER_TITLE)
+
 
     def test_creative_roles_blocked(self):
         """Graphics/game/creator roles hire portfolios, not engineering tenure

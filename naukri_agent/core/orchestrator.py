@@ -1172,6 +1172,7 @@ class Orchestrator:
                 }
                 for j in collected_jobs
             ],
+            profile=profile.name,
         )
 
         # =========================================================
@@ -1202,6 +1203,7 @@ class Orchestrator:
                     }
                     for jid in _pre_ids - _kept_ids
                 ],
+                profile=profile.name,
             )
 
         if not collected_jobs:
@@ -1246,6 +1248,7 @@ class Orchestrator:
                         }
                         for _j in strike_dropped
                     ],
+                    profile=profile.name,
                 )
 
         if not collected_jobs:
@@ -1325,6 +1328,7 @@ class Orchestrator:
                         }
                         for _j, _reason, _detail in api_dropped
                     ],
+                    profile=profile.name,
                 )
 
             log.info("match_score.batch_complete", before=len(collected_jobs), after=len(api_filtered_jobs))
@@ -1369,6 +1373,7 @@ class Orchestrator:
                     }
                     for r in plan.rejected_jobs
                 ],
+                profile=profile.name,
             )
         if plan.overflow_jobs:
             await self.repo.record_audits(
@@ -1387,6 +1392,7 @@ class Orchestrator:
                     }
                     for rj in plan.overflow_jobs
                 ],
+                profile=profile.name,
             )
         self.metrics.planner_s += (t_plan_1 - t_plan_0)
         self.metrics.ranking_s += getattr(planner, "last_ranking_time_s", 0.0)

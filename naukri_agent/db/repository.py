@@ -356,12 +356,27 @@ class Repository:
         run_id: int,
         platform: str,
         rows: list[dict[str, Any]],
+        profile: str | None = None,
     ) -> None:
-        """Batch-record audit rows in one round-trip (best-effort, never raises)."""
+        """Batch-record audit rows in one round-trip (best-effort, never raises).
+
+        `profile` stamps the originating profile name into each row's detail.
+        run_audits has no profile column and the upsert key is
+        (run_id, job_id, platform), so without this stamp a filter rejection
+        row is ambiguous whenever both profiles are configured — the row
+        records whichever profile last scraped/skipped the job this run.
+        """
         if not rows:
             return
         # Same upsert-key normalisation as `record_audit`.
         platform = str(platform).lower()
+        prepped: list[dict[str, Any]] = []
+        for r in rows:
+            out = dict(r)
+            if profile:
+                detail = (out.get("detail") or "")
+                out["detail"] = f"[{profile}] {detail}".strip()
+            prepped.append(out)
         try:
             await self.pool.executemany(
                 _AUDIT_UPSERT_SQL,
@@ -380,7 +395,7 @@ class Repository:
                         r.get("experience_text", ""),
                         r.get("salary_text", ""),
                     )
-                    for r in rows
+                    for r in prepped
                 ],
             )
         except Exception as exc:
