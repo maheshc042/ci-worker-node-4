@@ -19,6 +19,7 @@ from typing import Any
 
 import asyncpg
 
+from ..core.answers import ASSESSMENT_GATE_NOTE, is_assessment_instruction
 from ..core.models import (
     ApplyOutcome,
     Job,
@@ -1088,6 +1089,56 @@ class Repository:
         )
         return [(row["question"], row["answer"]) for row in rows]
 
+    async def _quarantine_assessment(
+        self,
+        job_id: str | None,
+        profile: str,
+        question: str,
+        kind: str,
+        screenshot_path: str | None,
+    ) -> None:
+        """Auto-resolve an external assessment instruction (review #28/#30 RCA).
+
+        Mirrors the human resolution of review #28 (2026-09-29): resolved with
+        ASSESSMENT_GATE_NOTE and promoted to the KB, so the next encounter —
+        by any profile — is answered identically without touching review flow.
+        """
+        await self.pool.execute(
+            """
+            INSERT INTO question_review
+                (job_id, profile, question, question_kind, options,
+                 screenshot_path, resolved, answer, auto_resolved,
+                 resolved_by, times_seen)
+            VALUES ($1,$2,$3,$4,$5::jsonb,$6,TRUE,$7,TRUE,'assessment-gate',1)
+            ON CONFLICT (profile, question) DO UPDATE
+               SET times_seen = question_review.times_seen + 1,
+                   resolved = TRUE,
+                   answer = EXCLUDED.answer,
+                   auto_resolved = TRUE,
+                   resolved_by = 'assessment-gate',
+                   updated_at = now()
+            """,
+            job_id, profile, question, kind,
+            json.dumps([]), screenshot_path, ASSESSMENT_GATE_NOTE,
+        )
+        await self.pool.execute(
+            """
+            INSERT INTO answer_kb (profile, pattern, answer, priority, source)
+            VALUES ($1, $2, $3, 20, 'assessment-gate')
+            ON CONFLICT (profile, pattern) DO UPDATE
+               SET answer = EXCLUDED.answer,
+                   priority = LEAST(answer_kb.priority, 20),
+                   source = 'assessment-gate',
+                   updated_at = now()
+            """,
+            profile, question.strip().lower(), ASSESSMENT_GATE_NOTE,
+        )
+        log.info(
+            "answer_learn.assessment_quarantined",
+            question=question[:80],
+            answer=ASSESSMENT_GATE_NOTE[:40],
+        )
+
     async def queue_question_for_review(
         self,
         profile: str,
@@ -1106,6 +1157,17 @@ class Repository:
         this is the self-learning loop.
         """
         q_norm = question.strip()[:1000]
+
+        # Assessment-gate backstop (review #30 RCA, policy confirmed
+        # 2026-10-26): external assessment instructions must never land in
+        # human review, no matter which platform produced them (Cutshort's
+        # questionnaire sweep queues them too). Auto-resolve with the user's
+        # own signed-off status note instead of creating a pending row.
+        if is_assessment_instruction(q_norm) and not options:
+            await self._quarantine_assessment(
+                job_id, profile, q_norm, kind, screenshot_path
+            )
+            return
 
         # --- fuzzy dedup: look for resolved questions with similar text -------
         resolved_rows = await self.pool.fetch(

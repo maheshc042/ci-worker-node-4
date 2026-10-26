@@ -2781,16 +2781,50 @@ class TestRun587592LinkedInLongForm(unittest.TestCase):
                 self.assertIsNotNone(r, f"#{rid} unresolved")
                 self.assertEqual(r.value, expected, f"#{rid}")
 
-    def test_unanswerable_questions_stay_unresolved(self):
-        # #30 is an external assessment link, not a form field; #38 offers only
-        # "4 Yrs"/"4+ Yrs" for Node.js while the profile claims 2.5+ years.
+    def test_assessment_instruction_replies_approved_note(self):
+        # Reviews #28/#30 RCA (2026-09-29, policy confirmed 2026-10-26):
+        # autoproctor/assessment prompts are instructions, not questions. The
+        # user resolved #28 by hand with a status note, so the engine replays
+        # that exact wording instead of parking the flow in human review.
+        from naukri_agent.core.answers import ASSESSMENT_GATE_NOTE
         from naukri_agent.core.models import ScreeningQuestion
 
         r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
             text="Please submit the online assessment : "
                  "https://www.autoproctor.co/tests/bfIxNc90WC/instructions/",
             kind="text", options=[]))
+        self.assertEqual(r.value, ASSESSMENT_GATE_NOTE)
+        self.assertEqual(r.source, "assessment_gate")
+
+    def test_assessment_gate_negative_controls(self):
+        # Sentinels that must NOT trip the gate: testing-vocabulary questions
+        # carry no URL (they resolve via the KB or stay unresolved — either is
+        # fine, as long as the decision does not come from the gate); and
+        # option-backed questions never gate even when they carry a URL.
+        from naukri_agent.core.models import ScreeningQuestion
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="What is your experience with automated testing?",
+            kind="text", options=[]))
+        if r is not None:
+            self.assertNotEqual(r.source, "assessment_gate")
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="How do you approach debugging production test failures?",
+            kind="text", options=[]))
         self.assertIsNone(r)
+
+        r = self._eng().resolve(ScreeningQuestion(
+            text="Complete the technical test https://example.com/x",
+            kind="radio", options=["Yes", "No"]))
+        if r is not None:
+            self.assertNotEqual(r.source, "assessment_gate")
+
+    def test_unanswerable_questions_stay_unresolved(self):
+        # #38 offers only "4 Yrs"/"4+ Yrs" for Node.js while the profile
+        # claims 2.5+ years — stays in review, never affirms.
+        from naukri_agent.core.models import ScreeningQuestion
+
         r = self._eng("Full Stack / Web Developer").resolve(ScreeningQuestion(
             text="Relevant Experience in Node.js",
             kind="radio", options=["4 Yrs", "4+ Yrs"]))

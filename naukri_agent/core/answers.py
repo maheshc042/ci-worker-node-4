@@ -60,6 +60,38 @@ _TOTAL_EXPERIENCE_INTENT = re.compile(
 
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
+# External assessment gate (review #28/#30 RCA, resolved 2026-09-29, policy
+# confirmed 2026-10-26): platforms surface "please submit the online
+# assessment : <URL>" as if it were a screening question. It is an
+# instruction, not a question. The user already answered it by hand in the
+# review queue with a status note — so the engine replays exactly that
+# approved note instead of parking the flow (or inventing a completion
+# claim). Requires BOTH an http(s) link and assessment vocabulary so real
+# experience questions never match.
+_ASSESSMENT_URL_RE = re.compile(r"https?://", re.IGNORECASE)
+_ASSESSMENT_INTENT_RE = re.compile(
+    r"\bonline\s+(?:assessment|test|challenge|exam)\b"
+    r"|\b(?:technical|coding|aptitude|screening|pre-employment|hiring)\s+"
+    r"(?:assessment|test|challenge|exam)\b"
+    r"|\b(?:submit|complete|take|finish|attempt)\s+(?:the\s+|a\s+)?"
+    r"(?:online\s+)?(?:assessment|test|challenge|exam)\b"
+    r"|\b(?:assessment|test)\s+(?:link|url)\b",
+    re.IGNORECASE,
+)
+# Verbatim from question_review #28 (resolved_by='human', 2026-09-29). Do
+# not reword: it is the candidate's own signed-off wording and it makes no
+# claim of having taken the test.
+ASSESSMENT_GATE_NOTE = (
+    "I will submit the online assessment shortly - "
+    "please proceed with my application"
+)
+
+
+def is_assessment_instruction(text: str) -> bool:
+    """True when the 'question' is an external assessment/test instruction."""
+    return bool(_ASSESSMENT_URL_RE.search(text) and _ASSESSMENT_INTENT_RE.search(text))
+
+
 _LWD_INTENT = re.compile(
     r"\b(?:last\s+working\s+(?:day|date)|lwd|relieving\s+date|end\s+date\s+of\s+(?:notice|employment))\b",
     re.IGNORECASE,
@@ -371,6 +403,21 @@ class AnswerEngine:
         text = _normalise(question.text)
         if not text:
             return None
+
+        # Stage -1: external assessment gate (review #28/#30 RCA, 2026-09-29).
+        # Instruction-with-URL text is not a screening question; replying with
+        # the user-approved status note keeps the flow moving without ever
+        # claiming the test was taken. Runs before Stage 0 so LWD/notice
+        # fallbacks can never touch it. Questions that offer options (radio,
+        # multi-select) are NOT gated — they fall through and stay honest.
+        if is_assessment_instruction(text) and not question.options:
+            log.info("answers.assessment_gate", question=question.text[:120])
+            return ResolvedAnswer(
+                value=ASSESSMENT_GATE_NOTE,
+                matched_pattern="assessment_instruction",
+                source="assessment_gate",
+                confidence=1.0,
+            )
 
         # Stage 0: LWD intent remains absolute highest priority
         lwd = self._resolve_lwd(text, question)
