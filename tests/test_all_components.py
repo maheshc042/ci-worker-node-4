@@ -4760,8 +4760,158 @@ class TestRun609AuditDecisionPrecedence(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ELSE EXCLUDED.filter_reason END", query)
 
 
+class TestPersonScopedAnswers(unittest.IsolatedAsyncioTestCase):
+    """Person-scoped answer policy (2026-10-26, user-approved): screening
+    questions are candidate facts — both profiles answer for the same
+    human. A resolution recorded under one profile must (a) auto-answer the
+    same question re-encountered under the other profile instead of parking
+    a duplicate for review, and (b) be promoted to the answer KB as a global
+    (profile=NULL) row so both profiles' answer engines can serve it
+    directly. Same-profile rows win ties so a deliberate per-profile
+    override is never silently shadowed."""
+
+    _CROSS_ROW = {
+        "id": 7,
+        "question": "Are you willing to relocate to Gurgaon?",
+        "answer": "Yes, within 2 months",
+        "profile": "AI / Python Engineer",
+    }
+
+    def _repo(self, resolved_rows=None, fetchrows=None):
+        from unittest.mock import AsyncMock
+
+        from naukri_agent.db.repository import Repository
+
+        pool = AsyncMock()
+        pool.fetch = AsyncMock(
+            return_value=resolved_rows if resolved_rows is not None else []
+        )
+        pool.execute = AsyncMock()
+        pool.executemany = AsyncMock()
+        if fetchrows is None:
+            pool.fetchrow = AsyncMock(return_value=None)
+        else:
+            pool.fetchrow = AsyncMock(side_effect=fetchrows)
+        return Repository(pool), pool
+
+    async def test_cross_profile_match_auto_resolves_without_parking(self):
+        repo, pool = self._repo([self._CROSS_ROW])
+        await repo.queue_question_for_review(
+            "Full Stack (Node.js)",
+            "are you willing to relocate to gurgaon?",
+            "radio",
+            [],
+            job_id="j1",
+        )
+        first_sql = pool.execute.await_args_list[0].args[0]
+        self.assertIn("TRUE,'auto-fuzzy',1", first_sql)
+        # A pending review row must NOT have been created.
+        pool.fetchrow.assert_not_called()
+
+    async def test_cross_profile_match_promotes_global_kb_row(self):
+        repo, pool = self._repo([self._CROSS_ROW])
+        await repo.queue_question_for_review(
+            "Full Stack (Node.js)",
+            "are you willing to relocate to gurgaon?",
+            "radio",
+            [],
+            job_id="j1",
+        )
+        kb_sql = pool.execute.await_args_list[1].args[0]
+        self.assertIn("VALUES (NULL, $1, $2, 20, 'auto-fuzzy')", kb_sql)
+
+    async def test_same_profile_row_wins_tie_over_cross_profile(self):
+        same = dict(self._CROSS_ROW)
+        same.update(id=8, answer="No notice required",
+                    profile="Full Stack (Node.js)")
+        cross = dict(self._CROSS_ROW)
+        cross.update(answer="30 days notice")
+        repo, pool = self._repo([cross, same])
+        await repo.queue_question_for_review(
+            "Full Stack (Node.js)",
+            "are you willing to relocate to gurgaon?",
+            "radio",
+            [],
+            job_id="j1",
+        )
+        # Both rows match the question exactly; the same-profile row must win.
+        auto_args = pool.execute.await_args_list[0].args
+        self.assertIn("No notice required", auto_args)
+
+    async def test_human_resolution_promotes_global_kb_row(self):
+        row = dict(self._CROSS_ROW)
+        row.update(question="Are you comfortable working from office in Gurgaon?")
+        repo, pool = self._repo([row], fetchrows=[{**row}])
+        ok = await repo.resolve_review(7, "Yes, Gurgaon is fine")
+        self.assertTrue(ok)
+        exec_call = pool.execute.await_args_list[0]
+        self.assertIn("VALUES (NULL, $1, $2, 10, 'human')", exec_call.args[0])
+        self.assertEqual(
+            "yes, gurgaon is fine", str(exec_call.args[2]).lower()
+        )
+
+    async def test_human_resolution_cascades_cross_profile_pending(self):
+        row = {
+            "id": 11,
+            "question": "Can you join within 30 days?",
+            "answer": None,
+            "profile": "AI / Python Engineer",
+        }
+        pending_other = {
+            "id": 12,
+            "question": "can you join within 30 days?",
+            "profile": "Full Stack (Node.js)",
+        }
+        repo, pool = self._repo(
+            fetchrows=[
+                {"profile": row["profile"], "question": row["question"]},
+                {"question_kind": "radio", "options": None},
+            ]
+        )
+        # 1st fetch: cascade scan (person-wide); 2nd fetch: cross-dup sweep.
+        from unittest.mock import AsyncMock
+
+        pool.fetch = AsyncMock(side_effect=[[pending_other], []])
+        ok = await repo.resolve_review(11, "Yes")
+        self.assertTrue(ok)
+        cascade_execs = [
+            e for e in pool.execute.await_args_list
+            if "resolved_by = 'auto-cascade'" in e.args[0]
+        ]
+        # The pending row under the OTHER profile must have been auto-answered.
+        self.assertEqual(cascade_execs[0].args[1], "Yes")
+        self.assertEqual(cascade_execs[0].args[2], 12)
+
+    async def test_cascade_kb_seed_is_global(self):
+        row = {
+            "id": 11,
+            "question": "Do you have experience with MongoDB?",
+            "answer": None,
+            "profile": "AI / Python Engineer",
+        }
+        pending_other = {
+            "id": 12,
+            "question": "Do you have experience with MongoDB?",
+            "profile": "Full Stack (Node.js)",
+        }
+        # 1st fetch: cascade scan (person-wide); 2nd fetch: cross-dup sweep.
+        from unittest.mock import AsyncMock
+
+        repo, pool = self._repo(
+            fetchrows=[
+                {"profile": row["profile"], "question": row["question"]},
+                {"question_kind": "radio", "options": None},
+            ]
+        )
+        pool.fetch = AsyncMock(side_effect=[[pending_other], []])
+        await repo.resolve_review(11, "3 years")
+        kb_sql = pool.execute.await_args_list[2].args[0]
+        self.assertIn("VALUES (NULL, $1, $2, 15, 'auto-cascade')", kb_sql)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

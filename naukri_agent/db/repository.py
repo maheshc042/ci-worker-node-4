@@ -1079,13 +1079,15 @@ class Repository:
             log.warning("db.answer_hits_failed", error=str(exc)[:200])
 
     async def resolved_review_answers(self, profile: str) -> list[tuple[str, str]]:
+        # Person-scoped (2026-10-26): answers are candidate facts, so the
+        # profile parameter is kept for interface stability but no longer
+        # narrows the scan.
         rows = await self.pool.fetch(
             """
             SELECT question, answer
               FROM question_review
-             WHERE resolved = TRUE AND answer IS NOT NULL AND profile = $1
+             WHERE resolved = TRUE AND answer IS NOT NULL
             """,
-            profile,
         )
         return [(row["question"], row["answer"]) for row in rows]
 
@@ -1121,17 +1123,20 @@ class Repository:
             job_id, profile, question, kind,
             json.dumps([]), screenshot_path, ASSESSMENT_GATE_NOTE,
         )
+        # Promote to the KB as a global row (profile=NULL): assessment notes
+        # are candidate facts shared across profiles, per the person-scoped
+        # answer policy of 2026-10-26.
         await self.pool.execute(
             """
             INSERT INTO answer_kb (profile, pattern, answer, priority, source)
-            VALUES ($1, $2, $3, 20, 'assessment-gate')
+            VALUES (NULL, $1, $2, 20, 'assessment-gate')
             ON CONFLICT (profile, pattern) DO UPDATE
                SET answer = EXCLUDED.answer,
                    priority = LEAST(answer_kb.priority, 20),
                    source = 'assessment-gate',
                    updated_at = now()
             """,
-            profile, question.strip().lower(), ASSESSMENT_GATE_NOTE,
+            question.strip().lower(), ASSESSMENT_GATE_NOTE,
         )
         log.info(
             "answer_learn.assessment_quarantined",
@@ -1152,9 +1157,10 @@ class Repository:
         Queue an unknown question for human review.
 
         Before inserting a new row, fuzzy-match against already-resolved
-        questions for this profile. If similarity > 0.85, auto-resolve using
-        the existing answer instead of creating a new pending review item —
-        this is the self-learning loop.
+        questions across ALL profiles (answers are candidate facts — same
+        human). If similarity > 0.85, auto-resolve using the existing answer
+        instead of creating a new pending review item — this is the
+        self-learning loop.
         """
         q_norm = question.strip()[:1000]
 
@@ -1170,26 +1176,36 @@ class Repository:
             return
 
         # --- fuzzy dedup: look for resolved questions with similar text -------
+        # Person-scoped (2026-10-26 decision, user-approved): screening
+        # questions are candidate facts, and both profiles answer for the
+        # same human — an answer given under one profile must carry to the
+        # other. Same-profile matches receive a small tie-bonus so a
+        # deliberate per-profile override can never be silently shadowed.
         resolved_rows = await self.pool.fetch(
             """
-            SELECT id, question, answer
+            SELECT id, question, answer, profile
               FROM question_review
              WHERE resolved = TRUE
                AND answer IS NOT NULL
-               AND profile = $1
-            """,
-            profile,
+            """
         )
         best_ratio = 0.0
+        best_score = 0.0
         best_row: Any = None
+        best_same_profile = False
+        TIE_BONUS_SAME_PROFILE = 0.02
         q_lower = q_norm.lower()
         for row in resolved_rows:
             ratio = SequenceMatcher(
                 None, q_lower, (row["question"] or "").lower(), autojunk=False
             ).ratio()
-            if ratio > best_ratio:
+            same_profile = row["profile"] == profile
+            score = ratio + (TIE_BONUS_SAME_PROFILE if same_profile else 0.0)
+            if score > best_score:
+                best_score = score
                 best_ratio = ratio
                 best_row = row
+                best_same_profile = same_profile
 
         AUTO_RESOLVE_THRESHOLD = 0.85
         if best_row is not None and best_ratio >= AUTO_RESOLVE_THRESHOLD:
@@ -1212,18 +1228,19 @@ class Repository:
                 job_id, profile, q_norm, kind,
                 json.dumps(options), screenshot_path, best_row["answer"],
             )
-            # Also promote to KB so the answer engine uses it immediately.
+            # Also promote to KB so the answer engine uses it immediately
+            # (global row — candidate facts apply to both profiles).
             await self.pool.execute(
                 """
                 INSERT INTO answer_kb (profile, pattern, answer, priority, source)
-                VALUES ($1, $2, $3, 20, 'auto-fuzzy')
+                VALUES (NULL, $1, $2, 20, 'auto-fuzzy')
                 ON CONFLICT (profile, pattern) DO UPDATE
                    SET answer = EXCLUDED.answer,
                        priority = LEAST(answer_kb.priority, 20),
                        source = 'auto-fuzzy',
                        updated_at = now()
                 """,
-                profile, q_norm.lower(), best_row["answer"],
+                q_norm.lower(), best_row["answer"],
             )
             log.info(
                 "answer_learn.auto_resolved",
@@ -1231,6 +1248,7 @@ class Repository:
                 matched=best_row["question"][:80],
                 ratio=round(best_ratio, 3),
                 answer=best_row["answer"][:40],
+                learned_from_profile=best_row["profile"],
             )
             return  # Do NOT create a pending review row
 
@@ -1354,33 +1372,36 @@ class Repository:
         profile = row["profile"]
         question = row["question"]
 
-        # Promote the human answer into the KB with high priority (lower = first).
+        # Promote the human answer into the KB as a GLOBAL row (profile=NULL):
+        # screening answers are candidate facts (person-scoped answer policy,
+        # 2026-10-26), so both profiles answer with the same value on first
+        # encounter. Per-profile YAML seeds still win via load_answer_kb
+        # ordering.
         await self.pool.execute(
             """
             INSERT INTO answer_kb (profile, pattern, answer, priority, source)
-            VALUES ($1, $2, $3, 10, 'human')
+            VALUES (NULL, $1, $2, 10, 'human')
             ON CONFLICT (profile, pattern) DO UPDATE
                SET answer = EXCLUDED.answer,
                    priority = 10,
                    source = 'human',
                    updated_at = now()
             """,
-            profile,
             question.strip().lower(),
             answer,
         )
 
-        # Auto-cascade: find other UNRESOLVED questions for the same profile
-        # that are similar enough to auto-answer with the same value.
+        # Auto-cascade: find other UNRESOLVED questions (any profile — same
+        # human) that are similar enough to auto-answer with the same value.
         unresolved = await self.pool.fetch(
             """
-            SELECT id, question
+            SELECT id, question, profile
               FROM question_review
              WHERE resolved = FALSE
-               AND profile = $1
+               AND answer IS NULL
                AND id <> $2
             """,
-            profile, review_id,
+            review_id,
         )
         AUTO_CASCADE_THRESHOLD = 0.82
         cascaded = 0
@@ -1402,18 +1423,17 @@ class Repository:
                     """,
                     answer, pending["id"],
                 )
-                # Also add to KB.
+                # Also add to KB (global row — person-scoped answer policy).
                 await self.pool.execute(
                     """
                     INSERT INTO answer_kb (profile, pattern, answer, priority, source)
-                    VALUES ($1, $2, $3, 15, 'auto-cascade')
+                    VALUES (NULL, $1, $2, 15, 'auto-cascade')
                     ON CONFLICT (profile, pattern) DO UPDATE
                        SET answer = EXCLUDED.answer,
                            priority = LEAST(answer_kb.priority, 15),
                            source = 'auto-cascade',
                            updated_at = now()
                     """,
-                    profile,
                     pending["question"].strip().lower(),
                     answer,
                 )
@@ -1427,12 +1447,11 @@ class Repository:
                 answer=answer[:40],
             )
 
-        # Cross-profile exact duplicates: both profiles belong to the same
-        # human, so a VERBATIM identical question (normalized text) with the
-        # same kind AND same options needs no per-profile retraining — the
-        # widget is literally the same. Near-matches stay per-profile on
-        # purpose: tenure/skill answers legitimately differ by track, and a
-        # fuzzy cross-profile cascade could transplant the wrong value.
+        # Cross-profile exact duplicates: a VERBATIM identical question
+        # (normalized text) with the same kind AND same options is the same
+        # widget for the same human. The person-scoped fuzzy cascade above
+        # normally covers this too; this block is a defensive catch for rows
+        # that arrive between the fetch and the insert.
         try:
             self_row = await self.pool.fetchrow(
                 "SELECT question_kind, options FROM question_review WHERE id = $1",
