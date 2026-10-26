@@ -1399,7 +1399,7 @@ class Repository:
               FROM question_review
              WHERE resolved = FALSE
                AND answer IS NULL
-               AND id <> $2
+               AND id <> $1
             """,
             review_id,
         )

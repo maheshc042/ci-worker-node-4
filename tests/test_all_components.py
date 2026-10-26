@@ -1,6 +1,7 @@
 """
 Unit tests for core components, filter engine, LinkedIn platform, and answers.
 """
+import re
 import unittest
 from unittest.mock import MagicMock
 
@@ -4907,6 +4908,77 @@ class TestPersonScopedAnswers(unittest.IsolatedAsyncioTestCase):
         await repo.resolve_review(11, "3 years")
         kb_sql = pool.execute.await_args_list[2].args[0]
         self.assertIn("VALUES (NULL, $1, $2, 15, 'auto-cascade')", kb_sql)
+
+    # Placeholders used in every SQL statement must line up 1:1 with the args
+    # passed. A statement that references $2 while only one arg is supplied
+    # passes mocked-pool tests but explodes on real Postgres with
+    # IndeterminateDatatypeError ('could not determine data type of
+    # parameter $1') — exactly the production failure pull-request round of
+    # 2026-10-26 (resolve_review auto-cascade scan used `id <> $2` with a
+    # single arg). This validator keeps placeholder-numbering slips from
+    # reaching the CPU pool again.
+    _PLACEHOLDER_RE = re.compile(r"\$(\d)")
+
+    def _check_placeholder_args(self, sql: str, args: tuple) -> None:
+        used = sorted({int(m.group(1)) for m in self._PLACEHOLDER_RE.finditer(sql)})
+        # ::$N casts are not a thing; a bare $N inside a string literal is
+        # out of scope for this validator (pool SQL contains none).
+        self.assertEqual(
+            used,
+            list(range(1, len(used) + 1)),
+            f"gaps in placeholder numbering: {used}\n{sql}",
+        )
+        self.assertEqual(
+            len(used),
+            len(args),
+            f"placeholders {used} vs {len(args)} args\n{sql}\nargs={args!r}",
+        )
+
+    def _drain_pool_calls(self, pool):
+        calls = [(e.args[0], e.args[1:]) for e in pool.execute.await_args_list]
+        calls += [(c.args[0], c.args[1:]) for c in pool.fetch.await_args_list]
+        calls += [(c.args[0], c.args[1:]) for c in pool.fetchrow.await_args_list]
+        calls += [
+            (c.args[0], c.args[1:]) for c in pool.executemany.await_args_list
+        ]
+        return calls
+
+    async def test_resolve_review_sql_placeholders_match_args(self):
+        row = {
+            "id": 11,
+            "question": "Can you join within 30 days?",
+            "answer": None,
+            "profile": "AI / Python Engineer",
+        }
+        repo, pool = self._repo(
+            fetchrows=[
+                {"profile": row["profile"], "question": row["question"]},
+                {"question_kind": "radio", "options": None},
+            ]
+        )
+        cascade_scan = [{"id": 12, "question": "can you join within 30 days?",
+                         "profile": "Full Stack (Node.js)"}]
+        from unittest.mock import AsyncMock
+
+        pool.fetch = AsyncMock(side_effect=[[cascade_scan[0]], []])
+        await repo.resolve_review(11, "Yes")
+        for sql, args in self._drain_pool_calls(pool):
+            self._check_placeholder_args(sql, args)
+
+    async def test_queue_review_sql_placeholders_match_args(self):
+        from unittest.mock import AsyncMock
+
+        repo, pool = self._repo([self._CROSS_ROW])
+        pool.fetchrow = AsyncMock(return_value=None)
+        await repo.queue_question_for_review(
+            "Full Stack (Node.js)",
+            "are you willing to relocate to gurgaon?",
+            "radio",
+            [],
+            job_id="j1",
+        )
+        for sql, args in self._drain_pool_calls(pool):
+            self._check_placeholder_args(sql, args)
 
 
 if __name__ == "__main__":
