@@ -352,7 +352,13 @@ class FilterEngine:
     def evaluate_card(self, job: Job) -> FilterDecision:
         """Runs against listing-card data only. Cheap, no extra page load."""
         rules = self.rules
-        title = job.title.lower()
+        # Naukri posts occasionally arrive with underscore-mangled titles
+        # ("Full_stack_developer", run 619). Word-boundary matching treats
+        # '_' as a word char, so "full stack" AND block terms ("bpo" in a
+        # would-be "bpo_mandatory") both silently miss. Collapse '_' to
+        # space once, up front — every gate below matches on the cleaned
+        # text; downstream lead matches still use the original job.title.
+        title = re.sub(r"[\s_]+", " ", job.title.lower()).strip()
         company = job.company.lower()
         location = (job.location or "").lower()
 

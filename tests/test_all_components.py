@@ -259,6 +259,37 @@ class TestFilterEngine(unittest.TestCase):
         decision = engine.evaluate_card(job)
         self.assertTrue(decision.passed, f"Failed with reason: {decision.reason}")
 
+    def test_title_underscore_normalization(self):
+        """Run 619: Naukri posted 'Full_stack_developer' — word-boundary
+        matching treats '_' as a word char, so 'full stack' never matched and
+        the job was filtered by both profiles. Collapsing '_' to space must
+        let include terms AND block terms see the real tokens."""
+        engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+
+        def decide(title: str):
+            return engine.evaluate_card(
+                Job(
+                    job_id=f"test-us-{title}",
+                    title=title,
+                    company="Test Corp",
+                    location="Bengaluru",
+                    url="http://test.com",
+                    platform="naukri",
+                )
+            )
+
+        decision = decide("Full_stack_developer")
+        self.assertTrue(
+            decision.passed,
+            f"underscore-mangled full stack title failed: {decision.reason}",
+        )
+        for title in ("Java_Developer", "Intern_developer", "BPO_Associate"):
+            decision = decide(title)
+            self.assertFalse(
+                decision.passed,
+                f"underscore-mangled blocked term '{title}' leaked through",
+            )
+
     def test_software_development_engineer_equivalence(self):
         """Verify SDE 1 and SDE 2 titles pass filter gates."""
         engine = FilterEngine(self.fs_profile.filters_for("recommended"))
