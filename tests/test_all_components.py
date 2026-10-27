@@ -336,12 +336,15 @@ class TestFilterEngine(unittest.TestCase):
         for title in ("Software Engineer (Sugar CRM)", "Software Engineer- Scala Developer"):
             self.assertFalse(passes(title), f"{title} should be blocked")
         for title in (
-            "Developer Support Engineer",
             "Full Stack Developer Web & Backend Applications",
             "JavaScript Developer",
             "Scalable Backend Engineer",
         ):
             self.assertTrue(passes(title), f"{title} should still pass")
+        # Support-desk titles use the same words but are a different hiring
+        # pool; the include list no longer contains support phrases, and the
+        # exclude list guards "customer success" explicitly.
+        self.assertFalse(passes("Developer Support Engineer"), "support desk titles are junk")
 
     def test_ai_profile_breadth_policy(self):
         """Product policy: the AI profile targets AI-application, backend, and
@@ -871,16 +874,24 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
             decision = self.engine.evaluate_card(job)
             self.assertFalse(decision.passed, f"Job {company} - {title} should have been rejected!")
 
-    def test_unified_profile_allows_devops_cloud_support_desktop(self):
-        """Unified Instahyre profile must allow DevOps, Cloud, Support, and Desktop Support roles."""
-        allowed_roles = [
+    def test_unified_profile_allows_devops_cloud_and_blocks_support(self):
+        """Unified Instahyre profile allows DevOps/Cloud dev titles only.
+
+        Support-desk roles (Technical Support / Support Engineer / Desktop
+        Support) previously cleared the include list because it contained the
+        support phrases; customer/product-support jobs are a different hiring
+        pool and are now blocked (run-audit junk rows proven it)."""
+        allows = [
             ("Deutsche Bank", "DevOps Engineer"),
             ("Razorpay", "Cloud Engineer"),
+        ]
+        blocks = [
             ("Manifest", "Technical Support Engineer"),
             ("Zendesk", "Support Engineer"),
             ("Wipro", "Desktop Support Engineer"),
+            ("Freshworks", "Customer Success Associate"),
         ]
-        for company, title in allowed_roles:
+        for company, title in allows:
             job = Job(
                 job_id=f"test-{company}-{title}",
                 title=title,
@@ -891,6 +902,18 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
             )
             decision = self.engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"Job {company} - {title} failed: {decision.reason}")
+
+        for company, title in blocks:
+            job = Job(
+                job_id=f"test-{company}-{title}",
+                title=title,
+                company=company,
+                location="Bengaluru",
+                url="https://www.instahyre.com/candidate/opportunities/",
+                platform="instahyre",
+            )
+            decision = self.engine.evaluate_card(job)
+            self.assertFalse(decision.passed, f"Job {company} - {title} should be blocked: {decision.reason}")
 
     def test_unified_profile_rejects_mobile_and_phd(self):
         """Unified Instahyre profile rejects mobile, foreign stacks, and PhD.
