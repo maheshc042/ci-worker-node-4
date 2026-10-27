@@ -2049,7 +2049,7 @@ class Orchestrator:
                 title=job.title or "",
                 company=job.company or "",
                 outcome="skipped",
-                filter_reason="already_applied",
+                filter_reason=(outcome.reason.value if outcome.reason else "already_applied"),
                 detail=(outcome.detail or "")[:200],
                 rank_score=rank_score,
             )

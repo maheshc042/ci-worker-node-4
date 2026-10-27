@@ -34,6 +34,22 @@ log = get_logger(__name__)
 
 
 class ApplyEngine:
+    # Status-banner phrases Naukri renders for dead postings. Kept short and
+    # banner-only (top ~900 chars of body text) so JD description copy that
+    # happens to discuss filled/expired roles can never misclassify a live
+    # page. "already applied" is deliberately absent — its own detector at
+    # S.JD_ALREADY_APPLIED has first claim on that phrasing.
+    _EXPIRED_MARKERS = (
+        "this job has expired",
+        "job has expired",
+        "job expired",
+        "no longer accepting applications",
+        "is no longer available",
+        "posting is closed",
+        "position is closed",
+        "applications closed",
+    )
+
     def __init__(
         self,
         page: Page,
@@ -175,7 +191,31 @@ class ApplyEngine:
         if await self._is_walkin_page():
             return "walkin"
 
+        # Dead postings render no apply machinery and prose-declare their own
+        # expiry (runs 612-619: the same handful of expired listings failed
+        # classification every run and rode the 3-strike backoff forever).
+        # Detect expiry before calling the page unresolvable.
+        if await self._is_expired_posting():
+            return "stale"
+
         return "unknown"
+
+    async def _is_expired_posting(self) -> bool:
+        """True when the page itself says the posting is dead.
+
+        Conservative: only short status-banner phrases in the top slice of
+        the rendered page (apply area / header band). Full JD bodies are
+        NOT scanned, because recruiters sometimes paste expiry prose inside
+        a description while the apply button still works.
+        """
+        try:
+            text = ((await self.page.inner_text("body", timeout=1_500)) or "").lower()
+        except Exception:
+            return False
+        if not text:
+            return False
+        banner = " ".join(text[:900].split())
+        return any(marker in banner for marker in self._EXPIRED_MARKERS)
 
     async def _visible_action_labels(self, limit: int = 6) -> list[str]:
         """Visible button/link labels on the page (diagnostics only).
@@ -344,6 +384,23 @@ class ApplyEngine:
                 self.metrics.job_timings.append(jt)
             log.info("naukri.apply.walkin_skipped", job_id=job.job_id, title=job.title[:60])
             return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=SkipReason.WALKIN, detail="Walk-in posting: no online apply path under skip_walkin policy", attempts=attempt_used)
+
+        if state == "stale":
+            jt.total_s = time.perf_counter() - t_job_start
+            if self.metrics:
+                self.metrics.job_timings.append(jt)
+            log.info("naukri.apply.stale_skipped", job_id=job.job_id, title=job.title[:60])
+            # ALREADY_APPLIED status (not plain SKIPPED) so the job enters
+            # the 90-day dedupe set: an expired posting renders no apply
+            # machinery ever again, and a plain skip would re-visit it every
+            # run (runs 612-619 strike-loop). reason=STALE_JOB keeps the
+            # audit truthful.
+            return ApplyOutcome(
+                status=ApplicationStatus.ALREADY_APPLIED,
+                reason=SkipReason.STALE_JOB,
+                detail="Expired posting detected at classification (no apply machinery on page)",
+                attempts=attempt_used,
+            )
 
         if state == "external":
             jt.total_s = time.perf_counter() - t_job_start

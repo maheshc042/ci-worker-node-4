@@ -390,7 +390,10 @@ class TestFilterEngine(unittest.TestCase):
             "Cloud Engineer",
             "Platform Engineer",
             "Site Reliability Engineer",
-            "Platform & Integration Engineer",
+            # Generic "integration engineer" moved to the FS profile only
+            # (2026-10 title-division cleanup); bare platform/cloud remains
+            # AI-side, but "Platform & Integration Engineer" without any
+            # platform/cloud/python phrase is now an FS claim.
             "Database Developer",
             "SQL Developer",
         ]:
@@ -417,6 +420,19 @@ class TestFilterEngine(unittest.TestCase):
             "Business Intelligence Analyst",
             "Associate",
             "Android Developer",
+            # Title-division cleanup (2026-10): generic SW-eng families live
+            # on the FS profile only; the AI list passes them only when an
+            # AI/Python/QA/data phrase also appears. (MERN/mean/full stack/
+            # software engineer/sde etc. were previously duplicated.)
+            "Backend Developer - Java",
+            "MERN Stack Developer",
+            "Mean Stack Developer",
+            "Full Stack Developer",
+            "Web Developer",
+            "Software Engineer",
+            "SDE 1",
+            "Founding Engineer",
+            "Associate Software Engineer",
         ]:
             self.assertFalse(passes(title), f"{title!r} must be excluded from the AI profile")
 
@@ -3555,6 +3571,65 @@ class TestWalkinDetection(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await engine._is_walkin_page())
 
 
+class TestExpiredPostingDetection(unittest.IsolatedAsyncioTestCase):
+    """Runs 612-619: the same ~6 expired Naukri listings rendered NO apply
+    machinery and failed "Apply button not resolvable within SLA" every run,
+    riding the 3-strike backoff forever. Expired pages must classify as
+    `stale` so they skip cleanly (ALREADY_APPLIED status -> 90-day dedupe)
+    instead of burning attempts per run."""
+
+    def _engine(self, body):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.naukri.apply import ApplyEngine
+
+        page = MagicMock()
+        page.inner_text = AsyncMock(return_value=body)
+        page.title = AsyncMock(return_value="Backend Engineer")
+        return ApplyEngine(page, MagicMock(), MagicMock(),
+                           policy=RunPolicy(dry_run=True, side_effects_enabled=False))
+
+    async def test_expired_banner_detected(self):
+        engine = self._engine(
+            "Acme Corp  Bengaluru\nThis job has expired on 21 Sep 2026.\nJob description follows..."
+        )
+        self.assertTrue(await engine._is_expired_posting())
+
+    async def test_no_longer_accepting_detected(self):
+        engine = self._engine(
+            "Acme Corp\nWe are no longer accepting applications for this position."
+        )
+        self.assertTrue(await engine._is_expired_posting())
+
+    async def test_live_page_not_expired(self):
+        engine = self._engine(
+            "Backend Engineer\nApply now. Great role with modern stack and remote option."
+        )
+        self.assertFalse(await engine._is_expired_posting())
+
+    async def test_expiry_prose_in_jd_body_ignored(self):
+        """Banner-only scan: expiry talk past the top slice (i.e. inside the
+        JD body where a recruiter pasted boilerplate) must NOT kill a live
+        page with a working apply button."""
+        filler = "Responsibilities include building APIs and shipping features. " * 200
+        engine = self._engine(
+            "Backend Engineer\n" + filler + "this job has expired"
+        )
+        self.assertFalse(await engine._is_expired_posting())
+
+    async def test_state_reports_stale(self):
+        from unittest.mock import AsyncMock, patch
+
+        import naukri_agent.naukri.apply as apply_mod
+
+        engine = self._engine("This job has expired on 21 Sep 2026.")
+        with patch.object(apply_mod, "first_visible", new=AsyncMock(return_value=None)), \
+             patch.object(apply_mod.ApplyEngine, "_is_walkin_page",
+                          new=AsyncMock(return_value=False)):
+            self.assertEqual(await engine._state(), "stale")
+
+
 class TestExperienceGates(unittest.TestCase):
     def _engine(self, profile_name="AI / Python Engineer", years=2.5):
         from naukri_agent.core.ranking import CandidateProfile
@@ -3830,22 +3905,27 @@ class TestSpacedTitleVariants(unittest.TestCase):
         )
 
     def test_spaced_variants_pass_both_profiles(self):
-        shared = ["Front End Developer", "Back End Developer", "Application Developer"]
-        for prof in (self.fs_profile, self.ai_profile):
-            engine = FilterEngine(prof.filters_for("recommended"))
-            for title in shared:
-                decision = engine.evaluate_card(self._job(title))
-                self.assertTrue(
-                    decision.passed,
-                    f"{prof.name}: {title!r} should pass, got {decision.detail}",
-                )
+        # 2026-10 title-division cleanup: Front End / Back End / Application
+        # Developer are FS-only claims now. The AI profile no longer holds
+        # the generic families (front end, back end, full stack, application
+        # developer...) — bogus double-coverage was 374/1111 scraped titles.
+        fs_only = ["Front End Developer", "Back End Developer", "Application Developer"]
+        fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+        ai_engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        for title in fs_only:
+            self.assertTrue(
+                fs_engine.evaluate_card(self._job(title)).passed,
+                f"FS: {title!r} should pass",
+            )
+            self.assertFalse(
+                ai_engine.evaluate_card(self._job(title)).passed,
+                f"AI: {title!r} must be an FS-only claim",
+            )
 
         # Database/infra titles are in scope on both profiles now: the resume
         # carries Postgres/Redis/SQL and Docker/AWS, so database engineering is
         # defensible. `infrastructure engineer` stays excluded as pure infra.
-        fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
         self.assertTrue(fs_engine.evaluate_card(self._job("Database Engineer")).passed)
-        ai_engine = FilterEngine(self.ai_profile.filters_for("recommended"))
         self.assertTrue(ai_engine.evaluate_card(self._job("Database Engineer")).passed)
         self.assertFalse(ai_engine.evaluate_card(self._job("Infrastructure Engineer")).passed)
 
@@ -4002,13 +4082,20 @@ class TestGigAndStackDisjoint(unittest.TestCase):
             self.assertFalse(self._decision(title).passed, title)
 
     def test_legit_titles_untouched(self):
-        for title in ["AI Engineer", "Python Developer",
-                      "Full Stack Developer", "Giganet Developer"]:
+        # "Full Stack Developer" is an FS-only claim since the 2026-10
+        # title-division cleanup (no bare full-stack on the AI profile).
+        for title in ["AI Engineer", "Python Developer"]:
             decision = self._decision(title)
-            if "Giganet" in title:
-                self.assertFalse(decision.passed)
-            else:
-                self.assertTrue(decision.passed, f"{title}: {decision.reason}")
+            self.assertTrue(decision.passed, f"{title}: {decision.reason}")
+
+        decision = self._decision("Full Stack Developer")
+        self.assertFalse(
+            decision.passed,
+            "Full Stack Developer is an FS-only claim after the title division",
+        )
+
+        decision = self._decision("Giganet Developer")
+        self.assertFalse(decision.passed)
 
 
 class TestBlockedQuestionStatic(unittest.IsolatedAsyncioTestCase):
