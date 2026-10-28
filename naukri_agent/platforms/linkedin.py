@@ -913,7 +913,11 @@ class LinkedInPlatform(BaseJobPlatform):
                 elif any(k in f"{title} {card_text}".lower() for k in ("intern", "trainee", "fresher")):
                     min_exp = 0.0
                     max_exp = 0.0
-
+                # Walk-in classification: same markers as the Naukri scrape
+                # (search.py) so F2F / drive ads from LinkedIn EA feed the
+                # walk-in gate (filters.py) and the Telegram radar, instead of
+                # applying as ordinary postings with no walk-in tagging.
+                card_low = f"{title} {card_text}".lower()
                 job = Job(
                     job_id=job_id,
                     title=title,
@@ -927,6 +931,12 @@ class LinkedInPlatform(BaseJobPlatform):
                     easy_apply=easy_apply,
                     posted_days_ago=posted_days,
                     platform="linkedin",
+                    is_walkin=(
+                        "walk-in" in card_low
+                        or "walkin" in card_low
+                        or "f2f" in card_low
+                        or "face to face" in card_low
+                    ),
                 )
                 jobs.append(job)
                 page_added += 1

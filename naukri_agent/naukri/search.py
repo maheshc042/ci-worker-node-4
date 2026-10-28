@@ -867,7 +867,12 @@ class JobSearcher:
                 rating=parse_rating(rating_text),
                 tags=tags,
                 description=description,
-                is_walkin="walk-in" in haystack or "walkin" in haystack,
+                is_walkin=(
+                    "walk-in" in haystack
+                    or "walkin" in haystack
+                    or "f2f" in haystack
+                    or "face to face" in haystack
+                ),
                 is_external=is_ext,
                 source_keyword=keyword,
                 recommendation_tab=tab_enum.value,

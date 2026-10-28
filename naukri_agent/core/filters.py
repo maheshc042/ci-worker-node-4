@@ -146,7 +146,10 @@ HYBRID_AI_TITLE_MARKERS = (
 # Same keyword set the LinkedIn card scraper uses to impute 5.0y/10.0y when no
 # stated range exists. An imputed number corroborated by the title itself is
 # trustworthy; one triggered by stray card text is not.
-_IMPUTED_SENIORITY_MARKERS = ("senior", "sr.", "sr ", "lead", "principal", "staff")
+_IMPUTED_SENIORITY_MARKERS = (
+    "senior", "sr.", "sr ", "lead", "principal", "staff",
+    "director", "vp", "vice president", "president", "chief", "head of",
+)
 
 _ROMAN_LEVELS = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 
