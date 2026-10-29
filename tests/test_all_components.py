@@ -3,6 +3,7 @@ Unit tests for core components, filter engine, LinkedIn platform, and answers.
 """
 import re
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 from naukri_agent.config import AgentConfig
@@ -138,7 +139,7 @@ class TestSpelledOutSeniority(unittest.TestCase):
             profile = getattr(cfg, meth)()
             engine = FilterEngine(profile.filters_for("recommended"))
 
-            def decision(title):
+            def decision(title, engine=engine):
                 return engine.evaluate_card(Job(
                     job_id="t", title=title, company="C",
                     location="Bengaluru", url="http://test.com", platform="x"))
@@ -230,9 +231,11 @@ class TestChatbotBlindExit(unittest.IsolatedAsyncioTestCase):
             page, MagicMock(), RunPolicy(dry_run=True, side_effects_enabled=False))
         handler._current_question = AsyncMock(return_value=None)
         handler.is_open = AsyncMock(return_value=True)
-        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=None)):
-            with patch.object(cb_mod, "dismiss_overlays", new=AsyncMock()):
-                result = await handler.run()
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=None)),
+            patch.object(cb_mod, "dismiss_overlays", new=AsyncMock()),
+        ):
+            result = await handler.run()
         self.assertFalse(result.completed)
         self.assertIsNotNone(result.error)
         self.assertIn("unknown widget", result.error)
@@ -492,7 +495,7 @@ class TestFilterEngine(unittest.TestCase):
         for prof in (self.fs_profile, self.ai_profile):
             engine = FilterEngine(prof.filters_for("recommended"))
 
-            def decision(title, lo, hi):
+            def decision(title, lo, hi, engine=engine):
                 return engine.evaluate_card(Job(
                     job_id="test-family-gate",
                     title=title,
@@ -670,7 +673,7 @@ class TestDescriptionMetadata(unittest.TestCase):
         """hrintern/careers/jobs inboxes never convert; named recruiters pass."""
         from naukri_agent.core.models import extract_description_metadata
 
-        links, emails = extract_description_metadata(
+        _links, emails = extract_description_metadata(
             "Apply now. Contact hrintern@corp.com or careers@corp.com or "
             "jobs@corp.com. Recruiter: pooja.roy@esolglobal.com"
         )
@@ -770,11 +773,11 @@ class TestLinkedInPlatform(unittest.TestCase):
         ]
         for title, company in blocked:
             job = _Job(
-                job_id="t-%s" % title[:8], title=title, company=company,
+                job_id=f"t-{title[:8]}", title=title, company=company,
                 location="Bengaluru", url="http://t", platform="linkedin",
             )
             suitable, _, _ = self.platform.evaluate_job_suitability(job)
-            self.assertFalse(suitable, "%s should be blocked" % title)
+            self.assertFalse(suitable, f"{title} should be blocked")
 
         # Substring-only overlap must not rescue a generic title. ("cloud
         # storage" would still match the genuine "cloud" DevOps skill, so
@@ -1351,7 +1354,7 @@ class TestMailerTrackRouting(unittest.TestCase):
 
     def test_finalize_email_body_enforces_signoff_and_contact(self):
         """Even if Gemini truncates sign-off or breaks mobile line, finalize_email_body fixes it."""
-        from naukri_agent.core.gemini_writer import finalize_email_body, applicant_snapshot
+        from naukri_agent.core.gemini_writer import applicant_snapshot, finalize_email_body
 
         raw_truncated = (
             "Hi Deepa,\n\n"
@@ -1512,6 +1515,7 @@ class TestGeminiPrompt(unittest.TestCase):
     def test_wellfound_pitch_prompt_shape(self):
         import json
         from unittest.mock import patch
+
         from naukri_agent.core.gemini_writer import GeminiWriter
 
         captured = {}
@@ -1579,7 +1583,7 @@ class TestGeminiPrompt(unittest.TestCase):
         )
 
     def test_finalize_email_body_fixes_broken_contact_and_hallucinated_email(self):
-        from naukri_agent.core.gemini_writer import finalize_email_body, applicant_snapshot
+        from naukri_agent.core.gemini_writer import applicant_snapshot, finalize_email_body
 
         who = applicant_snapshot()
         raw = """Hi Mohammed,
@@ -1616,7 +1620,7 @@ Mahesh Chitakoti
 
     def test_finalize_email_body_strips_unsupported_ml_claims(self):
         """Generated copy must never claim model-training tooling the resume lacks."""
-        from naukri_agent.core.gemini_writer import finalize_email_body, applicant_snapshot
+        from naukri_agent.core.gemini_writer import applicant_snapshot, finalize_email_body
 
         who = applicant_snapshot()
         raw = """Hi Priya,
@@ -1748,6 +1752,18 @@ class TestLateDrawerRecovery(unittest.IsolatedAsyncioTestCase):
         btn.scroll_into_view_if_needed = AsyncMock()
         btn.click = AsyncMock()
         btn.evaluate = AsyncMock()
+        # The engine chains `.first` off the locator result, so all button
+        # interactions must live on the `.first` child. Configuring on `btn`
+        # alone is bypassed and leaves un-configured auto-children behind,
+        # which produce un-awaited coroutines (RuntimeWarning) and silent
+        # string-op failures.
+        btn.first = AsyncMock()
+        btn.first.is_visible = AsyncMock(return_value=True)
+        btn.first.scroll_into_view_if_needed = AsyncMock()
+        btn.first.click = AsyncMock()
+        btn.first.evaluate = AsyncMock()
+        btn.first.inner_text = AsyncMock(return_value="Apply")
+        btn.first.is_enabled = AsyncMock(return_value=True)
         return btn
 
     def _completed_result(self):
@@ -2012,7 +2028,7 @@ class TestReviewRetryQuery(unittest.IsolatedAsyncioTestCase):
         pool.fetch = AsyncMock(side_effect=OSError("down"))
         repo = Repository(pool)
         # _fetch_with_retry retries on OSError with sleep; patch sleep fast
-        import unittest.mock as mock
+        from unittest import mock
 
         with mock.patch("asyncio.sleep", new=AsyncMock()):
             jobs = await repo.needs_review_retries("P", "naukri", "primary")
@@ -2109,9 +2125,11 @@ class TestResumeGate(unittest.IsolatedAsyncioTestCase):
         mgr = MagicMock()
         mgr.current_resume_name = AsyncMock(
             return_value="CV_Mahesh_Chitakoti_2026_1_.pdf")
-        with patch("naukri_agent.naukri.resume.ResumeManager", return_value=mgr):
-            with self.assertRaises(FatalAgentError):
-                await self._orc("primary")._verify_active_resume(MagicMock())
+        with (
+            patch("naukri_agent.naukri.resume.ResumeManager", return_value=mgr),
+            self.assertRaises(FatalAgentError),
+        ):
+            await self._orc("primary")._verify_active_resume(MagicMock())
 
     async def test_right_resume_passes(self):
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -2157,7 +2175,7 @@ class TestLinkedInSuitabilityTokens(unittest.TestCase):
             "Software Engineer in Test",
             "Junior Full-Stack Developer",
         ]:
-            suitable, reason, score = self._check(title)
+            suitable, reason, _score = self._check(title)
             self.assertTrue(suitable, f"{title!r} should pass: {reason}")
 
     def test_guards_hold(self):
@@ -2509,12 +2527,13 @@ class TestFreeTextHunter(unittest.IsolatedAsyncioTestCase):
         node = self._node("Bengaluru")
         scope = self._scope([node])
         handler = self._handler(self._page(scope))
-        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)):
-            with patch.object(cb_mod, "human_pause", new=AsyncMock()):
-                # force _submit True via a Save control
-                with patch.object(handler, "_submit", new=AsyncMock(return_value=True)):
-                    ok = await handler._answer_free_text_option(
-                        "Bengaluru", MagicMock(text="Which city?", options=[]))
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)),
+            patch.object(cb_mod, "human_pause", new=AsyncMock()),
+            patch.object(handler, "_submit", new=AsyncMock(return_value=True)),
+        ):
+            ok = await handler._answer_free_text_option(
+                "Bengaluru", MagicMock(text="Which city?", options=[]))
         self.assertTrue(ok)
         node.click.assert_called_once()
 
@@ -2525,10 +2544,12 @@ class TestFreeTextHunter(unittest.IsolatedAsyncioTestCase):
 
         scope = self._scope([self._node("Pune"), self._node("Chennai")])
         handler = self._handler(self._page(scope))
-        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)):
-            with patch.object(cb_mod, "human_pause", new=AsyncMock()):
-                ok = await handler._answer_free_text_option(
-                    "Bengaluru", MagicMock(text="Which city?", options=[]))
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)),
+            patch.object(cb_mod, "human_pause", new=AsyncMock()),
+        ):
+            ok = await handler._answer_free_text_option(
+                "Bengaluru", MagicMock(text="Which city?", options=[]))
         self.assertFalse(ok)
 
     async def test_click_without_evidence_keeps_hunting(self):
@@ -2539,10 +2560,12 @@ class TestFreeTextHunter(unittest.IsolatedAsyncioTestCase):
         node = self._node("Bengaluru")
         scope = self._scope([node], evidence_on=False)
         handler = self._handler(self._page(scope))
-        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)):
-            with patch.object(cb_mod, "human_pause", new=AsyncMock()):
-                ok = await handler._answer_free_text_option(
-                    "Bengaluru", MagicMock(text="Which city?", options=[]))
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)),
+            patch.object(cb_mod, "human_pause", new=AsyncMock()),
+        ):
+            ok = await handler._answer_free_text_option(
+                "Bengaluru", MagicMock(text="Which city?", options=[]))
         # Click happened (no crash) but no verified selection -> False,
         # never a blind submit.
         self.assertFalse(ok)
@@ -2556,10 +2579,12 @@ class TestFreeTextHunter(unittest.IsolatedAsyncioTestCase):
         big = self._node("Bengaluru " + ("lorem ipsum dolor sit amet " * 10))
         scope = self._scope([big])
         handler = self._handler(self._page(scope))
-        with patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)):
-            with patch.object(cb_mod, "human_pause", new=AsyncMock()):
-                ok = await handler._answer_free_text_option(
-                    "Bengaluru", MagicMock(text="Which city?", options=[]))
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=scope)),
+            patch.object(cb_mod, "human_pause", new=AsyncMock()),
+        ):
+            ok = await handler._answer_free_text_option(
+                "Bengaluru", MagicMock(text="Which city?", options=[]))
         self.assertFalse(ok)
         big.click.assert_not_called()
 
@@ -2604,7 +2629,7 @@ class TestPauseAgeQuery(unittest.IsolatedAsyncioTestCase):
 
         pool3 = AsyncMock()
         pool3.fetchrow = AsyncMock(side_effect=OSError("down"))
-        import unittest.mock as mock
+        from unittest import mock
 
         with mock.patch("asyncio.sleep", new=AsyncMock()):
             self.assertIsNone(
@@ -2788,43 +2813,43 @@ class TestRun587592LinkedInLongForm(unittest.TestCase):
     with no honest answer must stay queued for a human (never fabricated)."""
 
     # (review id, question text, kind, options, expected answer)
-    CASES = [
-        (261, "Do you have an educational background in any of these domains: "
-              "Electronics, Mechanical, or Mechatronics Engineering?",
+    CASES: ClassVar = [
+        (261, ("Do you have an educational background in any of these domains: "
+              "Electronics, Mechanical, or Mechatronics Engineering?"),
          "radio", ["Yes", "No", "Skip this question"], "No"),
-        (262, "Apply to EaseMyTrip.com 3/4 pages Additional Questions How many "
+        (262, ("Apply to EaseMyTrip.com 3/4 pages Additional Questions How many "
               "years of hands-on professional experience do you have in AI/ML "
               "development, including Generative AI and Large Language Models "
-              "(LLMs)?",
+              "(LLMs)?"),
          "text", [], "2"),
-        (263, "Have you independently developed and deployed production-ready "
+        (263, ("Have you independently developed and deployed production-ready "
               "Generative AI applications using OpenAI, Claude, Gemini, Llama or "
-              "other LLMs?",
+              "other LLMs?"),
          "radio", ["Yes", "No"], "Yes"),
-        (264, "Do you have hands-on experience building AI agents, RAG pipelines, "
+        (264, ("Do you have hands-on experience building AI agents, RAG pipelines, "
               "vector databases and LLM orchestration using LangChain, LangGraph "
-              "or similar frameworks?",
+              "or similar frameworks?"),
          "radio", ["Yes", "No"], "Yes"),
-        (265, "Have you developed AI-powered conversational assistants or "
+        (265, ("Have you developed AI-powered conversational assistants or "
               "autonomous agents that integrate with external APIs to execute "
-              "real-world tasks?",
+              "real-world tasks?"),
          "radio", ["Yes", "No"], "Yes"),
-        (266, "Do you have hands-on experience with Python, FastAPI, cloud "
+        (266, ("Do you have hands-on experience with Python, FastAPI, cloud "
               "deployment (AWS/GCP/Azure) and optimizing LLM applications for "
-              "latency, accuracy and cost?",
+              "latency, accuracy and cost?"),
          "radio", ["Yes", "No"], "Yes"),
         (267, "What is your expected annual CTC in \u20b9 lakh (LPA)?",
          "text", [], "7"),
-        (288, "Apply to Greyhorse Clearinghouse LLC 3/4 pages Additional "
+        (288, ("Apply to Greyhorse Clearinghouse LLC 3/4 pages Additional "
               "Questions Can you Design, Build, and Deploy an AI Agent(s) within "
-              "Two Weeks?",
+              "Two Weeks?"),
          "radio", ["Yes", "No"], "Yes"),
-        (289, "Do you understand that this is a Contractor Engagement, with "
+        (289, ("Do you understand that this is a Contractor Engagement, with "
               "Compensation paid against Completed and Approved Milestones under "
-              "the Contract?",
+              "the Contract?"),
          "radio", ["Yes", "No"], "Yes"),
-        (290, "Do you understand that Contract Renewal will depend on your "
-              "Delivery and Performance?",
+        (290, ("Do you understand that Contract Renewal will depend on your "
+              "Delivery and Performance?"),
          "radio", ["Yes", "No"], "Yes"),
     ]
 
@@ -3085,11 +3110,11 @@ class TestUnclaimedSkillPolicy(unittest.TestCase):
     def _ea(self, **kw):
         from naukri_agent.core.answers import ExperienceAnswers
 
-        base = dict(
-            skills={"python": 2.5, "react": 2.0},
-            unclaimed_yes=["playwright", "web development", "web technologies"],
-            unclaimed_no=["java", "spring"],
-        )
+        base = {
+            "skills": {"python": 2.5, "react": 2.0},
+            "unclaimed_yes": ["playwright", "web development", "web technologies"],
+            "unclaimed_no": ["java", "spring"],
+        }
         base.update(kw)
         return ExperienceAnswers(**base)
 
@@ -3230,13 +3255,13 @@ class TestNotifierHeaderLevel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(header_prefix("running"), "🚀 SUCCESS")
 
     async def test_telegram_uses_partial_prefix_on_job_failures(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         from naukri_agent.notify.notifier import TelegramNotifier
 
         sent = {}
 
-        async def fake_post(self, url, json):  # noqa: A002 - httpx signature
+        async def fake_post(self, url, json):
             sent.update(json)
             return MagicMock(status_code=200, text="ok")
 
@@ -3667,23 +3692,35 @@ class TestExperienceGates(unittest.TestCase):
 
     def _job(self, title, company="C", min_exp=None, max_exp=None):
         return Job(
-            job_id="t-%s" % title[:10], title=title, company=company,
+            job_id=f"t-{title[:10]}", title=title, company=company,
             location="Bengaluru", url="http://t", platform="naukri",
             min_experience=min_exp, max_experience=max_exp,
         )
 
-    def test_fresher_only_band_rejected(self):
-        """0-0 fresher requisitions reject at 2y+ tenure (run 424)."""
+    def test_fresher_only_band_now_eligible(self):
+        """0-0 fresher requisitions are no longer hard-rejected (Oct 28 2026
+        user decision): the candidate is fine applying to fresher/fresher-adjacent
+        bands, so the experience gate must not cut 0-0 bands for >=2y tenure.
+        The gate itself was removed; only the senior band ceiling remains."""
         engine = self._engine()
         d = engine.evaluate_card(self._job("AI Engineer", min_exp=0.0, max_exp=0.0))
-        self.assertFalse(d.passed)
-        self.assertEqual(d.reason.value, "filter_experience")
+        self.assertTrue(d.passed, f"wrongly rejected: {d.detail}")
+        self.assertIsNone(d.reason)
 
     def test_narrow_bands_stay_eligible(self):
-        """0-1/0-2 bands stay eligible — only pure 0-0 is cut."""
+        """0-0/0-1/0-2 bands stay eligible — fresher bands are open."""
         engine = self._engine()
+        self.assertTrue(engine.evaluate_card(self._job("AI Engineer", min_exp=0.0, max_exp=0.0)).passed)
         self.assertTrue(engine.evaluate_card(self._job("AI Engineer", min_exp=0.0, max_exp=1.0)).passed)
         self.assertTrue(engine.evaluate_card(self._job("AI Engineer", min_exp=0.0, max_exp=2.0)).passed)
+
+    def test_senior_band_ceiling_still_enforced(self):
+        """Removing the fresher-only cut must not open the senior ceiling:
+        bands above the configured startup ceiling are still hard-rejected."""
+        engine = self._engine()
+        d = engine.evaluate_card(self._job("AI Engineer", min_exp=0.0, max_exp=12.0))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason.value, "filter_experience")
 
     def test_bare_net_blocked_tech_adjacent(self):
         """'TypeScript NET' is .NET (run 391 Neu Edge miss)."""
@@ -3799,8 +3836,10 @@ class TestCompletenessDiscount(unittest.TestCase):
         return RankingEngine(cand)
 
     def _job(self, **kw):
-        base = dict(job_id="t", title="Python Developer", company="C",
-                    location="Bengaluru", url="http://t", platform="naukri")
+        base = {
+            "job_id": "t", "title": "Python Developer", "company": "C",
+            "location": "Bengaluru", "url": "http://t", "platform": "naukri",
+        }
         base.update(kw)
         return Job(**base)
 
@@ -3850,7 +3889,7 @@ class TestImputationEdges(unittest.TestCase):
 
     def _job(self, title, company="C", min_exp=None, max_exp=None):
         return Job(
-            job_id="t-%s" % title[:10], title=title, company=company,
+            job_id=f"t-{title[:10]}", title=title, company=company,
             location="Bengaluru", url="http://t", platform="naukri",
             min_experience=min_exp, max_experience=max_exp,
         )
@@ -4334,7 +4373,7 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
 
-        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job, SkipReason
+        from naukri_agent.core.models import ApplicationStatus, ApplyOutcome, Job, SkipReason
 
         orch = self._orchestrator()
         orch.repo.record_audit = AsyncMock()
@@ -4369,7 +4408,7 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
 
-        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job, SkipReason
+        from naukri_agent.core.models import ApplicationStatus, ApplyOutcome, Job, SkipReason
 
         orch = self._orchestrator()
         orch.repo.record_audit = AsyncMock()
@@ -4429,7 +4468,7 @@ class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
         the exporter or call Step 7. Without `_retry_and_export` the
         application would exist in Postgres and in `stats.applied` but be
         missing from `applied_jobs.csv`."""
-        from naukri_agent.core.models import ApplyOutcome, ApplicationStatus, Job
+        from naukri_agent.core.models import ApplicationStatus, ApplyOutcome, Job
 
         orch = self._orchestrator()
         job = Job(job_id="j9", title="Python Developer", company="Acme", url="u")
@@ -4621,9 +4660,8 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pool.fetch.await_args.args[-1], 0)
 
     def test_dialog_open_streak_trips_platform_breaker(self):
-        from types import SimpleNamespace
-
         import time
+        from types import SimpleNamespace
 
         from naukri_agent.core.orchestrator import Orchestrator, StopRun
 
@@ -4912,7 +4950,7 @@ class TestPersonScopedAnswers(unittest.IsolatedAsyncioTestCase):
     directly. Same-profile rows win ties so a deliberate per-profile
     override is never silently shadowed."""
 
-    _CROSS_ROW = {
+    _CROSS_ROW: ClassVar = {
         "id": 7,
         "question": "Are you willing to relocate to Gurgaon?",
         "answer": "Yes, within 2 months",

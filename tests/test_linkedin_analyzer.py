@@ -219,7 +219,6 @@ class TestGotoSearch(unittest.IsolatedAsyncioTestCase):
                 calls.append(wait_until)
                 if len(calls) == 1:
                     raise TimeoutError("Timeout 45000ms exceeded")
-                return None
 
         self.assertTrue(await LinkedInHunter._goto_search(FakePage(), "https://x"))
         self.assertEqual(calls, ["domcontentloaded", "commit"])
@@ -508,9 +507,9 @@ class TestHumanScroll(unittest.IsolatedAsyncioTestCase):
 
     def test_return_shape(self):
         import asyncio
+        from unittest import mock
 
         from naukri_agent.linkedin.scraper import LinkedInHunter
-        import unittest.mock as mock
 
         page = mock.MagicMock()
         page.locator = mock.MagicMock(side_effect=RuntimeError("closed"))

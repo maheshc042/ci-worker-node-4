@@ -326,19 +326,10 @@ class FilterEngine:
                         SkipReason.FILTER_EXPERIENCE,
                         f"caps at {job.max_experience}y < min {exp.min_years}y",
                     )
-                # Fresher-only requisitions cap below any experienced hire: a
-                # 0-0 band is a guaranteed recruiter reject at 2y+ tenure
-                # (run 424 applied to a 0-0 "Fresher" posting). Bands reaching
-                # 1.0y+ stay eligible — overqualified decay handles them.
-                candidate_years = float(
-                    getattr(self.candidate, "target_experience_years", 0) or 0
-                )
-                if job.max_experience < 1.0 and candidate_years >= 2.0:
-                    return FilterDecision(
-                        False,
-                        SkipReason.FILTER_EXPERIENCE,
-                        f"fresher-only band caps at {job.max_experience}y",
-                    )
+                # Fresher-only limit REMOVED per user request (Oct 28 2026):
+                # user is fine applying to fresher/fresher-adjacent bands
+                # (0-0, 0-1). Run 424's 0-0 apply is no longer treated as
+                # wasted. Startup bands below still respect the ceiling.
                 # Allow wide startup requisition bands up to the configured
                 # ceiling if min_experience <= 3.5y; bands starting above the
                 # general ceiling keep a fixed 6.0y safety net.
@@ -420,8 +411,7 @@ class FilterEngine:
                         suffix = suffix_match.group(0)
                         for part in parts[:-1]:
                             title_variants.append(f"{part} {suffix}")
-                    for part in parts:
-                        title_variants.append(part)
+                    title_variants.extend(parts)
 
             matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
             if not matched_title_term:
@@ -528,8 +518,12 @@ class FilterEngine:
         # 6. Walk-in check: drives in the configured home city are allowed to
         # apply and alert. With no configured home city, fail open rather than
         # rejecting every walk-in against a guessed city.
-        if rules.skip_walkin and job.is_walkin and self._home_locations:
-            if not any(city in location for city in self._home_locations):
+        if (
+            rules.skip_walkin
+            and job.is_walkin
+            and self._home_locations
+            and not any(city in location for city in self._home_locations)
+        ):
                 home_label = self._home_locations[0].title()
                 return FilterDecision(
                     False,

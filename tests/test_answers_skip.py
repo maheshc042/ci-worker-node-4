@@ -8,7 +8,6 @@ import unittest
 from naukri_agent.core.answers import AnswerEngine, ExperienceAnswers
 from naukri_agent.core.models import ScreeningQuestion
 
-
 # Geography tests supply their own home city fixture; production always
 # passes `candidate.location` from config.
 _HOME = "Bengaluru, India"

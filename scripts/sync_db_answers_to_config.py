@@ -1,12 +1,13 @@
 import asyncio
-import yaml
 from pathlib import Path
-from naukri_agent.db.repository import Repository
-from naukri_agent.db.pool import close_pool
+
 from naukri_agent.cli import _bootstrap
+from naukri_agent.db.pool import close_pool
+from naukri_agent.db.repository import Repository
+
 
 async def sync_db_answers():
-    settings, config = _bootstrap(None)
+    _settings, config = _bootstrap(None)
     repo = await Repository.create()
 
     try:
@@ -30,7 +31,6 @@ async def sync_db_answers():
         config_path = Path("config/config.yaml")
         raw_yaml = config_path.read_text(encoding="utf-8")
 
-        added_count = 0
         current_answers = set(config.answers.keys())
 
         new_entries = {}

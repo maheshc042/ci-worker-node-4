@@ -1,7 +1,9 @@
 import asyncio
+
+from naukri_agent.cli import _bootstrap
 from naukri_agent.db.pool import close_pool
 from naukri_agent.db.repository import Repository
-from naukri_agent.cli import _bootstrap
+
 
 async def main():
     _, config = _bootstrap(None)

@@ -1,8 +1,9 @@
 import asyncio
 import os
+from urllib.parse import urlparse, urlunparse
+
 import asyncpg
 from dotenv import load_dotenv
-from urllib.parse import urlparse, urlunparse
 
 load_dotenv()
 

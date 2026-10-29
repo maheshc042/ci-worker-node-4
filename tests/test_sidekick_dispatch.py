@@ -8,13 +8,13 @@ import unittest
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from naukri_agent.config import SidekickConfig
 from naukri_agent.core.external_dispatcher import (
     ExternalJobDispatcher,
     idempotency_key,
     next_retry_delay,
     normalize_dispatch_url,
 )
-from naukri_agent.config import SidekickConfig
 from naukri_agent.core.orchestrator import resolve_dispatch_url
 
 
@@ -139,7 +139,7 @@ class TestDispatch(unittest.TestCase):
         cutshort/manual)."""
         for platform in ("cutshort", "instahyre", "wellfound", "naukri", "linkedin", "hiringcafe"):
             client = FakeClient(FakeResp(202))
-            disp, repo, patcher = self._dispatcher(client)
+            disp, _repo, patcher = self._dispatcher(client)
             with patcher:
                 asyncio.run(disp.dispatch_row(_row(platform=platform)))
             self.assertEqual(client.seen[0]["json"]["source"], platform)
