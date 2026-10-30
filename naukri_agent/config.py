@@ -373,7 +373,7 @@ def _stringify_answers(value: Any) -> dict[str, str]:
     if value in (None, ""):
         return {}
     if not isinstance(value, dict):
-        raise ValueError("`answers` must be a mapping of question pattern -> answer")
+        raise ValueError("`answers` must be a mapping of question pattern -> answer")  # noqa: TRY004
     normalised: dict[str, str] = {}
     for key, answer in value.items():
         pattern = str(key).strip().lower()
@@ -659,7 +659,7 @@ class ExperienceConfig(_Model):
         if value in (None, ""):
             return {}
         if not isinstance(value, dict):
-            raise ValueError("experience.skills must be a mapping of skill -> years")
+            raise ValueError("experience.skills must be a mapping of skill -> years")  # noqa: TRY004
         out: dict[str, float] = {}
         for skill, years in value.items():
             name = " ".join(str(skill).strip().lower().split())
@@ -1099,7 +1099,7 @@ class AgentConfig(_Model):
                         combined_includes.append(t)
 
         forbidden_tech_and_seniority = {
-            "principal", "staff", "architect", "manager", "trainer", "sales", "presales", "pre-sales", "bpo",
+            "principal", "architect", "manager", "trainer", "sales", "presales", "pre-sales", "bpo",
             "php", "wordpress", ".net", "dotnet", "dot net", "spring boot", "asp.net", "c#", "c++",
             "golang", "golang developer", "golang engineer", "go developer", "go engineer", "java",
             "mainframe", "sap", "salesforce", "drupal", "magento", "engineering manager",
@@ -1212,7 +1212,7 @@ class AgentConfig(_Model):
                         combined_includes.append(t)
 
         forbidden_tech_and_seniority = {
-            "principal", "staff", "architect", "manager", "trainer", "sales", "presales", "pre-sales", "bpo",
+            "principal", "architect", "manager", "trainer", "sales", "presales", "pre-sales", "bpo",
             "php", "wordpress", ".net", "dotnet", "dot net", "spring boot", "asp.net", "c#", "c++",
             "golang", "golang developer", "golang engineer", "go developer", "go engineer", "java",
             "mainframe", "sap", "salesforce", "drupal", "magento", "engineering manager",
@@ -1369,7 +1369,7 @@ class AgentConfig(_Model):
                 # path applies lead-titled roles without a title check).
                 title_must_include_any=list(search_terms),
                 title_must_exclude_any=[
-                    "principal", "staff", "architect", "manager",
+                    "principal", "architect", "manager",
                     "trainer", "sales", "presales", "pre-sales", "bpo",
                     "php", "wordpress", ".net", "dotnet", "dot net",
                     "intern", "internship",
@@ -1427,7 +1427,7 @@ class AgentConfig(_Model):
         # here — seniority is guarded by the experience gates, not the title
         # blocklist (same as LinkedIn/Cutshort/Instahyre: "lead" stays allowed).
         forbidden_tech_and_seniority = {
-            "principal", "staff", "architect", "manager", "director", "head of",
+            "principal", "architect", "manager", "director", "head of",
             "trainer", "sales", "presales", "pre-sales", "bpo",
             "php", "wordpress", ".net", "dotnet", "dot net", "spring boot", "asp.net", "c#", "c++",
             "golang", "golang developer", "golang engineer", "go developer", "go engineer", "java",

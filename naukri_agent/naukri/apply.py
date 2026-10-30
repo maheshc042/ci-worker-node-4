@@ -574,7 +574,11 @@ class ApplyEngine:
             
                 await asyncio.sleep(1.5)  # Wait for React hydration / event listeners to attach
 
-                # Try to click all visible apply buttons in case the first is a dummy/sticky header
+                # Click the first visible apply button only. Naukri renders TWO
+                # button#apply-button nodes (one in #job_header, one in the sticky
+                # header) — dispatching clicks to both double-fires the React
+                # handler and can tear down the drawer mid-open (run-605
+                # no-confirmation dumps all contain exactly 2 button nodes).
                 clicked = False
                 for btn in await self.page.locator("button#apply-button").all():
                     if await btn.is_visible():
@@ -586,6 +590,7 @@ class ApplyEngine:
                                 # Fallback to pure JS click
                                 await btn.evaluate("node => node.click()")
                             clicked = True
+                            break  # one dispatch only — never click the sticky twin
                         except Exception:
                             pass
 

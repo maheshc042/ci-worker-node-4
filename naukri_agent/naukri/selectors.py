@@ -210,7 +210,17 @@ CARD_LOCATION = ["span.locWdth", "li.location span", "span[class*='loc']", "li.l
 CARD_POSTED = ["span.job-post-day", "span.date", "span[class*='post-day']", "span.jobPostDay"]
 CARD_DESCRIPTION = ["span.job-desc", "div.job-description", "span[class*='job-desc']"]
 CARD_TAGS = ["ul.tags-gt li", "ul.tags li", "div.tags span"]
-CARD_RATING = ["a.rating span.main-2", "span.rating", "span[class*='rating']"]
+CARD_RATING = [
+    "a.rating span.main-2",
+    "span.rating",
+    # Run 605 reco dump: company ratings live in <span class="starRating">
+    # (camelCase), which plain "rating" substring selectors miss — every
+    # harvested reco job parsed as rating=None. Safe to append: the reco
+    # dump has zero lowercase-"rating" class names.
+    "span.starRating",
+    "span[class*='starRating']",
+    "span[class*='rating']",
+]
 CARD_ALREADY_APPLIED = [
     "span.applied-status",
     "span:has-text('Applied')",

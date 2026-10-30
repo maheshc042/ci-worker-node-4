@@ -315,6 +315,68 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
+    def test_seniority_title_blocklist_removed_low_band_passes(self):
+        """Run-605 gap fix: 'senior'/'sr.'/'sr'/'staff' left the title
+        blocklists (FS + AI profiles and all unified platform sets). A
+        senior/staff titled job that states an explicitly low band must now
+        be judged by include + experience gates, not the title string.
+
+        Run 605 killed "Staff Software Engineer (AI Evals)" despite its
+        2-4y band; the same removal unblocks "Senior Python Developer" with
+        a junior band. Seniority is enforced downstream by same run."""
+        cases = [
+            (self.fs_profile, "Staff Software Engineer (AI Evals)", 2.0, 4.0),
+            (self.ai_profile, "Senior Python Developer", 1.0, 3.0),
+            (self.ai_profile, "Sr. QA Automation Engineer", 1.5, 3.0),
+        ]
+        for profile, title, lo, hi in cases:
+            engine = FilterEngine(profile.filters_for("recommended"))
+            job = Job(
+                job_id=f"test-lowband-seniority-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+                min_experience=lo,
+                max_experience=hi,
+            )
+            decision = engine.evaluate_card(job)
+            self.assertTrue(
+                decision.passed,
+                f"{profile.name}: {title!r} must pass with band {lo}-{hi}; "
+                f"blocked by {decision.reason}",
+            )
+
+    def test_unbanded_seniority_title_still_rejected_after_imputation(self):
+        """Guard rail for the blocklist removal: with no stated band, senior/
+        staff titles must still be rejected. The orchestrator calls
+        impute_seniority() before FilterEngine.evaluate_card(); verify that
+        composed flow mirrors the real pipeline (run-424 SDE-4 regression)."""
+        from naukri_agent.core.filters import impute_seniority
+        from naukri_agent.core.models import SkipReason
+
+        engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+        for title in (
+            "Senior Software Engineer",
+            "Staff Software Engineer (AI Evals)",
+        ):
+            job = Job(
+                job_id=f"test-unbanded-seniority-{title}",
+                title=title,
+                company="Test Corp",
+                location="Bengaluru",
+                url="http://test.com",
+                platform="naukri",
+            )
+            self.assertTrue(impute_seniority(job), f"no band imputed for {title!r}")
+            decision = engine.evaluate_card(job)
+            self.assertFalse(
+                decision.passed,
+                f"un-banded {title!r} slipped through the 3.5y ceiling",
+            )
+            self.assertEqual(decision.reason, SkipReason.FILTER_EXPERIENCE)
+
     def test_fullstack_blocks_unrelated_backend_stacks(self):
         """Run 591 applied to Sugar CRM and Scala roles.
 
@@ -4722,6 +4784,41 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clean_company_text("24/7 Customer Review Services"), "24/7 Customer Review Services")
         self.assertEqual(clean_company_text("Review Analytics"), "Review Analytics")
 
+    def test_clean_company_text_strips_posted_by_prefix(self):
+        """Run 605 reco dump: 8 of 70 subTitle buttons render whole-string
+        "Posted by <agency>" slots (confidential/aggregator postings). The
+        poster prefix is not a company name; the agency itself is kept as
+        a clean, dedupable name."""
+        from naukri_agent.naukri.search import clean_company_text
+
+        self.assertEqual(clean_company_text("Posted by Tenacious Hr Solution"), "Tenacious Hr Solution")
+        self.assertEqual(clean_company_text("Posted by: Talentzo Delhi"), "Talentzo Delhi")
+        # "Postedy Technologies" must NOT be treated as an "Posted by" slot.
+        self.assertEqual(clean_company_text("Postedy Technologies"), "Postedy Technologies")
+
+    def test_reco_company_selectors_put_button_sub_title_first(self):
+        """Run 605 reco dump: 70 button.subTitle hits vs 3 span.subTitle /
+        0 a.subTitle. The button variant must walk first so real employer
+        names stop the walk before the older fallback selectors."""
+        from naukri_agent.naukri.search import _RECO_COMPANY_SELECTORS
+
+        self.assertEqual(_RECO_COMPANY_SELECTORS[0], "button.subTitle")
+        # Older fallbacks must survive for legacy DOM shapes.
+        self.assertIn("span.subTitle", _RECO_COMPANY_SELECTORS)
+        self.assertIn("span.companyWrapper span", _RECO_COMPANY_SELECTORS)
+
+    def test_parse_rating_accepts_star_rating_badge_text(self):
+        """Run 605 reco dump: company ratings live in
+        <span class="starRating"> with inner text "Company rating <N.N>".
+        parse_rating must pull the numeric float out of that badge text."""
+        from naukri_agent.naukri.parser import parse_rating
+
+        self.assertEqual(parse_rating("Company rating 3.5"), 3.5)
+        self.assertEqual(parse_rating("Company rating 4.9"), 4.9)
+        self.assertEqual(parse_rating("2.6"), 2.6)
+        self.assertIsNone(parse_rating("Company rating 6.0"))  # out of range
+        self.assertIsNone(parse_rating(""))
+
 
 class TestRun607CompanyCohortFixes(unittest.IsolatedAsyncioTestCase):
     """Runs 607/608 diagnostics -> fixes:
@@ -4771,6 +4868,30 @@ class TestRun607CompanyCohortFixes(unittest.IsolatedAsyncioTestCase):
             new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=all_bad),
         ):
             self.assertEqual(await company_text_from_card(card=None), "")
+
+    async def test_company_text_from_card_prefers_button_sub_title(self):
+        """Run 605 reco dump: the company element is
+        <button class="subTitle ellipsis" title="Infosys">Infosys</button> —
+        the walk must return the real name from the button variant without
+        falling through to the rating badge, and a "Posted by <agency>"
+        slot must yield the agency name with its prefix stripped."""
+        from unittest.mock import patch
+
+        from naukri_agent.naukri.search import company_text_from_card
+
+        btn_first = {"button.subTitle": "Infosys"}
+        with patch(
+            "naukri_agent.naukri.search.first_visible",
+            new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=btn_first),
+        ):
+            self.assertEqual(await company_text_from_card(card=None), "Infosys")
+
+        posted_by = {"button.subTitle": "Posted by Tenacious Hr Solution"}
+        with patch(
+            "naukri_agent.naukri.search.first_visible",
+            new=lambda card, selectors, timeout_ms=0: _mk_locator(page=None, selectors=selectors, table=posted_by),
+        ):
+            self.assertEqual(await company_text_from_card(card=None), "Tenacious Hr Solution")
 
     # ------------------------------------------------------------ Fix A2
 
@@ -5158,6 +5279,130 @@ class TestPersonScopedAnswers(unittest.IsolatedAsyncioTestCase):
         )
         for sql, args in self._drain_pool_calls(pool):
             self._check_placeholder_args(sql, args)
+
+
+class TestRun628CloudiQSAdditionalQuestions(unittest.TestCase):
+    """Run 628 #392-#397: CloudiQS "3/4 pages Additional Questions" on the
+    Full-Stack profile. Every answer is grounded in the persona config: agents
+    built/deployed with Bedrock/LangGraph on AWS, 3 years full-stack
+    experience, 2 years AI/LLM hands-on, expected CTC 7. A repeat run must
+    resolve all six from config instead of queueing human review."""
+
+    # (review id, question text, kind, options, expected answer)
+    CASES: ClassVar = [
+        (392, ("Apply to CloudiQS 3/4 pages Additional Questions Have you built "
+              "and deployed AI agents using Amazon Bedrock, Bedrock AgentCore, "
+              "LangGraph or similar frameworks?"),
+         "radio", ["Yes", "No"], "Yes"),
+        (393, ("Apply to CloudiQS 3/4 pages Additional Questions How many years "
+              "of professional experience do you have in full-stack development "
+              "using React, Next.js, Python or Node.js?"),
+         "text", [], "3"),
+        (394, ("Apply to CloudiQS 3/4 pages Additional Questions How many years "
+              "of hands-on experience do you have developing applications on "
+              "AWS?"),
+         "text", [], "2"),
+        (395, ("Apply to CloudiQS 3/4 pages Additional Questions Do you have "
+              "hands-on experience developing backend APIs using Python, "
+              "FastAPI or Node.js?"),
+         "radio", ["Yes", "No"], "Yes"),
+        (396, ("Apply to CloudiQS 3/4 pages Additional Questions Have you worked "
+              "with AI technologies such as LLMs, RAG, MCP or multi-agent "
+              "orchestration?"),
+         "radio", ["Yes", "No"], "Yes"),
+        (397, ("Apply to CloudiQS 3/4 pages Additional Questions What are your "
+              "salary expectations?"),
+         "text", [], "7"),
+    ]
+
+    def _fs_eng(self):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if p.name == "Full Stack / Web Developer")
+        return AnswerEngine(
+            kb=[(k, v) for k, v in cfg.answers.items()],
+            profile_answers=dict(prof.answers),
+            strict=True,
+            experience=cfg.experience_for(prof),
+        )
+
+    def test_cloudiqs_questions_resolve_from_config(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._fs_eng()
+        for rid, text, kind, options, expected in self.CASES:
+            with self.subTest(review=rid):
+                r = eng.resolve(
+                    ScreeningQuestion(text=text, kind=kind, options=list(options))
+                )
+                self.assertIsNotNone(r, f"#{rid} unresolved")
+                self.assertEqual(r.value, expected, f"#{rid}")
+                # Must be answered by our own config keys, never a KB fallback.
+                self.assertEqual(r.source, "profile", f"#{rid} matched wrong source")
+
+
+class TestRun631AiPythonQuestions(unittest.TestCase):
+    """Run 631 #398-#402: user-confirmed screening answers on the AI/Python
+    profile. #398 is a Naukri reco C# question; #399/#400/#402 come from the
+    iNextLabs LinkedIn flow (linkedin-4484934350), whose stored texts carry the
+    "Apply to iNextLabs 3/5 pages" prefix (and #402 is LPW's garbled radio
+    label). Grounding: C# = 0 (the profile's 2 AI years do not extend to C#);
+    Conversational AI and Voice AI share those same 2 AI years; every location
+    willingness is Yes. A repeat run must resolve all from config."""
+
+    # (review id, question text, kind, options, expected answer)
+    CASES: ClassVar = [
+        (398, "How Many Years of Experience on C#", "unknown", [], "0"),
+        (399, ("Apply to iNextLabs 3/5 pages Additional Questions How many years "
+              "of work experience do you have with Conversational AI?"),
+         "text", [], "2"),
+        (400, ("How many years of experience do you currently have in Voice AI "
+              "applications?"),
+         "text", [], "2"),
+        (402, ("(Chennai/Coimbatore)* Yes No This field is required Back Next "
+              "0 notifications"),
+         "radio", ["Yes", "No"], "Yes"),
+    ]
+
+    def _ai_eng(self):
+        from naukri_agent.core.answers import AnswerEngine
+
+        cfg = AgentConfig.load()
+        prof = next(p for p in cfg.profiles if p.name == "AI / Python Engineer")
+        return AnswerEngine(
+            kb=[(k, v) for k, v in cfg.answers.items()],
+            profile_answers=dict(prof.answers),
+            strict=True,
+            experience=cfg.experience_for(prof),
+        )
+
+    def test_run631_questions_resolve_from_config(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._ai_eng()
+        for rid, text, kind, options, expected in self.CASES:
+            with self.subTest(review=rid):
+                r = eng.resolve(
+                    ScreeningQuestion(text=text, kind=kind, options=list(options))
+                )
+                self.assertIsNotNone(r, f"#{rid} unresolved")
+                self.assertEqual(r.value, expected, f"#{rid}")
+                # Must be answered by our own config keys, never a KB fallback.
+                self.assertEqual(r.source, "profile", f"#{rid} matched wrong source")
+
+    def test_conversational_ai_does_not_leak_to_python_years(self):
+        """Guard: the pre-existing LinkedIn Python-years key must not answer
+        the Conversational AI question via fuzzy proximity."""
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = self._ai_eng()
+        r = eng.resolve(ScreeningQuestion(
+            text="How many years of work experience do you have with Conversational AI?",
+            kind="text",
+        ))
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "2")
 
 
 if __name__ == "__main__":

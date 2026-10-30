@@ -70,15 +70,32 @@ _REVIEW_COUNT_GARBAGE = re.compile(
 )
 
 
+# Run 605 reco dump: confidential/aggregator cards render the poster as a
+# whole-string "Posted by <agency>" slot instead of a company name. Strip
+# the poster prefix — the agency itself is still a usable, dedupable name.
+_POSTED_BY_PREFIX = re.compile(r"^posted\s*by[:\s]+", re.IGNORECASE)
+
+
 def clean_company_text(text: str | None) -> str:
     """Returns company text, or '' when it is a metric badge, not a name."""
-    cleaned = (text or "").strip()
+    cleaned = _POSTED_BY_PREFIX.sub("", (text or "").strip()).strip()
     if _COMPANY_RATING_GARBAGE.search(cleaned) or _REVIEW_COUNT_GARBAGE.match(cleaned):
         return ""
     return cleaned
 
 
-_RECO_COMPANY_SELECTORS = ["span.subTitle", "span.companyWrapper span", "a.subTitle"]
+# Run 605 reco dump (/mnjuser/recommendedjobs): the company element is a
+# <button class="subTitle ellipsis" title="Infosys">Infosys</button> —
+# 70 button.subTitle hits vs 3 span.subTitle / 0 a.subTitle, so real
+# employer names were skipped and the walk fell through to the rating
+# badge, landing "Company rating 3.9" in job.company again. Keep the
+# span variants as fallbacks for older DOM shapes.
+_RECO_COMPANY_SELECTORS = [
+    "button.subTitle",
+    "span.subTitle",
+    "span.companyWrapper span",
+    "a.subTitle",
+]
 
 
 async def company_text_from_card(card: Any, timeout_ms: int = 200) -> str:
