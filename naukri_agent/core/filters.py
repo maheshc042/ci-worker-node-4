@@ -161,8 +161,11 @@ def _title_suggests_senior(title: str) -> bool:
     # Spelled-out levels read the same as abbreviations ("Software
     # Development Engineer 4" == "SDE-4", which sailed through to an apply
     # at Flipkart). Normalise before the level check, mirroring Gate 2's
-    # SDE-equivalence.
+    # SDE-equivalence. Plain "software engineer" is normalised too so the
+    # vendor digits attach: "Software Engineer 3" == "SDE 3" (leaked under
+    # run-631 otherwise — only the roman "Software Engineer III" rejected).
     low = re.sub(r"\bsoftware development engineer\b", "sde", low)
+    low = re.sub(r"\bsoftware engineer\b", "sde", low)
     # Leveled bands read senior at 3+: SDE 4 / SDE-III imply a senior
     # requisition while SDE 1/2 stay junior (run 424 applied SDE-4 sight
     # unseen). Bare III/IV tokens behave the same ("Engineer III").

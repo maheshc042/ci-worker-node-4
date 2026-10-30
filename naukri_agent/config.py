@@ -1107,6 +1107,14 @@ class AgentConfig(_Model):
             "enterprise architect", "tech architect", "technical architect", "sr. manager",
             "gis", "oac", "intershop", "erp", "pega", "servicenow", "intern", "internship",
             "it support", "helpdesk", "service desk", "it engineer",
+            # Support family (run-631 dump audit): the yaml profiles block the
+            # full support family, but the hardcoded unified set only carried
+            # it_support/helpdesk/service_desk — hybrid titles leaked
+            # ("Support Engineer, Backend", "Software Engineer - Technical
+            # Support" both applied). "Application support involving debugging"
+            # is still a support role, not a development requisition.
+            "technical support", "application support", "support engineer",
+            "product support", "desktop support",
             "systems engineer", "security engineer", "cybersecurity", "infosec", "soc analyst",
             "data scientist", "etl", "big data", "snowflake", "teradata", "bi developer",
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
@@ -1220,6 +1228,11 @@ class AgentConfig(_Model):
             "enterprise architect", "tech architect", "technical architect", "sr. manager",
             "gis", "oac", "intershop", "erp", "pega", "servicenow", "intern", "internship",
             "it support", "helpdesk", "service desk", "it engineer",
+            # Support family (run-631 dump audit): matches the Instahyre
+            # unified set — hybrid titles leaked there ("Support Engineer,
+            # Backend"); same gap here.
+            "technical support", "application support", "support engineer",
+            "product support", "desktop support",
             "systems engineer", "security engineer", "cybersecurity", "infosec", "soc analyst",
             "data scientist", "etl", "big data", "snowflake", "teradata", "bi developer",
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
@@ -1436,6 +1449,11 @@ class AgentConfig(_Model):
             "enterprise architect", "tech architect", "technical architect", "sr. manager",
             "gis", "oac", "intershop", "erp", "pega", "servicenow", "intern", "internship",
             "it support", "helpdesk", "service desk", "it engineer",
+            # Support family (run-631 dump audit): matches the Instahyre
+            # unified set — hybrid titles leaked there ("Support Engineer,
+            # Backend"); same gap here.
+            "technical support", "application support", "support engineer",
+            "product support", "desktop support",
             "systems engineer", "security engineer", "cybersecurity", "infosec", "soc analyst",
             "data scientist", "etl", "big data", "snowflake", "teradata", "bi developer",
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
