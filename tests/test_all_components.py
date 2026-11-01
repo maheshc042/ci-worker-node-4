@@ -4,7 +4,7 @@ Unit tests for core components, filter engine, LinkedIn platform, and answers.
 import re
 import unittest
 from typing import ClassVar
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from naukri_agent.config import AgentConfig
 from naukri_agent.core.filters import FilterEngine
@@ -152,6 +152,50 @@ class TestSpelledOutSeniority(unittest.TestCase):
                            "Data Engineer", "QA Automation Engineer",
                            "DevOps Engineer"):
                 self.assertTrue(decision(wanted).passed, f"{meth}: {wanted}")
+
+    def test_unified_profiles_allow_ai_ml_application_titles(self):
+        # Runs 633/641: bare "ml" (and the "ml engineer"/"ml developer"
+        # phrases) token-matched "AI/ML" application titles the combined
+        # include lists deliberately want ('ai ml'/'ai/ml'), and exclude-first
+        # ordering made those include entries dead. The exclude set must keep
+        # "machine learning" only; pure-ML titles ("ML Engineer") reject at
+        # the include gate instead.
+        cfg = AgentConfig.load()
+        for meth in ("get_unified_instahyre_profile",
+                     "get_unified_cutshort_profile",
+                     "get_unified_hiringcafe_profile",
+                     "get_unified_wellfound_profile"):
+            profile = getattr(cfg, meth)()
+            rules = profile.filters_for("recommended")
+            self.assertNotIn("ml", rules.title_must_exclude_any, meth)
+            self.assertNotIn("ml engineer", rules.title_must_exclude_any, meth)
+            self.assertNotIn("ml developer", rules.title_must_exclude_any, meth)
+            self.assertIn("machine learning", rules.title_must_exclude_any, meth)
+            engine = FilterEngine(rules)
+
+            def decision(title, engine=engine):
+                return engine.evaluate_card(Job(
+                    job_id="t", title=title, company="C",
+                    location="Bengaluru", url="http://test.com", platform="x"))
+
+            for ai_ml in ("AI/ML Engineer",
+                          "AI ML Engineer",
+                          "AI / ML / Python Developer",
+                          "Senior AI/ML Engineer (LLM, Python)",
+                          "Mid-Level Backend, Data & ML Developer",
+                          "Associate Lead - AI/ML Engineer"):
+                self.assertTrue(decision(ai_ml).passed, f"{meth}: {ai_ml}")
+            pure_ml = ("ML Engineer", "ML Developer",
+                       "Machine Learning Engineer",
+                       "Advanced Machine Learning Engineer")
+            if meth == "get_unified_hiringcafe_profile":
+                # The hiringcafe include set deliberately contains the bare
+                # term "developer" (broad aggregator scope), so a pure
+                # "ML Developer" title passes its include gate. Accepted
+                # trade-off: no 'ml'-family reject recorded in runs >= 630.
+                pure_ml = tuple(t for t in pure_ml if t != "ML Developer")
+            for pure in pure_ml:
+                self.assertFalse(decision(pure).passed, f"{meth}: {pure}")
 
 
 class TestRoleHeadCheck(unittest.TestCase):
@@ -2135,8 +2179,9 @@ class TestReviewRetryQuery(unittest.IsolatedAsyncioTestCase):
         self.assertIn("a.attempts < $4", sql)
         args = pool.fetch.await_args.args
         self.assertEqual(args[-2], 3)
-        # New trailing param from the failed-cooldown work: default 0 hours.
-        self.assertEqual(args[-1], 0)
+        # New trailing param from the failed-cooldown work: default 0 hours
+        # (bound as a string — `$5 || ' hours'` concatenates text-only).
+        self.assertEqual(args[-1], "0")
 
 
 class TestResumeGate(unittest.IsolatedAsyncioTestCase):
@@ -3638,6 +3683,686 @@ class TestCutshortTextareaAttribution(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_primary_topic("Describe your demo", ["ctc", "salary"]))
 
 
+class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
+    """Run 642: the in-modal Cutshort questionnaire hard-stalled the apply.
+
+    Three gaps, all verified from the run's DOM: the notice-period end date
+    rendered as a date/dated-text input the chatbot filled with "0 days"
+    (invalid for dd-mm-yyyy) or never filled at all; "Employment status"
+    rendered as div[role='radiogroup'] with no <fieldset>, invisible to the
+    fieldset scanner; and the resume input[type=file] was never touched, so
+    the submit button stayed disabled.
+    """
+
+    @staticmethod
+    def _empty_locator():
+        loc = MagicMock()
+        loc.all = AsyncMock(return_value=[])
+        loc.count = AsyncMock(return_value=0)
+        loc.first = MagicMock()
+        return loc
+
+    def _bot(self, profile_answers=None, resume_path=None):
+        from naukri_agent.core.answers import AnswerEngine
+        from naukri_agent.platforms.cutshort import CutshortChatbot
+
+        if profile_answers is None:
+            profile_answers = {
+                "last working day": "30/04/2026",
+                "end date of notice": "30/04/2026",
+                "notice period": "0 days",
+            }
+        return CutshortChatbot(
+            MagicMock(),
+            AnswerEngine(kb=[], profile_answers=profile_answers, strict=True),
+            max_questions=1,
+            resume_path=resume_path,
+        )
+
+    async def _run(self, page, bot=None, safe_texts=None):
+        from unittest.mock import patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        bot = bot or self._bot()
+        bot.page = page
+
+        async def fake_safe_text(loc):
+            sentinel = getattr(loc, "_safe_text", None)
+            if sentinel is not None:
+                return sentinel
+            for target, text in (safe_texts or {}).items():
+                if loc is target:
+                    return text
+            return ""
+
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(side_effect=fake_safe_text)), \
+             patch.object(cs_mod, "human_pause", new=AsyncMock()), \
+             patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            result = await bot.run()
+        return bot, result
+
+    def _form_page(self, selector_map):
+        """Page where only the mapped form-scoped selectors return content."""
+        form = MagicMock()
+        form.count = AsyncMock(return_value=1)
+        form.is_visible = AsyncMock(return_value=True)
+        form.first = form
+        form.locator = MagicMock(side_effect=lambda sel: selector_map.get(sel, self._empty_locator()))
+        page = MagicMock()
+        page.locator = MagicMock(side_effect=lambda sel: form if sel.startswith("form:has") else self._empty_locator())
+        return page
+
+    # ---- pure helpers ----
+    def test_format_date_iso_for_native_fill(self):
+        from naukri_agent.platforms.cutshort import _format_date_for_input
+
+        self.assertEqual(_format_date_for_input("30/04/2026", iso=True, placeholder=""), "2026-04-30")
+        # A non-value text must fail closed, never reach the input.
+        self.assertIsNone(_format_date_for_input("0 days", iso=True, placeholder=""))
+        self.assertIsNone(_format_date_for_input("", iso=True, placeholder=""))
+        self.assertIsNone(_format_date_for_input("31/02/2026", iso=True, placeholder=""))
+
+    def test_format_date_follows_placeholder(self):
+        from naukri_agent.platforms.cutshort import _format_date_for_input
+
+        self.assertEqual(_format_date_for_input("30/04/2026", iso=False, placeholder="dd-mm-yyyy"), "30-04-2026")
+        self.assertEqual(_format_date_for_input("30/04/2026", iso=False, placeholder="dd/mm/yyyy"), "30/04/2026")
+        # mm-first placeholders come first in US-rendered forms.
+        self.assertEqual(_format_date_for_input("30/04/2026", iso=False, placeholder="mm-dd-yyyy"), "04-30-2026")
+        self.assertEqual(_format_date_for_input("30/04/2026", iso=False, placeholder=""), "30-04-2026")
+        # Two-digit years fold into the current millennium.
+        self.assertEqual(_format_date_for_input("05/06/26", iso=True, placeholder=""), "2026-06-05")
+
+    def test_is_date_input_hint(self):
+        from naukri_agent.platforms.cutshort import _is_date_input_hint
+
+        self.assertTrue(_is_date_input_hint("date", ""))
+        self.assertTrue(_is_date_input_hint("DATE", ""))
+        self.assertTrue(_is_date_input_hint("text", "dd-mm-yyyy"))
+        self.assertTrue(_is_date_input_hint("text", "enter date as mm-dd-yyyy"))
+        # Ordinary placeholders are not dates.
+        self.assertFalse(_is_date_input_hint("text", "About you..."))
+        self.assertFalse(_is_date_input_hint("", ""))
+        self.assertFalse(_is_date_input_hint(None, None))
+
+    def test_employment_status_pick(self):
+        from naukri_agent.platforms.cutshort import _employment_status_pick
+
+        self.assertEqual(_employment_status_pick(["Employed", "Not employed"]), "Not employed")
+        self.assertEqual(_employment_status_pick(["Employed", "Unemployed"]), "Unemployed")
+        self.assertEqual(_employment_status_pick(["Currently not working"]), "Currently not working")
+        # Named negatives are never absolved as "unemployed".
+        self.assertIsNone(_employment_status_pick(["Career break"]))
+        self.assertIsNone(_employment_status_pick(["Fresher", "Student", "Notice period"]))
+        self.assertIsNone(_employment_status_pick([]))
+        self.assertIsNone(_employment_status_pick(None))
+
+    # ---- mocked page: date fill (phase 1A0) ----
+    def _date_page(self, d_type="date", d_ph=""):
+        dinp = MagicMock()
+        dinp.is_visible = AsyncMock(return_value=True)
+        dinp.input_value = AsyncMock(return_value="")
+        dinp.get_attribute = AsyncMock(side_effect=lambda name: {"type": d_type, "placeholder": d_ph}.get(name))
+        dinp.scroll_into_view_if_needed = AsyncMock()
+        dinp.fill = AsyncMock()
+        dinp.dispatch_event = AsyncMock()
+
+        label_loc = MagicMock()
+        label_loc.count = AsyncMock(return_value=1)
+
+        def _dinp_locator(sel):
+            loc = MagicMock()
+            loc.first = label_loc
+            loc.count = AsyncMock(return_value=1)
+            return loc if (sel.startswith("xpath=preceding::label") or sel.startswith("xpath=ancestor::li")) else self._empty_locator()
+
+        dinp.locator = MagicMock(side_effect=_dinp_locator)
+
+        page = self._form_page({"input[type='date'], input[placeholder]": self._filled_locator([dinp])})
+        return page, dinp, label_loc
+
+    @staticmethod
+    def _filled_locator(items):
+        loc = MagicMock()
+        loc.all = AsyncMock(return_value=list(items))
+        loc.count = AsyncMock(return_value=len(items))
+        loc.first = items[0] if items else MagicMock()
+        return loc
+
+    @staticmethod
+    def _radiogroup_locator(items):
+        loc = MagicMock()
+        loc.all = AsyncMock(return_value=list(items))
+        loc.count = AsyncMock(return_value=len(items))
+        loc.first = items[0] if items else MagicMock()
+        return loc
+
+    async def test_native_date_input_fills_iso(self):
+        page, dinp, label_loc = self._date_page(d_type="date")
+        bot, (ok, answered, err) = await self._run(
+            page, safe_texts={label_loc: "What is your last working day?"},
+        )
+        dinp.fill.assert_called_once()
+        self.assertEqual(dinp.fill.await_args.args[0], "2026-04-30")
+        self.assertGreaterEqual(answered, 1)
+        self.assertEqual(bot.unanswered, [])
+
+    async def test_dated_text_input_fills_placeholder_format(self):
+        page, dinp, label_loc = self._date_page(d_type="text", d_ph="dd-mm-yyyy")
+        bot, _ = await self._run(page, safe_texts={label_loc: "What is your last working day?"})
+        dinp.fill.assert_called_once()
+        self.assertEqual(dinp.fill.await_args.args[0], "30-04-2026")
+        self.assertEqual(bot.unanswered, [])
+
+    async def test_date_without_config_queued_not_fabricated(self):
+        # No LWD keys anywhere in the answers: must queue, never invent.
+        page, dinp, label_loc = self._date_page(d_type="date")
+        bot = self._bot(profile_answers={"notice period": "0 days"})
+        bot.page = page
+        bot, (ok, answered, err) = await self._run(page, bot=bot, safe_texts={label_loc: "What is your last working day?"})
+        self.assertEqual((ok, answered, err), (True, 0, "Form already submitted / read-only"))
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertEqual(bot.unanswered[0]["kind"], "date")
+
+    async def test_dated_text_input_skipped_by_text_phase(self):
+        # A dd-mm-yyyy text input claimed by 1A0 must never be typed over
+        # by phase 1A ("0 days" regression).
+        ta = MagicMock()
+        ta.is_visible = AsyncMock(return_value=True)
+        ta.input_value = AsyncMock(return_value="")
+        ta.get_attribute = AsyncMock(side_effect=lambda name: {"type": "text", "placeholder": "dd-mm-yyyy"}.get(name))
+        ta.fill = AsyncMock()
+        ta.dispatch_event = AsyncMock()
+        ta.scroll_into_view_if_needed = AsyncMock()
+        ta.locator = MagicMock(side_effect=lambda sel: self._empty_locator())
+
+        page = self._form_page({
+            "textarea:not([name='message']), input[type='text']:not([name='message'])": self._filled_locator([ta]),
+        })
+        bot, (ok, answered, err) = await self._run(page)
+        ta.fill.assert_not_called()
+        self.assertEqual(bot.unanswered, [])
+
+    # ---- mocked page: file upload (phase 1B4) ----
+    def _file_page(self, label="Upload your resume", already_filled=False, count=1):
+        files = []
+        for _ in range(count):
+            f = MagicMock()
+            f.is_visible = AsyncMock(return_value=True)
+            f.evaluate = AsyncMock(return_value=already_filled)
+            f.get_attribute = AsyncMock(return_value=None)
+            f.set_input_files = AsyncMock()
+            f.scroll_into_view_if_needed = AsyncMock()
+            li_anc = MagicMock()
+            li_anc.count = AsyncMock(return_value=1)
+            f.locator = MagicMock(side_effect=lambda sel: (
+                MagicMock(first=li_anc, count=AsyncMock(return_value=1))
+                if sel.startswith("xpath=ancestor::li")
+                else self._empty_locator()
+            ))
+            files.append(f)
+        page = self._form_page({"input[type='file']": self._filled_locator(files)})
+        return page, files
+
+    async def test_file_input_with_resume_uploads(self):
+        import tempfile
+        from pathlib import Path
+
+        page, files = self._file_page()
+        with tempfile.TemporaryDirectory() as td:
+            resume = Path(td) / "resume_ai.pdf"
+            resume.write_bytes(b"%PDF-1.4 test")
+            bot, (ok, answered, err) = await self._run(page, bot=self._bot(resume_path=resume))
+            files[0].set_input_files.assert_called_once_with(str(resume))
+            self.assertGreaterEqual(answered, 1)
+            self.assertEqual(bot.unanswered, [])
+
+    async def test_file_input_without_resume_queues(self):
+        page, files = self._file_page()
+        bot = self._bot()  # resume_path=None → fail closed
+        _li_text_loc = files[0].locator.side_effect("xpath=ancestor::li[1]").first
+        bot, (ok, answered, err) = await self._run(
+            page, bot=bot, safe_texts={_li_text_loc: "Upload your resume"},
+        )
+        files[0].set_input_files.assert_not_called()
+        self.assertEqual((ok, answered, err), (True, 0, "Form already submitted / read-only"))
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertEqual(bot.unanswered[0]["kind"], "file")
+
+    async def test_already_filled_file_input_skipped(self):
+        page, files = self._file_page(already_filled=True)
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            resume = Path(td) / "resume_ai.pdf"
+            resume.write_bytes(b"%PDF-1.4 test")
+            bot, _ = await self._run(page, bot=self._bot(resume_path=resume))
+            files[0].set_input_files.assert_not_called()
+            self.assertEqual(bot.unanswered, [])
+
+    # ---- mocked page: radiogroup employment status (phase 1B2) ----
+    def _radiogroup_page(self, labels=("Employed", "Not employed"), aria="Employment status"):
+        opts = []
+        for text in labels:
+            o = MagicMock()
+            o.is_visible = AsyncMock(return_value=True)
+            o.click = AsyncMock()
+            o.evaluate = AsyncMock()
+            o.scroll_into_view_if_needed = AsyncMock()
+            # Sentinel the option's label for the patched safe_text.
+            o._safe_text = text
+            opts.append(o)
+
+        rg = MagicMock()
+        rg.is_visible = AsyncMock(return_value=True)
+        rg.get_attribute = AsyncMock(return_value=aria)
+
+        def _rg_locator(sel):
+            if sel == "div[role='radio']":
+                return self._radiogroup_locator(opts)
+            return self._empty_locator()  # [aria-checked='true'], input:checked, li
+
+        rg.locator = MagicMock(side_effect=_rg_locator)
+
+        def _page_locator(sel):
+            if sel.startswith("div[role='radiogroup']"):
+                return self._radiogroup_locator([rg])
+            if sel.startswith("form:has"):
+                form = MagicMock()
+                form.count = AsyncMock(return_value=0)
+                form.first = form
+                return form
+            return self._empty_locator()
+
+        page = MagicMock()
+        page.locator = MagicMock(side_effect=_page_locator)
+        return page, rg, opts
+
+    async def test_employment_radiogroup_picks_unemployed_exact(self):
+        page, rg, opts = self._radiogroup_page(("Employed", "Not employed"))
+        bot, (ok, answered, _) = await self._run(page)
+        # Exact match must win over the "employed"-in-"not employed"
+        # substring trap: the WRONG chip was clicked in a naive fuzzy pass.
+        opts[1].click.assert_called_once()
+        opts[0].click.assert_not_called()
+        # The correct click registers as an answered interaction.
+        self.assertGreaterEqual(answered, 1)
+
+    async def test_employment_radiogroup_id_marker_variant(self):
+        page, rg, opts = self._radiogroup_page(("Employed", "Unemployed"))
+        bot, _ = await self._run(page)
+        opts[1].click.assert_called_once()
+        opts[0].click.assert_not_called()
+
+    async def test_employment_radiogroup_no_fits_queue(self):
+        page, rg, opts = self._radiogroup_page(("Fresher", "Career break"))
+        bot, _ = await self._run(page)
+        opts[0].click.assert_not_called()
+        opts[1].click.assert_not_called()
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertEqual(bot.unanswered[0]["kind"], "radio")
+
+    async def test_already_checked_radiogroup_skipped(self):
+        page, rg, opts = self._radiogroup_page(("Employed", "Not employed"))
+        checked_loc = MagicMock()
+        checked_loc.count = AsyncMock(return_value=1)
+        rg.locator = MagicMock(side_effect=lambda sel: checked_loc if sel == "[aria-checked='true']" else MagicMock(
+            all=AsyncMock(return_value=list(opts)),
+            count=AsyncMock(return_value=len(opts)),
+            first=opts[0],
+        ) if sel == "div[role='radio']" else self._empty_locator())
+        bot, _ = await self._run(page)
+        opts[0].click.assert_not_called()
+        opts[1].click.assert_not_called()
+        self.assertEqual(bot.unanswered, [])
+
+    # ---- run 644 regression: employment-status intent vs willingness ----
+
+    def _emp_engine(self):
+        from naukri_agent.core.answers import AnswerEngine
+
+        return AnswerEngine(
+            kb=[],
+            profile_answers={
+                "last working day": "30/04/2026",
+                "end date of notice": "30/04/2026",
+                "notice period": "0 days",
+            },
+            strict=True,
+        )
+
+    def test_employment_status_intent_not_working_currently_wins(self):
+        """Run 644: the radiogroup label is an ancestor <li> whose option
+        texts bleed in ("... On notice period Not resigned"). The bare
+        "notice period" marker in _WILLINGNESS_INTENT used to hijack this
+        question and the non-negative fallback picked "On notice period".
+        Stage 1.55 must pick the truthful "Not working currently" bucket."""
+        from naukri_agent.core.answers import _LWD_INTENT
+        from naukri_agent.core.models import ScreeningQuestion
+
+        label = "Employment status Not working currently On notice period Not resigned"
+        # The LWD intent must NOT fire on the status label (else Stage 0
+        # would stuff "30/04/2026" into a radio question path).
+        self.assertIsNone(_LWD_INTENT.search(label.lower()))
+        q = ScreeningQuestion(
+            text=label,
+            kind="radio",
+            options=["Not working currently", "On notice period", "Not resigned"],
+        )
+        r = self._emp_engine().resolve(q)
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "Not working currently")
+        self.assertEqual(r.matched_pattern, "intent:employment_status")
+
+    def test_lwd_intent_matches_when_will_notice_period_end(self):
+        from naukri_agent.core.models import ScreeningQuestion
+
+        q = ScreeningQuestion(text="When will your notice period end?", kind="text")
+        r = self._emp_engine().resolve(q)
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "30/04/2026")
+
+    def test_date_answer_resolves_when_notice_label(self):
+        # The conditional date reveal resolves through the widened probe
+        # list (label itself -> "when will your notice period end" -> ...).
+        bot = self._bot()
+        self.assertEqual(
+            bot._resolve_date_answer("When will your notice period end?"),
+            "30/04/2026",
+        )
+        # A genuinely unrelated label fails closed.
+        self.assertEqual(bot._resolve_date_answer("Preferred conference city?"), "")
+
+    def test_serving_when_phrase_not_fitted_to_yes_no(self):
+        """Run 644: a "when"-phrased serving question is a DATE request.
+
+        Shoving "No" onto it (via _fit_to_options' raw-return path on
+        option-less questions) was the leak vector; when-phrasings without
+        "are you"/"do you"/"is your" are refused while plain status
+        phrasings still resolve."""
+        from naukri_agent.core.answers import AnswerEngine
+        from naukri_agent.core.models import ScreeningQuestion
+
+        eng = AnswerEngine(kb=[], profile_answers={"serving notice": "No"}, strict=True)
+
+        when_q = ScreeningQuestion(
+            text="When will your serving notice end?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        self.assertIsNone(eng._resolve_notice_status(when_q.text, when_q))
+
+        are_q = ScreeningQuestion(
+            text="Are you serving your notice currently?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        r = eng._resolve_notice_status(are_q.text, are_q)
+        self.assertIsNotNone(r)
+        self.assertEqual(r.value, "No")
+
+    async def test_employment_radiogroup_644_label_picks_not_working(self):
+        page, rg, opts = self._radiogroup_page(
+            ("Not working currently", "On notice period", "Not resigned")
+        )
+        bot, (ok, answered, _) = await self._run(page)
+        # Exact two-pass: the truthful chip is clicked, notice/resigned chips never.
+        opts[0].click.assert_called_once()
+        opts[1].click.assert_not_called()
+        opts[2].click.assert_not_called()
+        self.assertGreaterEqual(answered, 1)
+
+    # ---- run 644 submit hardening: genuine submits only ----
+
+    def _submit_page(self, required_items=()):
+        """Page reaching the submit block with a clickable submit button;
+        the mapped required-inputs locator (post-submit validity scan) is
+        configurable."""
+        btn = MagicMock()
+        btn.scroll_into_view_if_needed = AsyncMock()
+        btn.click = AsyncMock()
+        btn.evaluate = AsyncMock()
+
+        form = MagicMock()
+        form.count = AsyncMock(return_value=1)
+        form.is_visible = AsyncMock(return_value=True)
+        form.first = form
+        form.locator = MagicMock(side_effect=lambda sel: self._empty_locator())
+
+        req_loc = self._filled_locator(list(required_items))
+
+        def _page_loc(sel):
+            if sel.startswith("form:has"):
+                return form
+            if sel.startswith("form input[required]"):
+                return req_loc
+            return self._empty_locator()
+
+        page = MagicMock()
+        page.locator = MagicMock(side_effect=_page_loc)
+        page.evaluate = AsyncMock(return_value=None)
+        return page, btn
+
+    async def _run_submit(self, page, btn, bot=None):
+        from unittest.mock import patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        bot = bot or self._bot()
+        bot.page = page
+
+        async def fake_first_visible(_page, selectors, timeout_ms=2000):
+            # Only the submit-button candidate lists (they contain a
+            # Submit selector); success-text waits return None, matching
+            # a page that never confirms.
+            if any("submit" in str(s).lower() or "'Submit'" in str(s) for s in selectors):
+                if all(str(s).startswith("form:") for s in selectors):
+                    # Form-gone landing probe: questionnaire has navigated
+                    # away, nothing matches.
+                    return None
+                return btn
+            return None
+
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="")), \
+             patch.object(cs_mod, "human_pause", new=AsyncMock()), \
+             patch.object(cs_mod, "first_visible", new=AsyncMock(side_effect=fake_first_visible)):
+            return await bot.run()
+
+    async def test_submit_blocked_when_required_inputs_still_empty(self):
+        empty_inp = MagicMock()
+        empty_inp.is_visible = AsyncMock(return_value=True)
+        empty_inp.input_value = AsyncMock(return_value="")
+        page, btn = self._submit_page(required_items=[empty_inp])
+
+        ok, answered, err = await self._run_submit(page, btn)
+        self.assertFalse(ok)
+        self.assertIn("required input(s) still empty after submit", err)
+
+    async def test_submit_success_when_form_gone(self):
+        # Post-submit the form navigates away (required locator empty) —
+        # the success path must stay intact, message still Genuine.
+        page, btn = self._submit_page(required_items=[])
+
+        ok, answered, err = await self._run_submit(page, btn)
+        self.assertTrue(ok)
+        self.assertGreaterEqual(answered, 1)
+        self.assertEqual(err, "")
+
+    async def test_submit_fail_closed_when_questionnaire_still_visible(self):
+        # Run-644 ground truth: click "succeeded", answered=3, but the
+        # questionnaire form remained on screen and no confirmation
+        # marker appeared — the POST never landed. Must fail closed.
+        empty_inputs = []
+        page, btn = self._submit_page(required_items=empty_inputs)
+        bot = self._bot()
+        bot.page = page
+
+        from unittest.mock import patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        async def fake_first_visible(_page, selectors, timeout_ms=2000):
+            sel_list = [str(s) for s in selectors]
+            # Success-text markers: never appears.
+            if any("Application sent" in s or "successfully applied" in s for s in sel_list):
+                return None
+            # Form-gone probe: form is STILL visible (false-positive case).
+            if all(s.startswith("form:") for s in sel_list):
+                return MagicMock()
+            # Submit button lookups: present and clickable.
+            if any("submit" in s.lower() or "'Submit'" in s for s in sel_list):
+                return btn
+            return None
+
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="")), \
+             patch.object(cs_mod, "human_pause", new=AsyncMock()), \
+             patch.object(cs_mod, "first_visible", new=AsyncMock(side_effect=fake_first_visible)):
+            ok, _answered, err = await bot.run()
+
+        self.assertFalse(ok)
+        self.assertIn("submit unconfirmed", err)
+
+
+class TestCutshortFalseWallAndFilterBadge(unittest.IsolatedAsyncioTestCase):
+    """Runs 640/641 regressions.
+
+    1) Cutshort embeds ambient Turnstile artifacts on EVERY authenticated
+       page — a challenges.cloudflare.com/turnstile/v0/api.js script loader
+       plus a hidden ``cf-turnstile-response`` input with zero iframes,
+       verified identical on healthy dashboards. The old marker-sniffing
+       ``_cloudflare_wall(blocked=True)`` therefore labeled every failed
+       apply as a CF wall, pausing the platform and truncating the queue on
+       a perfectly healthy page (run 641: 17s after a successful chatbot
+       submit).
+    2) The skills filter logged the *intended* chip count (18) while the
+       filter badge ground truth showed 14 registered — 4 chips silently
+       failed. The badge is now the honest counter.
+    """
+
+    AMBIENT_HTML = (
+        "<html><head><title>Cutshort: Making Top Professionals More Successful.</title></head>"
+        "<body><script src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'></script>"
+        "<input type='hidden' name='cf-turnstile-response' id='cf-chl-widget-hsgqi_response' value=''>"
+        "</body></html>"
+    )
+
+    def _platform(self, html=None, url="https://cutshort.io/profile/all-jobs"):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        page = MagicMock()
+        page.content = AsyncMock(return_value=html if html is not None else self.AMBIENT_HTML)
+        page.url = url
+        plat = object.__new__(CutshortPlatform)
+        plat.page = page
+        return plat
+
+    # ---- _cloudflare_wall: ambient artifacts are NOT a wall ----
+    async def test_ambient_artifacts_not_a_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._platform()
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            # blocked=True is now advisory only; ambient markers never imply a wall
+            self.assertFalse(await plat._cloudflare_wall(blocked=True))
+            self.assertFalse(await plat._cloudflare_wall())
+
+    async def test_clean_page_not_a_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._platform("<html><head><title>Jobs</title></head><body>feed</body></html>")
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            self.assertFalse(await plat._cloudflare_wall(blocked=True))
+
+    async def test_visible_turnstile_iframe_is_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._platform()
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=object())):
+            self.assertTrue(await plat._cloudflare_wall())
+            self.assertTrue(await plat._cloudflare_wall(blocked=True))
+
+    async def test_interstitial_copy_is_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        html = self.AMBIENT_HTML.replace("</head>", "</head><body>Verifying you are human</body>")
+        plat = self._platform(html)
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            self.assertTrue(await plat._cloudflare_wall())
+
+    async def test_interstitial_title_is_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        html = self.AMBIENT_HTML.replace(
+            "Cutshort: Making Top Professionals More Successful.", "Just a moment..."
+        )
+        plat = self._platform(html)
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            self.assertTrue(await plat._cloudflare_wall())
+
+    async def test_challenge_platform_url_is_wall(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._platform(
+            url="https://cutshort.io/cdn-cgi/challenge-platform/h/g/orchestrate/managed/test"
+        )
+        with patch.object(cs_mod, "first_visible", new=AsyncMock(return_value=None)):
+            self.assertTrue(await plat._cloudflare_wall())
+
+    # ---- _skills_filter_badge: honest chip counter ----
+    def _badge_platform(self, present, span_text="14"):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        count_loc = MagicMock()
+        count_loc.count = AsyncMock(return_value=1 if present else 0)
+        if present:
+            count_loc.first = MagicMock()
+        page = MagicMock()
+        page.locator = MagicMock(return_value=count_loc)
+        plat = object.__new__(CutshortPlatform)
+        plat.page = page
+        return plat
+
+    async def test_badge_counts_registered_chips(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._badge_platform(present=True)
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="14")):
+            self.assertEqual(await plat._skills_filter_badge(), 14)
+
+    async def test_badge_absent_is_zero(self):
+        plat = self._badge_platform(present=False)
+        self.assertEqual(await plat._skills_filter_badge(), 0)
+
+    async def test_badge_non_numeric_is_zero(self):
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_agent.platforms import cutshort as cs_mod
+
+        plat = self._badge_platform(present=True)
+        with patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="n/a")):
+            self.assertEqual(await plat._skills_filter_badge(), 0)
+
+
 class TestWalkinDetection(unittest.IsolatedAsyncioTestCase):
     """Run 498: a walk-in page recorded FAILED (no apply machinery found).
     Walk-ins must classify as clean SKIPPED under skip_walkin policy."""
@@ -4714,12 +5439,12 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertIn("OR a.created_at > now() - ($5 || ' hours')::interval", sql)
         self.assertNotIn("WHERE a.status <> 'failed'", sql.split("AND (")[0])
         args = pool.fetch.await_args.args
-        self.assertEqual(args[-1], 12, "cooldown hours must be bound as $5")
+        self.assertEqual(args[-1], "12", "cooldown hours must be bound as $5 as text (interval concat)")
 
         # Default (no explicit cooldown) preserves old behaviour: 0 hours.
         pool.fetch = AsyncMock(return_value=[])
         await repo.known_job_ids("fs", 30, "primary", "naukri")
-        self.assertEqual(pool.fetch.await_args.args[-1], 0)
+        self.assertEqual(pool.fetch.await_args.args[-1], "0")
 
     def test_dialog_open_streak_trips_platform_breaker(self):
         import time

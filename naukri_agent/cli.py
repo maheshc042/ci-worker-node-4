@@ -405,13 +405,32 @@ def login(
                         await human_pause(2000, 3000)
 
                         auth_sel = [
-                            "nav.global-nav",
                             "img.global-nav__me-photo",
-                            "a[href*='/in/']",
                             ".feed-identity-module",
-                            "button[aria-label*='Account']",
+                            "button.global-nav__primary-link-me-menu-trigger",
+                            "button[aria-label*='Me ' i]",
+                            ".feed-identity-widget",
                         ]
-                        if await first_visible(page, auth_sel, timeout_ms=3000):
+
+                        # Give LinkedIn up to 15 seconds if client-side signing-in handshake is active
+                        for _ in range(15):
+                            cur_url = page.url.lower()
+                            if any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
+                                break
+                            if await first_visible(page, auth_sel, timeout_ms=1000):
+                                break
+                            try:
+                                content = await page.content()
+                                if "signing you in" in content.lower() or "please wait" in content.lower():
+                                    await asyncio.sleep(1)
+                                else:
+                                    break
+                            except Exception:
+                                break
+
+                        cur_url = page.url.lower()
+                        is_login = any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall"))
+                        if not is_login and await first_visible(page, auth_sel, timeout_ms=3000):
                             console.print("[green]✓ LinkedIn session already active![/green]")
                         else:
                             console.print("[yellow]Please log in to LinkedIn / complete security checkpoint in the open browser...[/yellow]")
@@ -421,10 +440,12 @@ def login(
                             logged_in = False
                             while time.time() < deadline:
                                 try:
-                                    if await first_visible(page, auth_sel, timeout_ms=1500):
-                                        console.print("[green]✓ LinkedIn login detected![/green]")
-                                        logged_in = True
-                                        break
+                                    cur_url = page.url.lower()
+                                    if not any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
+                                        if await first_visible(page, auth_sel, timeout_ms=1500):
+                                            console.print("[green]✓ LinkedIn login detected![/green]")
+                                            logged_in = True
+                                            break
                                 except Exception:
                                     pass
                                 await asyncio.sleep(1)

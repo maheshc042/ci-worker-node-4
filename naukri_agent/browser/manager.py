@@ -49,7 +49,7 @@ SESSION_KEY = "naukri:session:primary"
 # restore; all site logins (Naukri/LinkedIn/HiringCafe app cookies) persist.
 CF_COOKIE_NAMES = frozenset({
     "cf_clearance", "__cf_bm", "cf_chl_1", "cf_chl_2", "cf_chl_prog",
-    "cf_use_ob", "__cf_chl_rt_tk",
+    "cf_use_ob", "__cf_chl_rt_tk", "chp_token",
 })
 
 

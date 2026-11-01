@@ -1131,7 +1131,17 @@ class AgentConfig(_Model):
             # burn quota on recruiter rejections. AI-application roles stay
             # eligible; data-engineering, QA, DevOps and SRE titles are in scope
             # and are deliberately absent from this list.
-            "machine learning", "ml", "ml engineer", "ml developer",
+            # NOTE (runs 633/641): bare "ml" must NOT sit in this set — the
+            # token-boundary match also fires on "AI/ML"/"AI ML" *application*
+            # titles that the combined include list deliberately wants
+            # ('ai ml', 'ai/ml'), and exclude-first ordering made that include
+            # entry dead (11 collateral rejects since run 630). Phrase guards
+            # ("ml engineer", "ml developer", "machine learning") still block
+            # ("ml engineer", "ml developer") also token-match "AI/ML Engineer"
+            # (slash = boundary), so they live in the INCLUDE list instead:
+            # pure-ML titles ("ML Engineer") match zero include terms and
+            # reject at the include gate; AI/ML combos win on 'ai ml'/'ai/ml'.
+            "machine learning",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
             "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
@@ -1247,7 +1257,17 @@ class AgentConfig(_Model):
             # burn quota on recruiter rejections. AI-application roles stay
             # eligible; data-engineering, QA, DevOps and SRE titles are in scope
             # and are deliberately absent from this list.
-            "machine learning", "ml", "ml engineer", "ml developer",
+            # NOTE (runs 633/641): bare "ml" must NOT sit in this set — the
+            # token-boundary match also fires on "AI/ML"/"AI ML" *application*
+            # titles that the combined include list deliberately wants
+            # ('ai ml', 'ai/ml'), and exclude-first ordering made that include
+            # entry dead (11 collateral rejects since run 630). Phrase guards
+            # ("ml engineer", "ml developer", "machine learning") still block
+            # ("ml engineer", "ml developer") also token-match "AI/ML Engineer"
+            # (slash = boundary), so they live in the INCLUDE list instead:
+            # pure-ML titles ("ML Engineer") match zero include terms and
+            # reject at the include gate; AI/ML combos win on 'ai ml'/'ai/ml'.
+            "machine learning",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
             "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
@@ -1389,7 +1409,16 @@ class AgentConfig(_Model):
                     # Core ML / research / tool-only-data roles: no resume
                     # support, so they waste the queue. Data-engineering, QA and
                     # SRE titles are in scope (see unified profile notes).
-                    "machine learning", "ml", "ml engineer", "ml developer",
+                    # NOTE (run 641 mirrors): bare "ml" (and the "ml engineer"/
+                    # "ml developer" phrases) must NOT sit here — they token-
+                    # match "AI/ML" application titles wanted by the include
+                    # list. Caveat: this hiringcafe include set contains the
+                    # bare term "developer", so a pure "ML Developer" title
+                    # passes its include gate (accepted trade-off: no such
+                    # reject recorded in runs >= 630, and AI-application
+                    # eligibility wins per user policy). "machine learning"
+                    # still blocks pure-ML research titles.
+                    "machine learning",
                     "deep learning", "nlp", "computer vision", "prompt engineer",
                     "research associate", "research analyst", "applied scientist",
                     "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",
@@ -1467,7 +1496,17 @@ class AgentConfig(_Model):
             # burn quota on recruiter rejections. AI-application roles stay
             # eligible; data-engineering, QA, DevOps and SRE titles are in scope
             # and are deliberately absent from this list.
-            "machine learning", "ml", "ml engineer", "ml developer",
+            # NOTE (runs 633/641): bare "ml" must NOT sit in this set — the
+            # token-boundary match also fires on "AI/ML"/"AI ML" *application*
+            # titles that the combined include list deliberately wants
+            # ('ai ml', 'ai/ml'), and exclude-first ordering made that include
+            # entry dead (11 collateral rejects since run 630). Phrase guards
+            # ("ml engineer", "ml developer", "machine learning") still block
+            # ("ml engineer", "ml developer") also token-match "AI/ML Engineer"
+            # (slash = boundary), so they live in the INCLUDE list instead:
+            # pure-ML titles ("ML Engineer") match zero include terms and
+            # reject at the include gate; AI/ML combos win on 'ai ml'/'ai/ml'.
+            "machine learning",
             "deep learning", "nlp", "computer vision", "prompt engineer",
             "research associate", "research analyst", "applied scientist",
             "mlops", "mlops engineer", "rpa", "automation anywhere", "uipath", "ui path", "blue prism", "blueprism", "power automate", "flexcube",

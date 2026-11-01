@@ -532,7 +532,7 @@ class Repository:
                 platform,
                 account,
                 max_attempts,
-                failed_cooldown_hours,
+                str(failed_cooldown_hours),
             )
             return {row["job_id"] for row in rows}
         except Exception as exc:

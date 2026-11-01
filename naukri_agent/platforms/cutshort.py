@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import date
+from pathlib import Path
 
 from playwright.async_api import Page
 
@@ -96,13 +98,137 @@ def _primary_topic(q_label: str, keywords: list[str], window: int = 120) -> bool
     return any(k in head for k in keywords)
 
 
+# Run 642: notice-period LWD rendered as input[type=date] or a plain text
+# input with a dd-mm-yyyy placeholder. The generic "notice" branch would
+# otherwise fill it with "0 days" and hard-block the form.
+_PLACEHOLDER_DATE_RE = re.compile(r"\b(?:dd|mm)\s*[-/.]\s*(?:dd|mm)\s*[-/.]\s*yy(?:yy)?", re.IGNORECASE)
+_DATE_VALUE_RE = re.compile(r"^\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{2,4})\s*$")
+# Run 644 fail-closed gate: the canonical notice-period probes below are
+# applied only to labels that themselves talk about notice/LWD/relieving —
+# never stuffed into unrelated date inputs (e.g. "Preferred conference city?").
+_NOTICE_DATE_HINT_RE = re.compile(r"notice|relievi?ng|last working|lwd", re.I)
+
+# Employment status rendered outside fieldset (run 642). Fallback marker
+# matcher fires ONLY when config could not resolve the exact option set;
+# it asserts the candidate's real post-LWD status and must never absorb
+# unrelated buckets (career break / fresher / student are named negatives).
+_UNEMPLOYED_MARKERS = (
+    "unemploy", "not employ", "not employed", "currently not working",
+    "not working", "out of work", "without job", "no job",
+)
+_EMPLOYMENT_NEGATIVES = ("career break", "fresher", "student", "studying", "notice")
+
+
+def _is_date_input_hint(inp_type: str, placeholder: str) -> bool:
+    """True when an input must be treated as a date (pure).
+
+    Native `type=date` inputs and text inputs whose placeholder spells a
+    d-m-y format both qualify; ordinary placeholders ("About you...") do not.
+    """
+    if (inp_type or "").strip().lower() == "date":
+        return True
+    ph = (placeholder or "").strip()
+    return bool(ph and _PLACEHOLDER_DATE_RE.search(ph))
+
+
+def _format_date_for_input(raw: str, *, iso: bool, placeholder: str) -> str | None:
+    """Shape a config date ("30/04/2026") into what the input accepts (pure).
+
+    Native Playwright `fill()` on input[type=date] requires ISO; text inputs
+    follow the placeholder's own order and separator. Returns None when raw
+    is not a parseable d-m-y value — callers fail closed.
+    """
+    m = _DATE_VALUE_RE.match((raw or "").strip())
+    if not m:
+        return None
+    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 100:
+        y += 2000
+    try:
+        parsed = date(y, mo, d)
+    except ValueError:
+        return None
+    if iso:
+        return parsed.isoformat()
+    ph = (placeholder or "").lower()
+    mm_first = "mm" in ph and "dd" in ph and ph.index("mm") < ph.index("dd")
+    sep = next((c for c in ("-", "/", ".") if c in ph), "-")
+    if mm_first:
+        return "{}{}{}{}{}".format(f"{mo:02d}", sep, f"{d:02d}", sep, f"{y:04d}")
+    return "{}{}{}{}{}".format(f"{d:02d}", sep, f"{mo:02d}", sep, f"{y:04d}")
+
+
+def _employment_status_pick(opt_texts: list[str]) -> str | None:
+    """Fallback marker matcher for employment-status options (pure).
+
+    Only for labels the config resolver could not match exactly. Picks the
+    un-employed bucket ("Unemployed", "Not employed", "Not currently
+    working"), skipping career-break / fresher / student buckets. Returns
+    the matched original option text, else None.
+    """
+    for text in opt_texts or []:
+        t = (text or "").strip().lower()
+        if not t or any(neg in t for neg in _EMPLOYMENT_NEGATIVES):
+            continue
+        if any(marker in t for marker in _UNEMPLOYED_MARKERS):
+            return (text or "").strip()
+    return None
+
+
+def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, str]:
+    """Resolve the profile resume matching this job's engineering track.
+
+    Track mapping is config-driven (config.yaml per-profile resume_file);
+    no path is ever hardcoded here. Returns (absolute Path | None, track).
+    """
+    from ..config import PROJECT_ROOT
+    try:
+        cfg = AgentConfig.load()
+        text_for_resume = f"{job.title} {extra_text} {job.description}".lower()
+        is_ai_job = any(
+            k in text_for_resume
+            for k in ["ai", "llm", "genai", "gpt", "machine learning", "ml", "rag", "agent", "prompt", "nlp", "chatbot", "fastapi"]
+        )
+        profiles = [
+            p for p in (getattr(cfg, "profiles", []) or [])
+            if p.enabled and getattr(p, "resume_file", None)
+        ]
+
+        def _track_resume(want_ai: bool) -> str:
+            for p in profiles:
+                is_ai = any(k in (p.name or "").lower() for k in ["ai", "python", "ml", "llm"])
+                if is_ai == want_ai:
+                    return p.resume_file
+            return profiles[0].resume_file if profiles else ""
+
+        if is_ai_job:
+            rel = _track_resume(True)
+            return ((PROJECT_ROOT / rel) if rel else None, "AI / Python Engineer")
+        rel = _track_resume(False)
+        return ((PROJECT_ROOT / rel) if rel else None, "Full Stack Engineer")
+    except Exception as exc:
+        log.debug("cutshort.apply.dynamic_resume_failed", error=str(exc)[:80])
+        return None, ""
+
+
 class CutshortChatbot:
     """Handles recruiter screening questions and quick-reply options in Cutshort messages."""
 
-    def __init__(self, page: Page, answers: AnswerEngine, max_questions: int = 10):
+    def __init__(
+        self,
+        page: Page,
+        answers: AnswerEngine,
+        max_questions: int = 10,
+        resume_path: Path | None = None,
+    ):
         self.page = page
         self.answers = answers
         self.max_questions = max_questions
+        # Optional absolute resume path pre-selected for this job's track by
+        # the caller (run 642: form-stall was a file input the chatbot never
+        # touched). Inbox threads pass None — file inputs there queue for
+        # review (fail closed), since a thread context identifies no job.
+        self.resume_path = resume_path
         # Questions this run could not answer (populated during run(),
         # drained by the caller into the review queue). Bounded: same
         # question re-queues only bump times_seen via upsert.
@@ -135,6 +261,65 @@ class CutshortChatbot:
             if any(w in ct for w in ["immediate", "served notice", "serving", "< 15", "0-15", "15 days", "0 days"]):
                 return True
         return False
+
+    def _resolve_date_answer(self, q_label: str) -> str:
+        """Config-sourced raw date for a date input (never fabricated).
+
+        Resolution order: the question's own label through the AnswerEngine
+        (its Stage-0 LWD intent catches last-working-day / relieving-date /
+        notice-end wordings — widened in run 644 for the conditional
+        "When will your notice period end?" reveal), then — only when the
+        label itself hints at notice/LWD (or is not a clean string; those
+        kept the legacy blanket behaviour) — the neutral canonical readings.
+        Returns "" when config holds no date.
+        """
+        try:
+            hinted = isinstance(q_label, str) and bool(_NOTICE_DATE_HINT_RE.search(q_label))
+        except Exception:
+            hinted = False
+        probes = [q_label]
+        if hinted or not isinstance(q_label, str):
+            probes.extend(
+                [
+                    "when will your notice period end",
+                    "end date of notice",
+                    "last working day",
+                ]
+            )
+        for q_text in probes:
+            if not q_text:
+                continue
+            res = self.answers.resolve(ScreeningQuestion(text=q_text[:200], kind="text"))
+            if res and res.value and _DATE_VALUE_RE.match(str(res.value)):
+                return str(res.value)
+        return ""
+
+    async def _count_empty_required(self) -> int:
+        """Number of visible required text boxes still empty after a submit.
+
+        Post-submit verification (run 644): a rejected submission keeps the
+        form on screen with empty required controls, while a real success
+        navigates away (count 0). Checkboxes and radios are excluded — a
+        native radio always reports a non-empty input_value() even when
+        unchecked, so it can never express "empty" this way.
+        """
+        count = 0
+        try:
+            inputs = await self.page.locator(
+                "form input[required]:not([type='checkbox']):not([type='radio']), "
+                "form textarea[required], form select[required]"
+            ).all()
+        except Exception:
+            return 0
+        for el in inputs:
+            try:
+                if not await el.is_visible():
+                    continue
+                if not str(await el.input_value()).strip():
+                    count += 1
+            except Exception:
+                continue
+        return count
 
     def _extract_composite_answers(self, text: str) -> str | None:
         """
@@ -221,6 +406,59 @@ class CutshortChatbot:
             form_loc = self.page.locator("form:has(fieldset), form:has(textarea), form:has(button[type='submit'])").first
             form_present = await form_loc.count() > 0 and await form_loc.is_visible()
 
+            # 1A0. DATE inputs (run 642: notice-period end date rendered as
+            # input[type=date] or a dd-mm-yyyy text input). Must run before
+            # phase 1A: the generic "notice" branch fills these with
+            # "0 days", which a date input rejects and the form never
+            # submits → stall. Answer source is config only (answer engine
+            # LWD intent), formatted per input (ISO for native fill()).
+            if form_present:
+                try:
+                    date_inputs = await form_loc.locator("input[type='date'], input[placeholder]").all()
+                except Exception:
+                    date_inputs = []
+                for dinp in date_inputs:
+                    try:
+                        if not await dinp.is_visible():
+                            continue
+                        # Skip anything already carrying a value: the date
+                        # phase fills each input at most once per run.
+                        if (await dinp.input_value()).strip():
+                            continue
+                        d_type = (await dinp.get_attribute("type")) or ""
+                        d_ph = (await dinp.get_attribute("placeholder")) or ""
+                        if not _is_date_input_hint(d_type, d_ph):
+                            continue  # text input the 1A branch owns
+                        dq_label = ""
+                        try:
+                            _lab = dinp.locator("xpath=preceding::label[1], xpath=ancestor::li[1]").first
+                            if await _lab.count() > 0:
+                                dq_label = (await safe_text(_lab)).strip()[:200]
+                        except Exception:
+                            pass
+                        raw = self._resolve_date_answer(dq_label)
+                        if not raw:
+                            log.debug("cutshort.chatbot.no_date_config", question=(dq_label or "date")[:60])
+                            self._queue_unanswered(dq_label or "Date input", "date", [])
+                            continue
+                        formatted = _format_date_for_input(
+                            raw, iso=(d_type.strip().lower() == "date"), placeholder=d_ph,
+                        )
+                        if not formatted:
+                            log.debug("cutshort.chatbot.date_unparseable", raw=raw[:20])
+                            self._queue_unanswered(dq_label or "Date input", "date", [])
+                            continue
+                        await dinp.scroll_into_view_if_needed()
+                        await human_pause(200, 400)
+                        await dinp.fill(formatted)
+                        await human_pause(200, 400)
+                        await dinp.dispatch_event("input")
+                        await dinp.dispatch_event("change")
+                        log.info("cutshort.chatbot.answered_date", question=(dq_label or "date")[:60], value=formatted)
+                        answered += 1
+                    except Exception as exc:
+                        log.debug("cutshort.chatbot.date_fill_failed", error=str(exc)[:80])
+
             # 1A. Textareas & Text Inputs inside form
             if form_present:
                 textareas = await form_loc.locator("textarea:not([name='message']), input[type='text']:not([name='message'])").all()
@@ -230,6 +468,17 @@ class CutshortChatbot:
                     current_val = (await ta.input_value()).strip()
                     if current_val:
                         continue
+
+                    # Date-format inputs belong to phase 1A0 above (run 642:
+                    # filling a dd-mm-yyyy box with "0 days" blocks submit).
+                    try:
+                        if _is_date_input_hint(
+                            (await ta.get_attribute("type")) or "",
+                            (await ta.get_attribute("placeholder")) or "",
+                        ):
+                            continue
+                    except Exception:
+                        pass
 
                     # Extract question label
                     q_label = ""
@@ -458,6 +707,240 @@ class CutshortChatbot:
                         # review instead of silently skipping every run.
                         self._queue_unanswered(q_text, "radio", opt_texts)
 
+            # 1B2. Radiogroups OUTSIDE fieldsets (run 642: "Employment status"
+            # renders as div[role='radiogroup'] with no <legend>, which the
+            # fieldset scanner above can never see).
+            try:
+                rgroups = await self.page.locator("div[role='radiogroup']").all()
+            except Exception:
+                rgroups = []
+            for rg in rgroups:
+                try:
+                    if not await rg.is_visible():
+                        continue
+                    # Already answered: an aria-checked option or a checked
+                    # native radio inside means this group is done.
+                    already = False
+                    try:
+                        already = (await rg.locator("[aria-checked='true']").count()) > 0
+                    except Exception:
+                        pass
+                    try:
+                        already = already or (await rg.locator("input:checked").count()) > 0
+                    except Exception:
+                        pass
+                    if already:
+                        continue
+
+                    opts = await rg.locator("div[role='radio']").all()
+                    if not opts:
+                        opts = await rg.locator("button, label").all()
+                    r_opt_texts = [(await safe_text(o)).strip() for o in opts if (await safe_text(o)).strip()]
+                    # Row-guard: a display row echoes itself as a single
+                    # chunk of text — not choices, skip without queueing.
+                    if len(r_opt_texts) <= 1:
+                        continue
+
+                    r_label = ""
+                    try:
+                        r_label = (await rg.get_attribute("aria-label")) or ""
+                    except Exception:
+                        pass
+                    if not r_label:
+                        try:
+                            _anc = rg.locator("xpath=ancestor::li[1]").first
+                            if await _anc.count() > 0:
+                                r_label = (await safe_text(_anc)).strip()[:200]
+                        except Exception:
+                            pass
+
+                    r_res = self.answers.resolve(ScreeningQuestion(text=r_label, kind="radio", options=r_opt_texts))
+                    target_val = r_res.value if r_res and r_res.value else ""
+                    # Employment fallback fires ONLY for status labels config
+                    # could not resolve (run 642: "Employment status" options
+                    # are not in config) — never for any other group.
+                    if not target_val and any(
+                        k in r_label.lower()
+                        for k in ("employment", "currently working", "work status", "career status")
+                    ):
+                        target_val = _employment_status_pick(r_opt_texts) or ""
+
+                    r_matched = False
+                    # Two-pass selection: exact equality first. Substring
+                    # fuzzy matching alone would let the "Employed" chip
+                    # match a resolved "Not employed" (the "employed"
+                    # substring) — silently claiming the wrong status.
+                    for pass_exact in (True, False):
+                        for o in opts:
+                            o_text = (await safe_text(o)).strip()
+                            if not target_val:
+                                break
+                            low = o_text.lower()
+                            if pass_exact:
+                                hit = low == target_val.lower()
+                            else:
+                                hit = self._match_chip(o_text, target_val)
+                            if hit:
+                                r_matched = True
+                                try:
+                                    await o.scroll_into_view_if_needed()
+                                    await o.click(force=True, timeout=1000)
+                                except Exception:
+                                    try:
+                                        await o.evaluate("el => el.click()")
+                                    except Exception:
+                                        pass
+                                log.info(
+                                    "cutshort.chatbot.answered_field",
+                                    question=(r_label or "radiogroup")[:70],
+                                    selected=o_text[:50],
+                                )
+                                await human_pause(200, 400)
+                                answered += 1
+                                break
+                        if not target_val:
+                            break
+                        if r_matched:
+                            break
+                    if not r_matched:
+                        self._queue_unanswered(r_label or "Employment status", "radio", r_opt_texts)
+                except Exception as exc:
+                    log.debug("cutshort.chatbot.radiogroup_failed", error=str(exc)[:80])
+
+            # 1B3. Native selects inside the form.
+            if form_present:
+                try:
+                    selects = await form_loc.locator("select").all()
+                except Exception:
+                    selects = []
+                for sel in selects:
+                    try:
+                        if not await sel.is_visible():
+                            continue
+                        try:
+                            val_now = (await sel.input_value()).strip()
+                        except Exception:
+                            val_now = ""
+                        if val_now:
+                            continue  # already set
+
+                        s_label = ""
+                        try:
+                            s_label = (await sel.get_attribute("aria-label")) or ""
+                        except Exception:
+                            pass
+                        if not s_label:
+                            try:
+                                sid = await sel.get_attribute("id")
+                                if sid:
+                                    _f = self.page.locator(f"label[for='{sid}']").first
+                                    if await _f.count() > 0:
+                                        s_label = (await safe_text(_f)).strip()[:200]
+                            except Exception:
+                                pass
+                        if not s_label:
+                            try:
+                                _anc = sel.locator("xpath=ancestor::li[1]").first
+                                if await _anc.count() > 0:
+                                    s_label = (await safe_text(_anc)).strip()[:200]
+                            except Exception:
+                                pass
+
+                        s_opts = await sel.locator("option").all()
+                        s_opt_texts = [(await s_opt.inner_text()).strip() for s_opt in s_opts if (await s_opt.inner_text()).strip()]
+                        s_res = self.answers.resolve(ScreeningQuestion(text=s_label, kind="text", options=s_opt_texts))
+                        want = s_res.value if s_res and s_res.value else ""
+                        if not want and any(k in s_label.lower() for k in ("employment", "currently working", "work status")):
+                            want = _employment_status_pick(s_opt_texts) or ""
+
+                        s_matched = False
+                        if want:
+                            # Exact equality first (run 642): substring fuzzy
+                            # would match an "Employed" option against a
+                            # resolved "Not employed" through the "employed"
+                            # substring and claim the wrong status.
+                            for pass_exact in (True, False):
+                                for s_opt in s_opts:
+                                    s_txt = (await s_opt.inner_text()).strip()
+                                    if not s_txt:
+                                        continue
+                                    hit = (
+                                        s_txt.lower() == want.lower()
+                                        if pass_exact
+                                        else self._match_chip(s_txt, want)
+                                    )
+                                    if hit:
+                                        s_matched = True
+                                        await sel.scroll_into_view_if_needed()
+                                        await sel.select_option(label=s_txt)
+                                        log.info(
+                                            "cutshort.chatbot.answered_select",
+                                            question=(s_label or "select")[:70],
+                                            selected=s_txt[:50],
+                                        )
+                                        await human_pause(200, 400)
+                                        answered += 1
+                                        break
+                                if s_matched:
+                                    break
+                        if not s_matched:
+                            self._queue_unanswered(s_label or "Select", "select", s_opt_texts)
+                    except Exception as exc:
+                        log.debug("cutshort.chatbot.select_failed", error=str(exc)[:80])
+
+            # 1B4. File uploads inside the form (run 642: the resume input was
+            # never touched, so submit stayed disabled → stall). Fail closed:
+            # upload only when a known resume path exists AND the input is
+            # unambiguous (label names a resume/CV/upload, or it is the form's
+            # only file input).
+            if form_present:
+                try:
+                    file_inputs = await form_loc.locator("input[type='file']").all()
+                except Exception:
+                    file_inputs = []
+                for f_inp in file_inputs:
+                    try:
+                        if not await f_inp.is_visible():
+                            continue
+                        try:
+                            already_filled = await f_inp.evaluate("el => el.files.length > 0")
+                        except Exception:
+                            already_filled = False
+                        if already_filled:
+                            continue
+
+                        f_label = ""
+                        try:
+                            f_label = (await f_inp.get_attribute("aria-label")) or ""
+                        except Exception:
+                            pass
+                        if not f_label:
+                            try:
+                                _anc = f_inp.locator("xpath=ancestor::li[1]").first
+                                if await _anc.count() > 0:
+                                    f_label = (await safe_text(_anc)).strip()[:200]
+                            except Exception:
+                                pass
+
+                        f_low = f_label.lower()
+                        is_resume = any(k in f_low for k in ("resume", "cv", "upload"))
+                        is_non_resume = any(k in f_low for k in ("cover", "portfolio"))
+                        unambiguous = len(file_inputs) == 1 and not is_non_resume
+                        if (
+                            self.resume_path
+                            and self.resume_path.exists()
+                            and (is_resume or unambiguous)
+                        ):
+                            await f_inp.scroll_into_view_if_needed()
+                            await f_inp.set_input_files(str(self.resume_path))
+                            log.info("cutshort.chatbot.resume_uploaded", file=self.resume_path.name)
+                            await human_pause(800, 1200)
+                            answered += 1
+                        else:
+                            self._queue_unanswered(f_label or "Upload resume (file input)", "file", [])
+                    except Exception as exc:
+                        log.debug("cutshort.chatbot.file_upload_failed", error=str(exc)[:80])
+
             # 1C. Audio Questionnaire Challenge (e.g. "Tell us about a difficult project... Pick from 1 saved audios")
             audio_btn = await first_visible(
                 self.page,
@@ -536,7 +1019,7 @@ class CutshortChatbot:
 
                         # Await form submission completion & response recording
                         await human_pause(2500, 4000)
-                        await first_visible(
+                        confirm_marker = await first_visible(
                             self.page,
                             [
                                 "text=Application sent",
@@ -547,6 +1030,54 @@ class CutshortChatbot:
                             ],
                             timeout_ms=3000,
                         )
+                        # Stall hardening (run 644): a conditional required
+                        # question revealed right before submit can leave
+                        # required inputs empty while the page still shows
+                        # no error? No — the reverse: the form never leaves.
+                        # If it's still on screen with empty required
+                        # fields, the submission was rejected client-side.
+                        # Native radios report a non-empty input_value()
+                        # even unchecked (the hidden <option>), so they are
+                        # excluded; a real empty state on radiogroups shows
+                        # through the aria pattern instead.
+                        empty_required = await self._count_empty_required()
+                        if empty_required > 0:
+                            log.warning(
+                                "cutshort.chatbot.submit_blocked_required",
+                                empty_required=empty_required,
+                            )
+                            return False, answered, (
+                                f"{empty_required} required input(s) still empty after submit"
+                            )
+                        # Landing hardening (live ground truth 2026-11-01):
+                        # clicking submit is NOT proof the application landed.
+                        # Run 644 and its validation probe both recorded
+                        # success=True, answered=3, error="" while the job
+                        # page still showed "Apply to this job" and no
+                        # conversation thread existed — the questionnaire had
+                        # been ANSWERED but the POST never landed. Fail closed
+                        # unless an explicit confirmation shows up or the
+                        # questionnaire form actually disappears.
+                        _cb_form_gone = not await first_visible(
+                            self.page,
+                            [
+                                "form:has(fieldset)",
+                                "form:has(textarea)",
+                                "form:has(button[type='submit'])",
+                            ],
+                            timeout_ms=1500,
+                        )
+                        log.info(
+                            "cutshort.chatbot.submit_verification",
+                            confirm=bool(confirm_marker),
+                            form_gone=_cb_form_gone,
+                        )
+                        if not (confirm_marker or _cb_form_gone):
+                            log.warning("cutshort.chatbot.submit_unconfirmed")
+                            return False, answered, (
+                                "submit unconfirmed: questionnaire still visible "
+                                "after click, no confirmation marker"
+                            )
                         return True, max(answered, 1), ""
                     except Exception as exc:
                         log.error("cutshort.chatbot.submit_failed", error=str(exc))
@@ -882,6 +1413,30 @@ class CutshortPlatform(BaseJobPlatform):
 
         log.info("cutshort.auth.session_reused")
         return True
+
+    async def _skills_filter_badge(self) -> int:
+        """Read the numeric badge inside the skills filter trigger.
+
+        Ground truth (run 641 dashboard dump): the trigger div renders a
+        ``<span ...>14</span>`` whose text is the number of registered skill
+        chips. Every successful chip selection must increment it; with no
+        chips selected the span is absent, so a missing badge reads as 0.
+        This is the honest counter the filter block must report — the old
+        code logged the *intended* skill count while 4 of 18 chips silently
+        failed to register (badge 14 vs logged 18).
+        """
+        count_loc = self.page.locator(
+            "div[data-intercom-target='skills-filter'] span",
+            has_text=re.compile(r"\d"),
+        )
+        try:
+            if await count_loc.count() == 0:
+                return 0
+            digits = (await safe_text(count_loc.first)).strip()
+            return int(digits) if digits.isdigit() else 0
+        except Exception:
+            return 0
+
     async def _apply_ui_filters(self, profile: JobProfile) -> None:
         """
         Applies verified native UI filters on Cutshort's All Jobs toolbar:
@@ -1043,30 +1598,67 @@ class CutshortPlatform(BaseJobPlatform):
                     skills_to_select = CUTSHORT_FULLSTACK_SKILLS
 
                 input_el = popover.locator("input[placeholder*='skill' i]").first
+                baseline = await self._skills_filter_badge()
+                misses: list[str] = []
                 for item in skills_to_select:
                     query, exact_name = item if isinstance(item, tuple) else (item, item)
-                    try:
-                        await input_el.click()
-                        await input_el.fill("")
-                        await human_type(input_el, query)
-                        await human_pause(500, 800)
-                        flyout = popover.locator(".flyout_el_wrapper").first
-                        if await flyout.count() > 0:
-                            options = await flyout.locator("div, label, span").all()
-                            for opt in options:
-                                if (await safe_text(opt)).strip() == exact_name:
-                                    await opt.click(force=True)
-                                    await human_pause(350, 550)
-                                    log.debug("cutshort.filters.skill_selected", skill=exact_name)
-                                    break
-                    except Exception as skill_err:
-                        log.debug("cutshort.filters.skill_selection_failed", skill=exact_name, error=str(skill_err))
+                    registered = False
+                    # Two passes: pass 2 types slower and waits longer for the
+                    # flyout. Run 641 silently lost 4/18 chips (badge showed
+                    # 14 while the code logged 18) — every attempt is now
+                    # verified against the filter badge, never assumed.
+                    for attempt in range(2):
+                        before = await self._skills_filter_badge()
+                        try:
+                            await input_el.click()
+                            await input_el.fill("")
+                            if attempt == 0:
+                                await human_type(input_el, query)
+                                await human_pause(500, 800)
+                            else:
+                                await human_type(input_el, query, min_delay=60, max_delay=180)
+                                await human_pause(900, 1400)
+                            flyout = popover.locator(".flyout_el_wrapper").first
+                            if await flyout.count() > 0:
+                                options = await flyout.locator("div, label, span").all()
+                                for opt in options:
+                                    if (await safe_text(opt)).strip() == exact_name:
+                                        await opt.click(force=True)
+                                        await human_pause(400, 700)
+                                        break
+                        except Exception as skill_err:
+                            log.debug("cutshort.filters.skill_selection_failed", skill=exact_name, error=str(skill_err))
+                        after = await self._skills_filter_badge()
+                        if after > before:
+                            registered = True
+                            log.debug("cutshort.filters.skill_selected", skill=exact_name, attempt=attempt + 1)
+                            break
+                    if not registered:
+                        misses.append(exact_name)
+                        log.warning(
+                            "cutshort.filters.skill_not_registered",
+                            skill=exact_name,
+                            profile=profile.name,
+                        )
 
                 await human_pause(400, 600)
                 # Close popover by clicking filter button again
                 await btn.click(force=True)
                 await human_pause(600, 1000)
-                log.info("cutshort.filters.skills_applied", profile=profile.name, count=len(skills_to_select))
+                final_badge = await self._skills_filter_badge()
+                actual = final_badge - baseline if final_badge >= baseline else final_badge
+                log.info(
+                    "cutshort.filters.skills_applied",
+                    profile=profile.name,
+                    attempted=len(skills_to_select),
+                    count=actual,
+                )
+                if misses:
+                    log.warning(
+                        "cutshort.filters.skills_missing",
+                        profile=profile.name,
+                        skills=misses,
+                    )
         except Exception as exc:
             log.warning("cutshort.filters.skills_error", error=str(exc))
 
@@ -1236,10 +1828,65 @@ class CutshortPlatform(BaseJobPlatform):
                 log.debug("cutshort.fetch.parse_error", error=str(exc))
                 continue
 
+    # ---- Dashboard overlay dismissal (runs 640+ user report) -------------
+    # Cutshort surfaces two overlays on the dashboard that can swallow clicks
+    # on the recommendation switch / filter chips:
+    #   1. "Hey X, are you still looking for a job?" availability prompt.
+    #      Answering "I am looking" is truthful AND keeps the talent card
+    #      active ("visible to employers only when actively interviewing").
+    #   2. "Submit feedback to companies" candidate-feedback survey (1/N).
+    #      "Skip" dismisses it without leaving feedback on the user's behalf.
+    # Signature-gated: we only touch buttons whose visible label exactly
+    # matches the known overlay actions, never a generic close-everything
+    # sweep that could dismiss an unrelated modal (e.g. a job pitch modal).
+    async def _dismiss_dashboard_overlays(self) -> None:
+        if await self._dismiss_availability_prompt():
+            log.info("cutshort.overlay.availability_answered")
+        if await self._skip_feedback_survey():
+            log.info("cutshort.overlay.feedback_skipped")
+
+    async def _dismiss_availability_prompt(self) -> bool:
+        prompt = await first_visible(
+            self.page, ["text=are you still looking for a job"], timeout_ms=900
+        )
+        if not prompt:
+            return False
+        if self.policy.dry_run:
+            log.info("cutshort.overlay.availability_skipped_dry_run")
+            return False
+        looking_btn = self.page.locator(
+            "button", has_text=re.compile(r"^\s*I am looking\s*$", re.I)
+        ).first
+        if await _safe_click(looking_btn):
+            return True
+        log.warning("cutshort.overlay.availability_button_missing")
+        return False
+
+    async def _skip_feedback_survey(self) -> bool:
+        survey = await first_visible(
+            self.page, ["text=submit feedback to companies"], timeout_ms=900
+        )
+        if not survey:
+            return False
+        skip_btn = self.page.locator(
+            "button", has_text=re.compile(r"^\s*Skip\s*$", re.I)
+        ).first
+        if await _safe_click(skip_btn):
+            return True
+        log.warning("cutshort.overlay.skip_button_missing")
+        return False
+
     async def fetch_jobs(self, profile: JobProfile, exclude_job_ids: set[str]) -> list[Job]:
         log.info("cutshort.fetch.start", profile=profile.name)
         await self.page.goto("https://cutshort.io/profile/all-jobs", wait_until="domcontentloaded")
         await human_pause(2000, 3000)
+
+        # Availability prompt / feedback survey can overlap the feed controls
+        # — clear them before touching the recommendation switch or filters.
+        try:
+            await self._dismiss_dashboard_overlays()
+        except Exception as exc:
+            log.debug("cutshort.overlay.dismiss_failed", error=str(exc)[:120])
 
         job_link_sel = "a[href*='/job/']"
         jobs: list[Job] = []
@@ -1272,39 +1919,61 @@ class CutshortPlatform(BaseJobPlatform):
         return jobs
 
     async def _cloudflare_wall(self, *, blocked: bool = False) -> bool:
-        """True when a Cloudflare Turnstile challenge is intercepting the page.
+        """True when a genuine Cloudflare challenge is actively intercepting.
 
-        Provenance: runs 375/376 failure dumps show an empty modal-root plus
-        a cf-challenge widget and zero textareas — in that state no pitch
-        modal can ever appear, so every queued job would burn ~30s into a
-        wall. `blocked=True` (nothing actionable was found) also counts when
-        challenge markers are present, covering embedded/invisible challenges.
+        Provenance: runs 375/376 failure dumps showed a real wall — empty
+        modal root, a visible challenge widget, zero textareas. Runs 640/641
+        then proved the old marker sniffing was wrong: Cutshort embeds
+        ambient Turnstile artifacts on EVERY authenticated page — a
+        ``challenges.cloudflare.com/turnstile/v0/api.js`` script loader plus
+        a hidden ``<input name="cf-turnstile-response" id="cf-chl-widget-*" value="">``
+        with zero iframes; verified identical on healthy dashboards where
+        scrolling and filtering worked fine. The old ``blocked=True``
+        short-circuit therefore misclassified every failed apply as a CF
+        wall, pausing the platform and truncating the queue spuriously.
+
+        Genuine wall evidence, any of:
+          - interstitial title ("Just a moment", "Attention Required")
+          - interstitial body copy only Cloudflare renders ("verifying you
+            are human", "enable javascript and cookies to continue", ...)
+          - challenge-platform URL artifacts (/cdn-cgi/challenge-platform,
+            __cf_chl)
+          - a VISIBLE Turnstile challenge iframe — the ambient script loader
+            and hidden input never spawn one (run 641 dump: 0 iframes)
+
+        ``blocked`` is advisory only (no actionable modal was found) and no
+        longer implies a wall by itself.
         """
+        del blocked
         try:
             html = (await self.page.content()).lower()
         except Exception:
             return False
-        if not any(
-            marker in html
-            for marker in (
-                "cf-turnstile",
-                "cf-chl",
-                "challenges.cloudflare.com",
+        title_match = re.search(r"<title[^>]*>([^<]*)</title>", html)
+        title_low = title_match.group(1).lower() if title_match else ""
+        if any(sig in title_low for sig in ("just a moment", "attention required")):
+            return True
+        if any(
+            copy in html
+            for copy in (
                 "verifying you are human",
+                "checking your browser",
+                "enable javascript and cookies to continue",
             )
         ):
-            return False
-        if not blocked:
-            widget = await first_visible(
-                self.page,
-                [
-                    "iframe[src*='challenges.cloudflare.com']",
-                    "input[name='cf-turnstile-response']",
-                ],
-                timeout_ms=800,
-            )
-            return widget is not None
-        return True
+            return True
+        try:
+            url_low = (self.page.url or "").lower()
+        except Exception:
+            url_low = ""
+        if "cdn-cgi/challenge-platform" in url_low or "__cf_chl" in url_low:
+            return True
+        widget = await first_visible(
+            self.page,
+            ["iframe[src*='challenges.cloudflare.com']"],
+            timeout_ms=800,
+        )
+        return widget is not None
 
     async def apply_to_job(
         self,
@@ -1571,37 +2240,14 @@ class CutshortPlatform(BaseJobPlatform):
 
         modal_text = (await safe_text(modal)).strip() if modal else ""
 
-        # Dynamic Per-Job Resume Selection based on job engineering track
-        try:
-            from ..config import PROJECT_ROOT
-            cfg = AgentConfig.load()
-
-            text_for_resume = f"{job.title} {modal_text} {job.description}".lower()
-            is_ai_job = any(k in text_for_resume for k in ["ai", "llm", "genai", "gpt", "machine learning", "ml", "rag", "agent", "prompt", "nlp", "chatbot", "fastapi"])
-
-            # Map to target resume tailored for this specific job track.
-            # Filenames resolve from config.yaml per profile — never hardcoded.
-            profiles = [
-                p for p in (getattr(cfg, "profiles", []) or [])
-                if p.enabled and getattr(p, "resume_file", None)
-            ]
-
-            def _track_resume(want_ai: bool) -> str:
-                for p in profiles:
-                    is_ai = any(k in (p.name or "").lower() for k in ["ai", "python", "ml", "llm"])
-                    if is_ai == want_ai:
-                        return p.resume_file
-                return profiles[0].resume_file if profiles else ""
-
-            if is_ai_job:
-                target_resume_rel = _track_resume(True)
-                target_track = "AI / Python Engineer"
-            else:
-                target_resume_rel = _track_resume(False)
-                target_track = "Full Stack Engineer"
-
-            resume_path = (PROJECT_ROOT / target_resume_rel) if target_resume_rel else None
-            if resume_path is not None and resume_path.exists():
+        # Dynamic Per-Job Resume Selection based on job engineering track.
+        # Track mapping is config-driven and lives in the module-level
+        # `_track_resume_for` helper (shared with the chatbot's file uploads).
+        _resume_path, _target_track = _track_resume_for(job, modal_text)
+        resume_path = _resume_path
+        target_track = _target_track or "Full Stack Engineer"
+        if resume_path is not None:
+            if resume_path.exists():
                 target_stem = resume_path.stem.lower()
                 current_resume_text = (await safe_text(modal)).lower() if modal else ""
                 if target_stem not in current_resume_text:
@@ -1638,8 +2284,6 @@ class CutshortPlatform(BaseJobPlatform):
                         track=target_track,
                         resume=str(resume_path.name),
                     )
-        except Exception as exc:
-            log.debug("cutshort.apply.dynamic_resume_failed", error=str(exc))
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)
@@ -1879,14 +2523,44 @@ class CutshortPlatform(BaseJobPlatform):
             await human_pause(1500, 2500)
             submission_attempted = True
 
+        chatbot_submitted = False
+        # Question count answered by the in-modal chatbot this turn. Live run
+        # 644-followup: the chatbot logs `answered=3` at submit but the outcome
+        # recorded q_ans=0, so genuine chatbot applications were indistinguish
+        # -able in the DB from the run-644 false-positive signature. Wired
+        # below so the outcome itself carries the evidence.
+        cb_answered = 0
         confirmation = None
         if submission_attempted:
             # If an in-modal screening questionnaire/chatbot pops up immediately, answer it
             if await first_visible(self.page, ["fieldset", "form:has(fieldset)", "div[class*='quick-reply']", "button.chip"], timeout_ms=1500):
                 log.info("cutshort.apply.in_modal_questionnaire_detected", job_id=job.job_id)
-                chatbot = CutshortChatbot(self.page, self.answers)
-                await chatbot.run()
+                # The in-modal questionnaire may carry its own file upload
+                # (run 642): pre-resolve this job's track resume and hand it
+                # to the chatbot, which otherwise fails closed.
+                _cb_resume, _cb_track = _track_resume_for(job, modal_text)
+                chatbot = CutshortChatbot(
+                    self.page,
+                    self.answers,
+                    resume_path=_cb_resume if (_cb_resume and _cb_resume.exists()) else None,
+                )
+                cb_success, cb_answered, cb_error = await chatbot.run()
                 await human_pause(1000, 2000)
+                # A completed in-modal form submit (run(): return True,
+                # answered>=1, error="") is strong evidence the pitch WAS
+                # delivered — the questionnaire only exists post-submission.
+                # Run 641 was mislabeled "1 failed" because the delayed card
+                # re-render outran the 1.5s card_applied check while the
+                # chatbot result was silently discarded.
+                chatbot_submitted = bool(cb_success and cb_answered > 0 and not cb_error)
+                log.info(
+                    "cutshort.apply.chatbot_result",
+                    job_id=job.job_id,
+                    success=cb_success,
+                    answered=cb_answered,
+                    error=cb_error,
+                    confirms_submit=chatbot_submitted,
+                )
 
             confirmation = await first_visible(
                 self.page,
@@ -1962,13 +2636,87 @@ class CutshortPlatform(BaseJobPlatform):
             timeout_ms=1500,
         )
 
+        # Landing audit (ground truth 2026-11-01, probes for cutshort-63gmA9Gf):
+        # TWO sibling evidences failed live. (1) run-644 chatbot success=True,
+        # answered=3 — questionnaire answered but POST never landed; fixed by
+        # the chatbot's own form-gone/confirm-marker verification. (2) The
+        # outer dom_marker gate reported confirmation=True, modal_closed=True,
+        # card_applied=True on a retry whose job page STILL showed
+        # "Apply to this job" minutes later — modal_closed is pure UI state
+        # (it even defaults to True when the modal handle detaches), and the
+        # weak :has-text selectors can match unrelated page furniture. Neither
+        # proves the application was delivered. Fail closed: unless the
+        # chatbot just verified its own landing, reload the job page and
+        # require the same applied markers the ALREADY_APPLIED detection
+        # trusts (button 'Applied' / 'View conversation' / applied texts).
+        landing_verified = bool(chatbot_submitted)
+        if submission_attempted and not landing_verified:
+            _reload_ok = True
+            try:
+                await self.page.goto(job.url, wait_until="domcontentloaded")
+                await human_pause(2500, 3500)
+                applied_after_reload = await first_visible(
+                    self.page,
+                    [
+                        "button:has-text('Applied')",
+                        "a:has-text('View conversation')",
+                        "button:has-text('View conversation')",
+                        "text=Already applied",
+                        "text=You have already applied",
+                        "div:has-text('Already applied')",
+                    ],
+                    timeout_ms=4000,
+                )
+                if applied_after_reload is None:
+                    # Eventual-consistency grace: one more sweep after a beat.
+                    await human_pause(2000, 3000)
+                    applied_after_reload = await first_visible(
+                        self.page,
+                        [
+                            "button:has-text('Applied')",
+                            "a:has-text('View conversation')",
+                            "button:has-text('View conversation')",
+                            "text=Already applied",
+                            "text=You have already applied",
+                            "div:has-text('Already applied')",
+                        ],
+                        timeout_ms=3000,
+                    )
+                landing_verified = applied_after_reload is not None
+            except Exception as exc:
+                # Cannot verify → cannot claim. Fail closed.
+                log.warning(
+                    "cutshort.apply.landing_reload_failed",
+                    error=str(exc)[:120],
+                    job_id=job.job_id,
+                )
+                landing_verified = False
+            log.info(
+                "cutshort.apply.landing_verification",
+                job_id=job.job_id,
+                verified=landing_verified,
+                chatbot_submitted=chatbot_submitted,
+                card_applied=bool(card_applied),
+            )
+
         outcome: ApplyOutcome
-        if submission_attempted and (confirmation or modal_closed or card_applied):
+        if submission_attempted and landing_verified:
+            if chatbot_submitted:
+                evidence = (
+                    f"Cutshort application confirmed by chatbot landing verification "
+                    f"(questions_answered={cb_answered})"
+                )
+            else:
+                evidence = (
+                    "Cutshort application confirmed: job page shows applied state after reload "
+                    f"(weak markers also present: card_applied={bool(card_applied)}, modal_closed={modal_closed})"
+                )
             outcome = ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 detail="Application confirmed",
+                questions_answered=cb_answered,
                 confirmation_type="dom_marker",
-                confirmation_evidence=f"Cutshort application confirmed (evidence: confirmation={bool(confirmation)}, modal_closed={modal_closed}, card_applied={bool(card_applied)})",
+                confirmation_evidence=evidence,
             )
         elif not submission_attempted and card_applied:
             outcome = ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
@@ -1988,9 +2736,13 @@ class CutshortPlatform(BaseJobPlatform):
                 )
             else:
                 stage = "send" if send_btn else ("textarea" if textarea else ("modal" if modal else "cta"))
+                try:
+                    _page_url = self.page.url[:120]
+                except Exception:
+                    _page_url = "<unknown>"
                 outcome = ApplyOutcome(
                     ApplicationStatus.FAILED,
-                    detail=f"cutshort apply stalled at stage={stage} (modal={bool(modal)}, textarea={bool(textarea)}, send={bool(send_btn)}) for {job.title} at {job.company}",
+                    detail=f"cutshort apply stalled at stage={stage} page_url={_page_url} (modal={bool(modal)}, textarea={bool(textarea)}, send={bool(send_btn)}) for {job.title} at {job.company}",
                 )
 
         # Always ensure browser returns cleanly to /profile/all-jobs feed for subsequent jobs
@@ -2089,7 +2841,13 @@ class CutshortPlatform(BaseJobPlatform):
         except Exception:
             pass
 
-        chatbot = CutshortChatbot(self.page, self.answers)
+        chatbot = CutshortChatbot(
+            self.page,
+            self.answers,
+            # No job context in a chat thread → no resume to upload; file
+            # inputs here are queued for review by the chatbot (fail closed).
+            resume_path=None,
+        )
         success, answered, error_msg = await chatbot.run()
         if answered > 0:
             log.info("cutshort.messages.success", thread=key[:60], answered=answered)

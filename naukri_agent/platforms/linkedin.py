@@ -253,28 +253,48 @@ class LinkedInPlatform(BaseJobPlatform):
         log.info("linkedin.auth.check")
         try:
             await self.page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=25000)
-            await human_pause(2000, 3500)
+            await human_pause(2000, 3000)
         except Exception as exc:
             log.warning("linkedin.auth.nav_failed", error=str(exc))
 
-        if await first_visible(
-            self.page,
-            [
-                "nav.global-nav",
-                "img.global-nav__me-photo",
-                "a[href*='/in/']",
-                ".feed-identity-module",
-                "button[aria-label*='Account']",
-            ],
-            timeout_ms=5000,
-        ):
+        strict_auth_sel = [
+            "img.global-nav__me-photo",
+            ".feed-identity-module",
+            "button.global-nav__primary-link-me-menu-trigger",
+            "button[aria-label*='Me ' i]",
+            ".feed-identity-widget",
+        ]
+
+        # 1. Handle initial loading screen ("Please wait, we are signing you in to this account...")
+        # Give LinkedIn up to 15 seconds to finish its client-side authentication handshake.
+        for _ in range(15):
+            cur_url = self.page.url.lower()
+            if any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
+                break  # Redirected to login page or challenge
+            if await first_visible(self.page, strict_auth_sel, timeout_ms=1000):
+                log.info("linkedin.auth.session_reused")
+                return True
+            try:
+                content = await self.page.content()
+                if "signing you in" in content.lower() or "please wait" in content.lower():
+                    log.info("linkedin.auth.handshake_in_progress")
+                    import asyncio
+                    await asyncio.sleep(1)
+                else:
+                    break
+            except Exception:
+                break
+
+        # Check once more if strictly authenticated
+        cur_url = self.page.url.lower()
+        is_login = any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall"))
+        if not is_login and await first_visible(self.page, strict_auth_sel, timeout_ms=3000):
             log.info("linkedin.auth.session_reused")
             return True
 
         is_headless = getattr(getattr(self.config, "browser", None), "headless", True)
 
         # Check for immediate Cloud IP challenge / checkpoint
-        cur_url = self.page.url.lower()
         if "checkpoint" in cur_url or "challenge" in cur_url or "security-check" in cur_url:
             log.warning("linkedin.auth.checkpoint_detected", url=cur_url)
             if is_headless:
@@ -284,7 +304,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 )
                 return False
 
-        # In headless CI mode, fail-fast without hanging for 90 seconds
+        # In headless CI mode, fail-fast without hanging for 120 seconds
         if is_headless:
             log.warning(
                 "linkedin.auth.headless_session_missing",
@@ -294,12 +314,12 @@ class LinkedInPlatform(BaseJobPlatform):
 
         log.warning(
             "linkedin.auth.manual_login_required",
-            msg="Please log in to LinkedIn in the browser window. Waiting up to 90 seconds...",
+            msg="Please log in to LinkedIn in the browser window. Waiting up to 120 seconds for login confirmation...",
         )
         try:
             await self.page.wait_for_selector(
-                "nav.global-nav, img.global-nav__me-photo, a[href*='/in/'], .feed-identity-module",
-                timeout=90000,
+                "img.global-nav__me-photo, .feed-identity-module, button.global-nav__primary-link-me-menu-trigger",
+                timeout=120000,
             )
             log.info("linkedin.auth.manual_login_success")
             return True

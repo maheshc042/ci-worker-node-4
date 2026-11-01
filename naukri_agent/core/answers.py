@@ -93,7 +93,8 @@ def is_assessment_instruction(text: str) -> bool:
 
 
 _LWD_INTENT = re.compile(
-    r"\b(?:last\s+working\s+(?:day|date)|lwd|relieving\s+date|end\s+date\s+of\s+(?:notice|employment))\b",
+    r"\b(?:last\s+working\s+(?:day|date)|lwd|relieving\s+date|end\s+date\s+of\s+(?:notice|employment)|"
+    r"notice\s+period\s+end|end\s+of\s+(?:the\s+)?notice\s+period|when\s+will\s+(?:your\s+)?notice\s+period)\b",
     re.IGNORECASE,
 )
 
@@ -133,6 +134,31 @@ _WILLINGNESS_INTENT = re.compile(
 
 _NEGATIVE_QUESTIONS = re.compile(
     r"\b(?:need\s+special\s+accommodation|criminal|convicted|disciplinary|backlog|disability|handicapped)\b",
+    re.IGNORECASE,
+)
+
+# Employment-status bucket questions (run 644). Cutshort renders the
+# radiogroup label as an ancestor <li> dump whose OPTION TEXTS bleed in
+# ("Employment status Not working currently On notice period Not resigned"):
+# bare "notice period" in _WILLINGNESS_INTENT matched it, and the willingness
+# non-negative fallback picked "On notice period" — misstating status and
+# revealing a conditional LWD date question. Recognised ahead of Stage 1.6.
+_EMPLOYMENT_STATUS_INTENT = re.compile(
+    r"\b(?:employment\s+status|current\s+employment|work\s+status|career\s+status|currently\s+working)\b",
+    re.IGNORECASE,
+)
+# Bucket options that truthfully describe "not employed / open to join now"
+# (LWD passed per config LWD facts).
+_EMPLOYMENT_AVAILABLE_RE = re.compile(
+    r"\bnot\s+working\b|\bunemployed\b|\bnot\s+employed\b|\bopen\s+to\s+work\b|\bbetween\s+jobs\b",
+    re.IGNORECASE,
+)
+# Buckets that misstate the candidate (on notice — notice served entirely;
+# "not resigned" — resignation already done) or describe someone else's
+# band entirely (career break, fresher, student, employed).
+_EMPLOYMENT_UNSUITABLE_RE = re.compile(
+    r"\bnotice\b|\bresign\w*\b|\bcareer\s*break\b|\bfresher\b|\bstudent\b|"
+    r"\bcurrently\s+working\b|\bworking\s+professional\b|\bfull[\s-]*time\s+job\b",
     re.IGNORECASE,
 )
 
@@ -458,6 +484,14 @@ class AnswerEngine:
             if hit is not None:
                 return hit
 
+        # Stage 1.55: Employment-status bucket pick (run 644). Recognised
+        # AFTER fluent/self-rating so a real bool/int question still wins,
+        # and BEFORE generic willingness (whose "notice period" marker
+        # hijacks the radiogroup label via option-text bleed).
+        employment = self._resolve_employment_status(text, question)
+        if employment is not None:
+            return employment
+
         # Stage 1.6: Generic Affirmative & Location Fallback
         willingness = self._resolve_willingness(text, question)
         if willingness is not None:
@@ -567,7 +601,51 @@ class AnswerEngine:
             "intent-map",
         )
 
+    def _resolve_employment_status(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Employment-status bucket pick (run 644).
+
+        The radiogroup label is an ancestor <li> dump whose option texts
+        bleed in, so this runs on the raw phrase set with an explicit
+        deny-list: buckets that misstate the candidate ("On notice period"
+        when notice has fully lapsed) or describe another band ("career
+        break", "fresher") are never chosen. Without options the pick
+        fails closed — pretending to be an unemployed status on a free
+        text box is a fabrication.
+        """
+        if not _EMPLOYMENT_STATUS_INTENT.search(text):
+            return None
+        if not question.options:
+            log.info(
+                "answers.employment_status_unresolved",
+                question=question.text[:120],
+                reason="no options",
+            )
+            return None
+        for option in question.options:
+            norm = _expand_contractions(_normalise(option))
+            if _EMPLOYMENT_UNSUITABLE_RE.search(norm):
+                continue
+            if _EMPLOYMENT_AVAILABLE_RE.search(norm):
+                log.info(
+                    "answers.employment_status_intent",
+                    question=question.text[:120],
+                    option=option[:40],
+                )
+                return ResolvedAnswer(option, "intent:employment_status", "intent-map")
+        log.info(
+            "answers.employment_status_unresolved",
+            question=question.text[:120],
+            reason="no suitable option",
+        )
+        return None
+
     def _resolve_willingness(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        # Employment-status questions must never fall through to generic
+        # willingness (run 644): the label/option-bleed "notice period"
+        # marker fires here and the non-negative fallback picks "On notice
+        # period", misstating status and revealing a conditional LWD date.
+        if _EMPLOYMENT_STATUS_INTENT.search(text):
+            return None
         if not _WILLINGNESS_INTENT.search(text) or _NEGATIVE_QUESTIONS.search(text):
             return None
 
@@ -776,6 +854,16 @@ class AnswerEngine:
         the duration entry. No serving entry configured → review, never derive.
         """
         if not re.search(r"\bserving\b|\bunder\s+notice\b", text):
+            return None
+        # Date-box protection (run 644): a "when ..." phrased serving text
+        # is a date request ("When will your notice period end?"), not a
+        # yes/no station. With no options, _fit_to_options would return the
+        # raw Yes/No answer verbatim and a date box would receive "No".
+        # Serve-only explainer questions that are actually yes/no keep
+        # "are you"/"do you"/"is your" phrasing and pass through.
+        if re.search(r"\bwhen\b", text, re.I) and not re.search(
+            r"\bare\s+you\b|\bdo\s+you\b|\bis\s+your\b", text, re.I
+        ):
             return None
         for entry in self.entries:
             if "serving" in entry.pattern:
