@@ -50,6 +50,15 @@ class ApplyEngine:
         "applications closed",
     )
 
+    # A real Naukri JD page always keeps one of these shapes in its path. A
+    # `job-listings-{id}` URL whose posting is expired/deleted gets redirected
+    # by Naukri to a search-listing page instead (`...-jobs-in-<city>`), with
+    # only nav-bar buttons rendered (run 655: reco-281026923657 classified
+    # against `ai-engineer-jobs-in-hyderabad-secunderabad?expJD=true`).
+    _JD_URL_RE = re.compile(r"/(?:job-listings-\d+|job-details)", re.IGNORECASE)
+    # Search-result listing shape: "<keyword>-jobs-in-<location>".
+    _SEARCH_LISTING_RE = re.compile(r"/[^/]+-jobs-in-[^/?#]+", re.IGNORECASE)
+
     def __init__(
         self,
         page: Page,
@@ -169,6 +178,14 @@ class ApplyEngine:
         await human_pause(200, 500)
 
     async def _state(self) -> str:
+        # Redirected-expiry fast path: a listing URL means no apply machinery
+        # will ever render, and answering "unknown" burns three SLA probes on
+        # nav-bar buttons before failing. Classify immediately as stale.
+        # Re-checked in the fallback below in case the redirect lands after
+        # goto resolves domcontentloaded.
+        if self._search_listing_redirect():
+            return "stale"
+
         if await first_visible(self.page, S.JD_ALREADY_APPLIED, timeout_ms=3_000):
             return "already_applied"
 
@@ -198,7 +215,31 @@ class ApplyEngine:
         if await self._is_expired_posting():
             return "stale"
 
+        # Fallback re-check (see comment at the top of _state): the page may
+        # have landed on a search-listing URL only after the probes above
+        # drove it there or Playwright finished following the redirect.
+        if self._search_listing_redirect():
+            return "stale"
+
         return "unknown"
+
+    def _search_listing_redirect(self) -> bool:
+        """True when the page URL is a Naukri search-listing URL, not a JD.
+
+        Strict shape match: candidate must contain a `<kw>-jobs-in-<loc>`
+        listing path AND none of the JD shapes. Every other URL shape keeps
+        its current classification (unknown -> fail under SLA) so a brittle
+        match can never silently rewrite a live posting's verdict.
+        """
+        try:
+            url = self.page.url
+        except Exception:
+            return False
+        if not isinstance(url, str) or not url:
+            return False
+        if self._JD_URL_RE.search(url):
+            return False
+        return self._SEARCH_LISTING_RE.search(url) is not None
 
     async def _is_expired_posting(self) -> bool:
         """True when the page itself says the posting is dead.

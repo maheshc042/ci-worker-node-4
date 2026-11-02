@@ -175,6 +175,22 @@ def _should_retry_paused(pause_age_hours: float | None) -> bool:
         return False
 
 
+# Default login early-abort SLA (seconds). LinkedIn needs its own ceiling:
+# its headed flow deliberately gives a human 120s to log in manually
+# (platforms.linkedin manual-login wait), which a flat 90s SLA can never
+# satisfy (run 655: stale session aborted at 90s mid-manual-wait -> platform
+# skipped as unauthenticated). 150s covers that 120s wait plus nav overhead;
+# headless LinkedIn fail-fasts inside ensure_logged_in() so the larger ceiling
+# is inert there.
+_DEFAULT_LOGIN_SLA_S = 90.0
+_PLATFORM_LOGIN_SLA_S = {"linkedin": 150.0}
+
+
+def login_sla_for(platform_name: str) -> float:
+    """Early-abort SLA (seconds) for a platform's login attempt (pure)."""
+    return _PLATFORM_LOGIN_SLA_S.get(platform_name, _DEFAULT_LOGIN_SLA_S)
+
+
 async def _internet_available(timeout_s: float = 3.0) -> bool:
     """Best-effort connectivity probe (DNS + TCP, no HTTP). Used to skip
     network-bound post-phases cleanly during an outage instead of burning
@@ -600,19 +616,21 @@ class Orchestrator:
                         t_login_0 = time.perf_counter()
                         # Login early-abort (runs 457-465: challenge loops held
                         # login 3-8 min vs the normal ~10s). A login that cannot
-                        # confirm in 90s will not confirm at all — stop it and
-                        # take the standard login-failed path instead of burning
-                        # the run's budget. Cancellation is safe: the platform
-                        # is skipped exactly as on a failed login.
+                        # confirm within its SLA will not confirm at all — stop
+                        # it and take the standard login-failed path instead of
+                        # burning the run's budget. Cancellation is safe: the
+                        # platform is skipped exactly as on a failed login.
+                        # ...see login_sla_for() for the LinkedIn exception.
+                        login_sla = login_sla_for(platform.platform_name)
                         try:
                             authenticated = await asyncio.wait_for(
-                                platform.ensure_logged_in(), timeout=90.0
+                                platform.ensure_logged_in(), timeout=login_sla
                             )
                         except TimeoutError:
                             log.warning(
                                 "platform.login_aborted_sla",
                                 platform=platform.platform_name,
-                                sla_s=90,
+                                sla_s=login_sla,
                             )
                             authenticated = False
                         self.metrics.login_s += time.perf_counter() - t_login_0

@@ -4855,6 +4855,96 @@ class TestExpiredPostingDetection(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await engine._state(), "stale")
 
 
+class TestSearchListingRedirect(unittest.IsolatedAsyncioTestCase):
+    """Run 655: a Naukri `job-listings-{id}` job whose posting is expired or
+    deleted redirects to a city search-listing page
+    (`...-jobs-in-hyderabad-secunderabad?expJD=true`) with only nav-bar
+    buttons rendered (`Jobs\\n2`, `Companies`, ...), so classification fell
+    through to "unknown" and the job FAILED after burning its SLA probes.
+    Such redirects must classify `stale` (clean ALREADY_APPLIED skip that
+    enters the 90-day dedupe) while every other URL shape keeps its current
+    behaviour."""
+
+    def _engine(self, url, body="Backend Engineer. Apply now, modern stack."):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.naukri.apply import ApplyEngine
+
+        page = MagicMock()
+        page.inner_text = AsyncMock(return_value=body)
+        page.title = AsyncMock(return_value="Backend Engineer")
+        page.url = url
+        return ApplyEngine(page, MagicMock(), MagicMock(),
+                           policy=RunPolicy(dry_run=True, side_effects_enabled=False))
+
+    async def test_listing_redirect_classifies_stale(self):
+        from unittest.mock import AsyncMock, patch
+
+        import naukri_agent.naukri.apply as apply_mod
+
+        engine = self._engine(
+            "https://www.naukri.com/ai-engineer-jobs-in-hyderabad-secunderabad?expJD=true",
+        )
+        with patch.object(apply_mod, "first_visible", new=AsyncMock(return_value=None)), \
+             patch.object(apply_mod.ApplyEngine, "_is_walkin_page",
+                          new=AsyncMock(return_value=False)):
+            self.assertEqual(await engine._state(), "stale")
+
+    async def test_real_jd_urls_never_match_listing_shape(self):
+        for url in (
+            "https://www.naukri.com/job-listings-281026923657",
+            "https://www.naukri.com/job-details-12345",
+            "https://www.naukri.com/job-listings-281026923657?expJD=true",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(self._engine(url)._search_listing_redirect())
+
+    async def test_unknown_url_shape_unchanged(self):
+        """Only proven listing shapes may claim `stale`: an unclassifiable URL
+        falls through to "unknown" (fail under SLA) exactly as before."""
+        from unittest.mock import AsyncMock, patch
+
+        import naukri_agent.naukri.apply as apply_mod
+
+        engine = self._engine("https://www.naukri.com/some-unmapped-page")
+        self.assertFalse(engine._search_listing_redirect())
+        with patch.object(apply_mod, "first_visible", new=AsyncMock(return_value=None)), \
+             patch.object(apply_mod.ApplyEngine, "_is_walkin_page",
+                          new=AsyncMock(return_value=False)):
+            self.assertEqual(await engine._state(), "unknown")
+
+    async def test_empty_or_non_string_url_safe(self):
+        engine = self._engine("")
+        self.assertFalse(engine._search_listing_redirect())
+
+
+class TestLoginSlaSelection(unittest.TestCase):
+    """Run 655: LinkedIn's headed manual-login path waits up to 120s for a
+    human, but the orchestrator's flat 90s login SLA aborted it first —
+    "authentication was not confirmed — skipping platform". LinkedIn gets a
+    per-platform 150s ceiling; all other platforms keep the 90s default
+    (fail-closed bounded budget preserved)."""
+
+    def test_linkedin_gets_150s(self):
+        from naukri_agent.core.orchestrator import login_sla_for
+
+        self.assertEqual(login_sla_for("linkedin"), 150.0)
+
+    def test_other_platforms_keep_90s(self):
+        from naukri_agent.core.orchestrator import login_sla_for
+
+        for name in ("naukri", "cutshort", "instahyre", "wellfound", "hiringcafe"):
+            with self.subTest(platform=name):
+                self.assertEqual(login_sla_for(name), 90.0)
+
+    def test_unknown_platform_falls_back_to_default(self):
+        from naukri_agent.core.orchestrator import _DEFAULT_LOGIN_SLA_S, login_sla_for
+
+        self.assertEqual(login_sla_for("nonexistent-platform"),
+                         _DEFAULT_LOGIN_SLA_S)
+
+
 class TestExperienceGates(unittest.TestCase):
     def _engine(self, profile_name="AI / Python Engineer", years=2.5):
         from naukri_agent.core.ranking import CandidateProfile
