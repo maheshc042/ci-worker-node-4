@@ -275,13 +275,8 @@ class LinkedInPlatform(BaseJobPlatform):
                 log.info("linkedin.auth.session_reused")
                 return True
             try:
-                content = await self.page.content()
-                if "signing you in" in content.lower() or "please wait" in content.lower():
-                    log.info("linkedin.auth.handshake_in_progress")
-                    import asyncio
-                    await asyncio.sleep(1)
-                else:
-                    break
+                import asyncio
+                await asyncio.sleep(1)
             except Exception:
                 break
 

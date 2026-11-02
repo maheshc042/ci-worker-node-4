@@ -1170,7 +1170,7 @@ class AgentConfig(_Model):
             ],
             experience=ExperienceRange(min_years=0, max_years=3.5),
             min_salary_lpa=5.0,
-            max_posted_days=5,
+            max_posted_days=3,
             require_easy_apply=True,
             skip_walkin=True,
         )
@@ -1296,7 +1296,7 @@ class AgentConfig(_Model):
             ],
             experience=ExperienceRange(min_years=0, max_years=3.5),
             min_salary_lpa=5.0,
-            max_posted_days=5,
+            max_posted_days=3,
             require_easy_apply=True,
             skip_walkin=True,
         )

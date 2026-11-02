@@ -326,11 +326,28 @@ class ApplyEngine:
             # not imputed. The detail-stage filter re-gates on these.
             jd_min, jd_max = extract_jd_experience(description)
             if jd_min is not None or jd_max is not None:
-                job.min_experience, job.max_experience = jd_min, jd_max
-                job.experience_imputed = False
-                log.info("job.jd_experience", job_id=job.job_id,
-                         min_exp=jd_min, max_exp=jd_max,
-                         title=job.title[:60])
+                # Outlier guard: If card had a low explicit max (e.g. <= 4.0y), but JD min extracted
+                # is an extreme outlier (e.g. >= 10.0y or > 2.5 * card max), it is almost certainly a tech version
+                # or typo in the JD text. Keep card numbers instead of falsely skipping a matching role.
+                card_max = job.max_experience
+                is_outlier = (
+                    card_max is not None
+                    and card_max > 0
+                    and jd_min is not None
+                    and (jd_min >= 10.0 or jd_min > 2.5 * card_max)
+                    and card_max <= 4.0
+                )
+                if not is_outlier:
+                    job.min_experience, job.max_experience = jd_min, jd_max
+                    job.experience_imputed = False
+                    log.info("job.jd_experience", job_id=job.job_id,
+                             min_exp=jd_min, max_exp=jd_max,
+                             title=job.title[:60])
+                else:
+                    log.warning("job.jd_experience_outlier_ignored",
+                                job_id=job.job_id,
+                                jd_min=jd_min, jd_max=jd_max,
+                                card_min=job.min_experience, card_max=job.max_experience)
             form_links = re.findall(
                 r"(https?://(?:forms\.gle|docs\.google\.com/forms|forms\.office\.com|typeform\.com)[^\s\"'>]+)",
                 description,
@@ -911,7 +928,20 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        confirmed = result.completed or is_page_confirmed
+        if result.answered == 0 and not is_page_confirmed:
+            try:
+                shot = await self.artifacts.capture_failure(self.page, "chatbot-zero-answered", profile, job.job_id)
+            except TypeError:
+                shot = None
+            return ApplyOutcome(
+                status=ApplicationStatus.FAILED,
+                detail="Chatbot exited with 0 questions answered and no confirmation page observed",
+                screenshot_path=shot,
+                questions_answered=0,
+                attempts=attempts,
+            )
+
+        confirmed = is_page_confirmed or (result.completed and result.answered > 0)
         if confirmed:
             return ApplyOutcome(
                 status=ApplicationStatus.APPLIED,

@@ -64,16 +64,46 @@ def parse_experience(text: str) -> tuple[float | None, float | None]:
 
 _EXP_CONTEXT_RE = re.compile(r"experien\w*|\bexp\b|\byrs\b|\byear\b", re.IGNORECASE)
 
+_FRAMEWORK_MASK_RE = re.compile(
+    r"\b(?:react(?:\.js)?|angular|vue(?:\.js)?|node(?:\.js)?|python|java|jdk|dotnet|\.net|windows|ubuntu|ios|android|es|ecmascript)\s*(?:v(?:ersion)?)?\s*\d+(?:\.\d+)?(?:\+|\s*/\s*\d+)?\b",
+    re.IGNORECASE,
+)
+
+_SHIFT_MASK_RE = re.compile(r"\b24\s*/\s*7\b")
+
+_EXP_SPAN_RE = re.compile(
+    r"(?:(?:experience|exp|tenure)\s*(?:of|required|is|:)?\s*)?(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:years?|yrs?|\bexp\b)",
+    re.IGNORECASE,
+)
+
+_EXP_SPAN_RE_ALT = re.compile(
+    r"(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)?\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+_EXP_PLUS_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?)\b",
+    re.IGNORECASE,
+)
+
+_EXP_SINGLE_RE = re.compile(
+    r"(?:(?:min(?:imum)?|at\s+least|around|approx(?:imately)?)\s*)?(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)?\b",
+    re.IGNORECASE,
+)
+
+_TYPO_CONCAT_RE = re.compile(
+    r"\b([0-9])([0-9])\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)\b",
+    re.IGNORECASE,
+)
+
 
 def extract_jd_experience(text: str) -> tuple[float | None, float | None]:
     """Strongest experience requirement stated in a full JD (pure).
 
-    Scans requirement-context lines ("experience", "exp", "yrs", "year") and
-    returns the FIRST min-max band found. (None, None) when nothing found —
-    caller keeps card numbers. JDs lead with the real requirement; taking the
-    first avoids both over-applying to senior bands and skipping on junior
-    side-mentions. Lines without experience context never qualify ("8-10
-    openings" is headcount, not tenure).
+    Scans requirement-context lines and returns the FIRST min-max band found.
+    (None, None) when nothing found — caller keeps card numbers.
+    Framework version numbers (Angular 18+, React 18/19, Node 20) and shift
+    markers (24/7) are masked to prevent spurious multi-decade tenure extraction.
     """
     if not text:
         return None, None
@@ -81,26 +111,39 @@ def extract_jd_experience(text: str) -> tuple[float | None, float | None]:
         line = line.strip()
         if not line or _EXP_CONTEXT_RE.search(line) is None:
             continue
-        cleaned = line.lower().replace("yrs", "").replace("years", "").replace("year", "")
-        span = re.search(rf"{_NUM}\s*[-–to]+\s*{_NUM}", cleaned)
+        cleaned = _FRAMEWORK_MASK_RE.sub(" ", line)
+        cleaned = _SHIFT_MASK_RE.sub(" ", cleaned)
+
+        # Check for recruiter typo: "24 years experience" -> 2-4
+        typo = _TYPO_CONCAT_RE.search(cleaned)
+        if typo:
+            d1, d2 = int(typo.group(1)), int(typo.group(2))
+            if d1 < d2 and d2 <= 9:
+                return float(d1), float(d2)
+
+        # 1. Range: 3-7 years, 2 to 5 yrs
+        span = _EXP_SPAN_RE.search(cleaned) or _EXP_SPAN_RE_ALT.search(cleaned)
         if span:
             lo, hi = float(span.group(1)), float(span.group(2))
-            # Sanity: "Year of establishment: 2019" is not tenure. Absurd
-            # bands belong to some other number class — skip the line.
-            # Identical high bands ("24-24 openings") are headcount likewise.
             if lo <= 30 and hi <= 30 and not (lo == hi and lo >= 10):
                 return lo, hi
             continue
-        plus = re.search(rf"{_NUM}\s*\+", cleaned)
+
+        # 2. Plus band: 5+ years
+        plus = _EXP_PLUS_RE.search(cleaned)
         if plus:
-            if float(plus.group(1)) <= 30:
-                return float(plus.group(1)), None
+            val = float(plus.group(1))
+            if val <= 30:
+                return val, None
             continue
-        single = re.search(_NUM, cleaned)
+
+        # 3. Single: 3 years of experience
+        single = _EXP_SINGLE_RE.search(cleaned)
         if single:
-            value = float(single.group(1))
-            if value <= 30:
-                return value, value
+            val = float(single.group(1))
+            if val <= 30:
+                return val, val
+            continue
     return None, None
 
 

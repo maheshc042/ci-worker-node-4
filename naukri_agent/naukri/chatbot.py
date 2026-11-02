@@ -711,7 +711,7 @@ class ChatbotHandler:
         for index in range(self.max_questions):
             await asyncio.sleep(1.2)  # let the drawer render the next bubble
 
-            if await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=1_200):
+            if result.answered > 0 and await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=1_200):
                 result.completed = True
                 log.info("chatbot.completed", answered=result.answered)
                 break
@@ -723,14 +723,18 @@ class ChatbotHandler:
                     # No question and no completion banner: assume the drawer is
                     # done (Naukri closes it silently on the last answer).
                     still_open = await self.is_open(1_500)
-                    result.completed = not still_open
-                    if still_open:
+                    if not still_open and result.answered > 0:
+                        result.completed = True
+                    elif still_open:
                         # Drawer open with no detectable question: an unknown
                         # widget, not a success. Label it loudly — the old
                         # silent break surfaced downstream as a generic
                         # "no submission confirmation" with no forensics.
                         result.error = "drawer open but no question detected after 3 checks (unknown widget)"
                         log.warning("chatbot.blind_exit_drawer_open")
+                    else:
+                        result.error = "drawer closed before any questions were answered"
+                        log.warning("chatbot.closed_without_answering")
                     break
                 continue
 
@@ -864,7 +868,14 @@ class ChatbotHandler:
                 or await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0
             )
             # Drawer gone or confirmation page visible == Naukri accepted the application.
-            result.completed = is_confirmed or not await self.is_open(1_500)
+            if is_confirmed:
+                result.completed = True
+            elif result.answered > 0 and not await self.is_open(1_500):
+                result.completed = True
+            else:
+                result.completed = False
+                if result.answered == 0:
+                    result.error = "drawer closed with 0 questions answered and no confirmation"
             if not result.completed and result.answered >= self.max_questions:
                 # Hit the question cap with the drawer still open: a tail of
                 # unprocessed questions exists but nothing records it — label

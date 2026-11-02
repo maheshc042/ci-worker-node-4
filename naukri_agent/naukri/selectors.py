@@ -435,7 +435,10 @@ CHATBOT_CLOSE = [
 CHATBOT_COMPLETE = [
     "div:has-text('Your application has been')",
     "div:has-text('successfully applied')",
-    "div.botMsg:has-text('Thank you')",
+    "div.botMsg:has-text('Thank you for applying')",
+    "div.botMsg:has-text('Thank you for submitting')",
+    "div.botMsg:has-text('application has been submitted')",
+    "div.botMsg:has-text('successfully submitted')",
 ]
 
 # -------------------------------------------------------- resume management
