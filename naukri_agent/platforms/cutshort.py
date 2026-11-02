@@ -220,6 +220,7 @@ class CutshortChatbot:
         answers: AnswerEngine,
         max_questions: int = 10,
         resume_path: Path | None = None,
+        allow_submit: bool = True,
     ):
         self.page = page
         self.answers = answers
@@ -229,6 +230,11 @@ class CutshortChatbot:
         # touched). Inbox threads pass None — file inputs there queue for
         # review (fail closed), since a thread context identifies no job.
         self.resume_path = resume_path
+        # allow_submit=False is the pre-Send answer-only mode: the pitch
+        # modal's questionnaire is answered by this run, but the Send click
+        # stays owned by the caller — a chatbot submit here would double-fire
+        # or bypass the caller's require_mutation gate.
+        self.allow_submit = allow_submit
         # Questions this run could not answer (populated during run(),
         # drained by the caller into the review queue). Bounded: same
         # question re-queues only bump times_seen via upsert.
@@ -1110,6 +1116,16 @@ class CutshortChatbot:
                     log.warning("cutshort.chatbot.audio_picker_failed", error=str(exc))
 
             if form_present or fieldsets or audio_btn:
+                if not self.allow_submit:
+                    # Pre-Send answer-only mode (run-655): the caller owns
+                    # the application Send click. Returning without
+                    # submitting keeps the questionnaire answers in the
+                    # modal's React state and avoids a double-send.
+                    log.info(
+                        "cutshort.chatbot.submit_deferred_to_caller",
+                        answered=answered,
+                    )
+                    return True, answered, ""
                 submit_btn = await first_visible(
                     self.page,
                     [
@@ -2622,9 +2638,69 @@ class CutshortPlatform(BaseJobPlatform):
             timeout_ms=2500,
         )
 
+        # Run-655 instrumentation: run-652/654 burned 10 eligible jobs with
+        # a phantom Send click — every post-reload dump showed a plain apply
+        # CTA and zero in-modal questionnaire logs, which supports the
+        # hypothesis that the pitch modal carries its screening questionnaire
+        # in the SAME modal, BEFORE Send (Send gated on answered controls).
+        # Ground the click in evidence and, if such controls exist, answer
+        # them first via an answer-only chatbot whose submit is deferred to
+        # this caller (the Send click below stays the single mutation).
+        pre_send_answered = 0
         submission_attempted = False
         if send_btn:
             self.require_mutation("application.final_submit")
+            try:
+                _send_text = await safe_text(send_btn)
+            except Exception:
+                _send_text = ""
+            _pre_q = await first_visible(
+                modal_scope,
+                ["fieldset", "div[class*='quick-reply']", "button.chip"],
+                timeout_ms=1200,
+            )
+            _before_path = ""
+            try:
+                _before_dump = self.artifacts.dir / f"cutshort-pitch-before-send-{raw_id}.html"
+                _before_dump.write_text(await self.page.content(), encoding="utf-8")
+                _before_path = str(_before_dump)
+            except Exception:
+                pass
+            log.info(
+                "cutshort.apply.send_context",
+                job_id=job.job_id,
+                send_text=_send_text,
+                has_textarea=bool(textarea),
+                pre_send_questionnaire=bool(_pre_q),
+                before_dump=_before_path,
+            )
+            if _pre_q:
+                log.info(
+                    "cutshort.apply.pre_send_questionnaire_detected",
+                    job_id=job.job_id,
+                )
+                # The in-modal questionnaire may carry its own file upload
+                # (run 642): pre-resolve this job's track resume and hand
+                # it to the chatbot, which otherwise fails closed.
+                _pre_resume, _ = _track_resume_for(job, modal_text)
+                pre_chatbot = CutshortChatbot(
+                    self.page,
+                    self.answers,
+                    resume_path=_pre_resume if (_pre_resume and _pre_resume.exists()) else None,
+                    allow_submit=False,
+                )
+                _pre_ok, pre_send_answered, _pre_err = await pre_chatbot.run()
+                await human_pause(800, 1500)
+                log.info(
+                    "cutshort.apply.pre_send_questionnaire_result",
+                    job_id=job.job_id,
+                    success=_pre_ok,
+                    answered=pre_send_answered,
+                    error=_pre_err or "",
+                )
+                # Unanswered questions stay on the chatbot instance and are
+                # not drained here (same as the post-Send invocation); the
+                # Send click still happens — the reload gate owns the verdict.
             try:
                 await send_btn.scroll_into_view_if_needed(timeout=1000)
             except Exception:
@@ -2635,6 +2711,40 @@ class CutshortPlatform(BaseJobPlatform):
                 await send_btn.evaluate("el => el.click()")
             await human_pause(1500, 2500)
             submission_attempted = True
+            # Immediately after the click: probe the modal for confirmation
+            # markers and a follow-up questionnaire, then dump — this is the
+            # only chance to record the modal's reaction before it (or the
+            # page) changes; run-654 had no such evidence at all.
+            _post_confirm = await first_visible(
+                self.page,
+                [
+                    "text=Application sent",
+                    "text=successfully applied",
+                    "text=Employer will review",
+                    "text=Thanks for your response",
+                    "text=Message sent",
+                ],
+                timeout_ms=1200,
+            )
+            _post_q = await first_visible(
+                self.page,
+                ["fieldset", "div[class*='quick-reply']", "button.chip"],
+                timeout_ms=1200,
+            )
+            _after_path = ""
+            try:
+                _after_dump = self.artifacts.dir / f"cutshort-pitch-after-send-{raw_id}.html"
+                _after_dump.write_text(await self.page.content(), encoding="utf-8")
+                _after_path = str(_after_dump)
+            except Exception:
+                pass
+            log.info(
+                "cutshort.apply.post_send_context",
+                job_id=job.job_id,
+                confirm_marker=bool(_post_confirm),
+                post_send_questionnaire=bool(_post_q),
+                after_dump=_after_path,
+            )
         elif textarea:
             # Typed pitch but no Send control — Enter may submit chat-style modals.
             self.require_mutation("application.final_submit")
@@ -2648,11 +2758,14 @@ class CutshortPlatform(BaseJobPlatform):
         # recorded q_ans=0, so genuine chatbot applications were indistinguish
         # -able in the DB from the run-644 false-positive signature. Wired
         # below so the outcome itself carries the evidence.
-        cb_answered = 0
+        cb_answered = pre_send_answered
         confirmation = None
         if submission_attempted:
             # If an in-modal screening questionnaire/chatbot pops up immediately, answer it
-            if await first_visible(self.page, ["fieldset", "form:has(fieldset)", "div[class*='quick-reply']", "button.chip"], timeout_ms=1500):
+            # (run-655: window widened 1500→3000ms — a slightly slow modal
+            # render used to silence this branch entirely, as in run-654's
+            # zero chatbot logs).
+            if await first_visible(self.page, ["fieldset", "form:has(fieldset)", "div[class*='quick-reply']", "button.chip"], timeout_ms=3000):
                 log.info("cutshort.apply.in_modal_questionnaire_detected", job_id=job.job_id)
                 # The in-modal questionnaire may carry its own file upload
                 # (run 642): pre-resolve this job's track resume and hand it
@@ -2826,9 +2939,13 @@ class CutshortPlatform(BaseJobPlatform):
                     f"(questions_answered={cb_answered})"
                 )
             else:
+                _pre_note = (
+                    f", pre_send_answered={pre_send_answered}" if pre_send_answered else ""
+                )
                 evidence = (
                     "Cutshort application confirmed: job page shows applied state after reload "
-                    f"(weak markers also present: card_applied={bool(card_applied)}, modal_closed={modal_closed})"
+                    f"(weak markers also present: card_applied={bool(card_applied)}, modal_closed={modal_closed}"
+                    f"{_pre_note})"
                 )
             outcome = ApplyOutcome(
                 ApplicationStatus.APPLIED,
