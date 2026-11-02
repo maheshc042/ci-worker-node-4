@@ -262,6 +262,96 @@ class CutshortChatbot:
                 return True
         return False
 
+    _JS_CHIP_FINGERPRINT = (
+        "el => {"
+        " var scope = el.closest('fieldset') || el.closest(\"div[role='radiogroup']\") || el.parentElement;"
+        " var marks = scope ? scope.querySelectorAll(\"[aria-checked='true'], input:checked\").length : -1;"
+        " return el.outerHTML + '@' + marks;"
+        "}"
+    )
+
+    async def _chip_fingerprint(self, opt) -> str:
+        """DOM fingerprint of a chip plus its selection scope.
+
+        OuterHTML plus the count of checked elements inside the closest
+        fieldset/radiogroup scope. run-652 (Avive Voila questionnaire):
+        options are plain div[tabindex='0'] chips (no role=radio, no
+        aria-checked), and the pointer click never flipped the React state
+        — the logs claimed a selection while the submitted form carried
+        none. Comparing before/after this fingerprint is the only reliable
+        way to know a click registered.
+        """
+        try:
+            return str(await opt.evaluate(self._JS_CHIP_FINGERPRINT)).strip()
+        except Exception:
+            return ""
+
+    async def _click_option_verified(self, opt) -> bool:
+        """Click a chip and return True only when the DOM flipped.
+
+        Escalating strategies (pointer click → synthetic mouse-event
+        dispatch → keyboard focus + Space/Enter) with a fingerprint check
+        after each. Returns False when no strategy changed the DOM, so the
+        caller can fail closed instead of counting a phantom answer.
+        """
+        before = await self._chip_fingerprint(opt)
+        try:
+            await opt.scroll_into_view_if_needed()
+        except Exception:
+            pass
+
+        # Pointer click.
+        try:
+            await opt.click(force=True, timeout=1000)
+        except Exception as exc:
+            log.debug("cutshort.chatbot.chip_click_failed", strategy="pointer", error=str(exc)[:80])
+            try:
+                await opt.evaluate("el => el.click()")
+            except Exception:
+                pass
+        await human_pause(150, 350)
+        after = await self._chip_fingerprint(opt)
+        if after and after != before:
+            return True
+
+        # Synthetic mouse-event dispatch (bypasses Playwright actionability
+        # but still goes through React's document-level listeners when they
+        # are attached).
+        for strategy in ("js", "keyboard"):
+            try:
+                if strategy == "js":
+                    await opt.evaluate(
+                        "el => { ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach("
+                        "function(t) { el.dispatchEvent(new MouseEvent(t, "
+                        "{ bubbles: true, cancelable: true, view: window })); }); }"
+                    )
+                else:
+                    # Keyboard can double-toggle on Enter after Space, so
+                    # re-verify after each key and stop at the first hit.
+                    await opt.evaluate("el => { el.focus && el.focus(); }")
+                    for key in ("Space", "Enter"):
+                        try:
+                            await self.page.keyboard.press(key)
+                        except Exception as exc:
+                            log.debug(
+                                "cutshort.chatbot.chip_click_failed",
+                                strategy="keyboard",
+                                key=key,
+                                error=str(exc)[:80],
+                            )
+                        await human_pause(150, 350)
+                        after = await self._chip_fingerprint(opt)
+                        if after and after != before:
+                            return True
+                    continue
+                await human_pause(150, 350)
+                after = await self._chip_fingerprint(opt)
+                if after and after != before:
+                    return True
+            except Exception as exc:
+                log.debug("cutshort.chatbot.chip_click_failed", strategy=strategy, error=str(exc)[:80])
+        return False
+
     def _resolve_date_answer(self, q_label: str) -> str:
         """Config-sourced raw date for a date input (never fabricated).
 
@@ -638,10 +728,22 @@ class CutshortChatbot:
                             if picked_spec is not None:
                                 break
                         if picked_spec is not None:
-                            await _safe_click(picked_spec)
-                            log.info("cutshort.chatbot.answered_specialization", selected=(await safe_text(picked_spec)).strip()[:50])
-                            await human_pause(200, 400)
-                            answered += 1
+                            if await self._click_option_verified(picked_spec):
+                                log.info(
+                                    "cutshort.chatbot.answered_specialization",
+                                    selected=(await safe_text(picked_spec)).strip()[:50],
+                                )
+                                await human_pause(200, 400)
+                                answered += 1
+                            else:
+                                # run-652: unverifiable pick — fail closed and
+                                # queue for review instead of counting it.
+                                log.warning(
+                                    "cutshort.chatbot.chip_click_unverified",
+                                    question=q_text[:70],
+                                    selected=(await safe_text(picked_spec)).strip()[:50],
+                                )
+                                self._queue_unanswered(q_text, "radio", opt_texts)
                             continue
 
                     # Salary inputs disguised as degenerate radios (run 375:
@@ -690,17 +792,25 @@ class CutshortChatbot:
                         opt_text = (await safe_text(opt)).strip()
                         if target_val and (self._match_chip(opt_text, target_val) or opt_text.lower() == target_val.lower()):
                             matched_opt = True
-                            try:
-                                await opt.scroll_into_view_if_needed()
-                                await opt.click(force=True, timeout=1000)
-                            except Exception:
-                                try:
-                                    await opt.evaluate("el => el.click()")
-                                except Exception:
-                                    pass
-                            log.info("cutshort.chatbot.answered_field", question=q_text[:70], selected=opt_text[:50])
-                            await human_pause(200, 400)
-                            answered += 1
+                            if await self._click_option_verified(opt):
+                                log.info(
+                                    "cutshort.chatbot.answered_field",
+                                    question=q_text[:70],
+                                    selected=opt_text[:50],
+                                )
+                                await human_pause(200, 400)
+                                answered += 1
+                            else:
+                                # run-652: the click never registered the
+                                # React selected state. Fail closed — do not
+                                # count it as answered; queue for review
+                                # instead of submitting an empty form.
+                                log.warning(
+                                    "cutshort.chatbot.chip_click_unverified",
+                                    question=q_text[:70],
+                                    selected=opt_text[:50],
+                                )
+                                matched_opt = False
                             break
                     if not matched_opt:
                         # No option matched (or nothing resolved): record for
@@ -770,10 +880,16 @@ class CutshortChatbot:
                     # fuzzy matching alone would let the "Employed" chip
                     # match a resolved "Not employed" (the "employed"
                     # substring) — silently claiming the wrong status.
+                    # Only the FIRST hit option is clicked: never escalate
+                    # to a fuzzy-different chip after an unverified exact
+                    # hit.
+                    hit_opt = None
+                    hit_text = ""
                     for pass_exact in (True, False):
                         for o in opts:
                             o_text = (await safe_text(o)).strip()
                             if not target_val:
+                                hit_opt = None
                                 break
                             low = o_text.lower()
                             if pass_exact:
@@ -781,27 +897,30 @@ class CutshortChatbot:
                             else:
                                 hit = self._match_chip(o_text, target_val)
                             if hit:
-                                r_matched = True
-                                try:
-                                    await o.scroll_into_view_if_needed()
-                                    await o.click(force=True, timeout=1000)
-                                except Exception:
-                                    try:
-                                        await o.evaluate("el => el.click()")
-                                    except Exception:
-                                        pass
-                                log.info(
-                                    "cutshort.chatbot.answered_field",
-                                    question=(r_label or "radiogroup")[:70],
-                                    selected=o_text[:50],
-                                )
-                                await human_pause(200, 400)
-                                answered += 1
+                                hit_opt = o
+                                hit_text = o_text
                                 break
-                        if not target_val:
+                        if hit_opt is not None:
                             break
-                        if r_matched:
-                            break
+
+                    if hit_opt is not None:
+                        if await self._click_option_verified(hit_opt):
+                            r_matched = True
+                            log.info(
+                                "cutshort.chatbot.answered_field",
+                                question=(r_label or "radiogroup")[:70],
+                                selected=hit_text[:50],
+                            )
+                            await human_pause(200, 400)
+                            answered += 1
+                        else:
+                            # run-652: click never registered the selected
+                            # state — fail closed and queue for review.
+                            log.warning(
+                                "cutshort.chatbot.chip_click_unverified",
+                                question=(r_label or "radiogroup")[:70],
+                                selected=hit_text[:50],
+                            )
                     if not r_matched:
                         self._queue_unanswered(r_label or "Employment status", "radio", r_opt_texts)
                 except Exception as exc:
@@ -2849,7 +2968,17 @@ class CutshortPlatform(BaseJobPlatform):
             resume_path=None,
         )
         success, answered, error_msg = await chatbot.run()
-        if answered > 0:
+
+        # Post-chatbot dump for debugging run-652-style phantom clicks:
+        # verified chip selections show up here as aria-checked /
+        # selected classes; unverified queues leave chips untouched.
+        try:
+            after_path = self.artifacts.dir / f"cutshort-thread-{index}-after.html"
+            after_path.write_text(await self.page.content(), encoding="utf-8")
+        except Exception:
+            pass
+
+        if success and answered > 0:
             log.info("cutshort.messages.success", thread=key[:60], answered=answered)
         elif not success:
             log.debug("cutshort.messages.no_action_needed", thread=key[:60], reason=(error_msg or "")[:100])

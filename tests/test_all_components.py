@@ -1,6 +1,7 @@
 """
 Unit tests for core components, filter engine, LinkedIn platform, and answers.
 """
+import itertools
 import re
 import unittest
 from typing import ClassVar
@@ -3943,13 +3944,21 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bot.unanswered, [])
 
     # ---- mocked page: radiogroup employment status (phase 1B2) ----
-    def _radiogroup_page(self, labels=("Employed", "Not employed"), aria="Employment status"):
+    def _radiogroup_page(self, labels=("Employed", "Not employed"), aria="Employment status", constant_fp=False):
         opts = []
         for text in labels:
             o = MagicMock()
             o.is_visible = AsyncMock(return_value=True)
             o.click = AsyncMock()
-            o.evaluate = AsyncMock()
+            # constant_fp simulates run-652: every fingerprint probe sees the
+            # same DOM, so no click strategy can ever "verify" a selection.
+            # Otherwise each probe returns a FRESH fingerprint (options are
+            # stateful mocks whose DOM mutates on click), so selection
+            # verifies on the first strategy.
+            if constant_fp:
+                o.evaluate = AsyncMock(return_value="same")
+            else:
+                o.evaluate = AsyncMock(side_effect=(f"fp{i}" for i in itertools.count(1)))
             o.scroll_into_view_if_needed = AsyncMock()
             # Sentinel the option's label for the patched safe_text.
             o._safe_text = text
@@ -4223,6 +4232,129 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(ok)
         self.assertIn("submit unconfirmed", err)
+
+    # ---- run-652: verified chip clicks (fail closed) ----
+    def _fieldset_chip_page(self, labels=("0-15 days", "15+ days"), constant_fp=False, eval_side_effect=None):
+        """Fieldset questionnaire page like the Avive Voila bubble (run-652):
+        plain div[tabindex='0'] chips with no role/aria attributes."""
+        opts = []
+        for text in labels:
+            o = MagicMock()
+            o.is_visible = AsyncMock(return_value=True)
+            o.click = AsyncMock()
+            if eval_side_effect is not None:
+                o.evaluate = AsyncMock(side_effect=eval_side_effect)
+            elif constant_fp:
+                # run-652 simulation: every fingerprint probe sees the same
+                # DOM, so no click strategy can ever verify a selection.
+                o.evaluate = AsyncMock(return_value="same")
+            else:
+                # Fresh fingerprint per probe → selection verifies on
+                # strategy 1 (a stateful mock whose DOM flips on click).
+                o.evaluate = AsyncMock(side_effect=(f"fp{i}" for i in itertools.count(1)))
+            o.scroll_into_view_if_needed = AsyncMock()
+            o._safe_text = text
+            opts.append(o)
+
+        fs = MagicMock()
+        fs.is_visible = AsyncMock(return_value=True)
+        legend_item = MagicMock()
+        legend_item.count = AsyncMock(return_value=1)
+        legend_item._safe_text = "Notice period?"
+
+        def _fs_locator(sel):
+            if sel == "legend":
+                loc = MagicMock()
+                loc.first = legend_item
+                loc.count = AsyncMock(return_value=1)
+                return loc
+            if sel == "div[tabindex='0']":
+                return self._filled_locator(opts)
+            return self._empty_locator()
+
+        fs.locator = MagicMock(side_effect=_fs_locator)
+
+        form = MagicMock()
+        form.count = AsyncMock(return_value=1)
+        form.is_visible = AsyncMock(return_value=True)
+        form.first = form
+        form.locator = MagicMock(side_effect=lambda sel: self._empty_locator())
+
+        def _page_loc(sel):
+            if sel.startswith("form:has"):
+                return form
+            if sel == "fieldset":
+                return self._filled_locator([fs])
+            return self._empty_locator()
+
+        page = MagicMock()
+        page.locator = MagicMock(side_effect=_page_loc)
+        page.keyboard.press = AsyncMock()
+        return page, opts
+
+    async def test_chip_click_unverifiable_fails_closed(self):
+        from types import SimpleNamespace
+
+        page, opts = self._fieldset_chip_page(constant_fp=True)
+        bot = self._bot()
+        # Notice period resolves to "0-15 days" for this questionnaire.
+        bot.answers = SimpleNamespace(resolve=lambda q: SimpleNamespace(value="0-15 days"))
+
+        _, (ok, answered, _) = await self._run(page, bot=bot)
+
+        # The matching chip was clicked, but the DOM never flipped: the
+        # selection must NOT count as answered (run-652 phantom answers).
+        self.assertEqual(answered, 0)
+        opts[0].click.assert_called_once()
+        opts[1].click.assert_not_called()
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertEqual(bot.unanswered[0]["text"], "Notice period?")
+        self.assertEqual(bot.unanswered[0]["kind"], "radio")
+        self.assertEqual(bot.unanswered[0]["options"], ["0-15 days", "15+ days"])
+
+    async def test_chip_click_js_strategy_recovery(self):
+        from types import SimpleNamespace
+
+        page, opts = self._fieldset_chip_page(
+            eval_side_effect=["A", "constant_before_js", "after_js_dispatch", "flipped_after_js"]
+        )
+        bot = self._bot()
+        bot.answers = SimpleNamespace(resolve=lambda q: SimpleNamespace(value="0-15 days"))
+
+        _, (ok, answered, _) = await self._run(page, bot=bot)
+
+        # Pointer click left the DOM unchanged; the synthetic mouse-event
+        # dispatch flipped it — must be verified and counted.
+        self.assertEqual(answered, 1)
+        self.assertEqual(len(bot.unanswered), 0)
+
+    async def test_chip_click_pointer_verified(self):
+        from types import SimpleNamespace
+
+        page, opts = self._fieldset_chip_page()
+        bot = self._bot()
+        bot.answers = SimpleNamespace(resolve=lambda q: SimpleNamespace(value="0-15 days"))
+
+        _, (ok, answered, _) = await self._run(page, bot=bot)
+
+        # Fresh fingerprint mocks differ on every probe → the pointer click
+        # verifies immediately (strategy 1), answered exactly once.
+        self.assertEqual(answered, 1)
+        opts[0].click.assert_called_once()
+        self.assertEqual(len(bot.unanswered), 0)
+
+    async def test_radiogroup_unverified_click_fails_closed(self):
+        page, rg, opts = self._radiogroup_page(("Employed", "Not employed"), constant_fp=True)
+        bot = self._bot()
+        _, (ok, answered, _) = await self._run(page, bot=bot)
+
+        # run-652: exact-match chip clicked once but never verified —
+        # fail closed: no answered increment, queue the group for review.
+        self.assertEqual(answered, 0)
+        opts[1].click.assert_called_once()
+        opts[0].click.assert_not_called()
+        self.assertEqual(len(bot.unanswered), 1)
+        self.assertEqual(bot.unanswered[0]["kind"], "radio")
 
 
 class TestCutshortFalseWallAndFilterBadge(unittest.IsolatedAsyncioTestCase):
