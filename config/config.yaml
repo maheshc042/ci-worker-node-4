@@ -158,6 +158,12 @@ notifications:
 # these, so account-specific numbers live on the profile.
 # ---------------------------------------------------------------------------
 answers:
+  "rate your hands-on experience in python development for automation, backend services, or infrastructure tools.": "Strong Exposure Built production-grade applications/tools using Python"
+  "rate your hands-on experience in python development for automation": "Strong Exposure Built production-grade applications/tools using Python"
+  "which backend experience you have?": "Python, FastAPI, Django, Node.js, REST APIs, PostgreSQL, Redis, Docker"
+  "which backend experience you have": "Python, FastAPI, Django, Node.js, REST APIs, PostgreSQL, Redis, Docker"
+  "are you currently based at the location this position has been advertised for?": "Yes"
+  "are you currently based at the location this position has been advertised for": "Yes"
   "what is your primary creative or content expertise": "Technical writing, prompt engineering, and GenAI content workflows"
   "how many years of hands-on experience do you have in generative ai/llm development?": "2"
   "how many years of experience do you have in generative ai/llm": "2"
