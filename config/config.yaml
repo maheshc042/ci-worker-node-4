@@ -158,6 +158,7 @@ notifications:
 # these, so account-specific numbers live on the profile.
 # ---------------------------------------------------------------------------
 answers:
+  "what is your primary creative or content expertise": "Technical writing, prompt engineering, and GenAI content workflows"
   "how many years of hands-on experience do you have in generative ai/llm development?": "2"
   "how many years of experience do you have in generative ai/llm": "2"
   "please select the city you are currently residing or willing to relocate to": "Bengaluru"

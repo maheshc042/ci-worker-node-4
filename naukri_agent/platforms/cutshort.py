@@ -2881,11 +2881,17 @@ class CutshortPlatform(BaseJobPlatform):
         # chatbot just verified its own landing, reload the job page and
         # require the same applied markers the ALREADY_APPLIED detection
         # trusts (button 'Applied' / 'View conversation' / applied texts).
-        landing_verified = bool(chatbot_submitted)
+        # Landing verification:
+        # 1. Chatbot completed within the modal (multi-step screening flow).
+        # 2. Authoritative card button updated to 'Applied' or 'View conversation' anchor.
+        # 3. Confirmation banner/toast was observed post-Send.
+        landing_verified = bool(chatbot_submitted) or bool(card_applied) or bool(confirmation)
         if submission_attempted and not landing_verified:
             _reload_ok = True
             try:
-                await self.page.goto(job.url, wait_until="domcontentloaded")
+                # Keep on current candidate feed if already there, else goto job.url
+                target_url = self.page.url if "/profile/" in (self.page.url or "") else job.url
+                await self.page.goto(target_url, wait_until="domcontentloaded")
                 await human_pause(2500, 3500)
                 applied_after_reload = await first_visible(
                     self.page,
