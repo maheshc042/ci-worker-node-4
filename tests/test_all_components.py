@@ -423,25 +423,61 @@ class TestFilterEngine(unittest.TestCase):
         d = fs_engine.evaluate_card(make_job("Engineer I - SW TEST"))
         self.assertTrue(d.passed, f"SW TEST failed: {d.reason} {d.detail}")
 
-        # 11. EY Gen AI Cloud Developer passes
-        d = fs_engine.evaluate_card(make_job("Gen AI Developer - AWS Cloud"))
-        self.assertTrue(d.passed, f"EY Gen AI Developer failed: {d.reason} {d.detail}")
+        # 11. EY Gen AI Cloud Developer passes on AI profile and is rejected on FS profile
+        d_ai = ai_engine.evaluate_card(make_job("Gen AI Developer - AWS Cloud"))
+        self.assertTrue(d_ai.passed, f"EY Gen AI Developer failed on AI: {d_ai.reason}")
+        d_fs = fs_engine.evaluate_card(make_job("Gen AI Developer - AWS Cloud"))
+        self.assertFalse(d_fs.passed, "EY Gen AI Developer must be rejected by FS to protect resume alignment")
+        self.assertEqual(d_fs.reason, SkipReason.FILTER_TITLE)
 
-        # 12. Techvalens Python + React Developer (AI/ML) passes
-        d = fs_engine.evaluate_card(make_job("Python + React Developer (AI/ML)"))
-        self.assertTrue(d.passed, f"Techvalens failed: {d.reason} {d.detail}")
+        # 12. Techvalens Python + React Developer (AI/ML) passes on AI and rejected on FS
+        d_ai = ai_engine.evaluate_card(make_job("Python + React Developer (AI/ML)"))
+        self.assertTrue(d_ai.passed, f"Techvalens failed on AI: {d_ai.reason}")
+        d_fs = fs_engine.evaluate_card(make_job("Python + React Developer (AI/ML)"))
+        self.assertFalse(d_fs.passed, "Techvalens must be rejected by FS to prevent sending wrong resume")
+        self.assertEqual(d_fs.reason, SkipReason.FILTER_TITLE)
 
-        # 13. Leading Client Python Full-Stack AI Engineer passes
-        d = fs_engine.evaluate_card(make_job("Python Full-Stack AI Engineer"))
-        self.assertTrue(d.passed, f"Python Full-Stack AI failed: {d.reason} {d.detail}")
+        # 13. Leading Client Python Full-Stack AI Engineer passes on AI and rejected on FS
+        d_ai = ai_engine.evaluate_card(make_job("Python Full-Stack AI Engineer"))
+        self.assertTrue(d_ai.passed, f"Python Full-Stack AI failed on AI: {d_ai.reason}")
+        d_fs = fs_engine.evaluate_card(make_job("Python Full-Stack AI Engineer"))
+        self.assertFalse(d_fs.passed, "Python Full-Stack AI must be rejected by FS")
+        self.assertEqual(d_fs.reason, SkipReason.FILTER_TITLE)
 
-        # 14. Softmaji AI Solutions Engineer passes
-        d = ai_engine.evaluate_card(make_job("AI Solutions Engineer"))
-        self.assertTrue(d.passed, f"AI Solutions Engineer failed: {d.reason} {d.detail}")
+        # 14. Softmaji AI Solutions Engineer passes on AI profile and rejected on FS
+        d_ai = ai_engine.evaluate_card(make_job("AI Solutions Engineer"))
+        self.assertTrue(d_ai.passed, f"AI Solutions Engineer failed on AI: {d_ai.reason}")
+        d_fs = fs_engine.evaluate_card(make_job("AI Solutions Engineer"))
+        self.assertFalse(d_fs.passed, "AI Solutions Engineer must be rejected by FS")
+        self.assertEqual(d_fs.reason, SkipReason.FILTER_TITLE)
 
         # 15. Intel Software Application Development Engineer passes
         d = fs_engine.evaluate_card(make_job("Software Application Development Engineer"))
         self.assertTrue(d.passed, f"Software Application Development Engineer failed: {d.reason} {d.detail}")
+
+        # 16. Cloud Support Engineer passes
+        d = fs_engine.evaluate_card(make_job("Cloud Support Engineer | AWS"))
+        self.assertTrue(d.passed, f"Cloud Support Engineer failed: {d.reason} {d.detail}")
+
+        # 17. AWS Cloud Support Associate passes
+        d = fs_engine.evaluate_card(make_job("AWS Cloud Support Associate"))
+        self.assertTrue(d.passed, f"AWS Cloud Support Associate failed: {d.reason} {d.detail}")
+
+        # 18. Technical Support / Desktop Support rejected
+        d = fs_engine.evaluate_card(make_job("Technical Support Engineer"))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
+
+        # 19. Equifax Software Engineer II passes on FS profile and is rejected by AI profile
+        d_fs = fs_engine.evaluate_card(make_job("Software Engineer II"))
+        self.assertTrue(d_fs.passed, f"Software Engineer II failed on FS: {d_fs.reason}")
+        d_ai = ai_engine.evaluate_card(make_job("Software Engineer II"))
+        self.assertFalse(d_ai.passed, "Generic Software Engineer II must be rejected by AI profile to ensure FS resume is sent")
+        self.assertEqual(d_ai.reason, SkipReason.FILTER_TITLE)
+
+        # 20. Member of Technical Staff / MTS 1 passes
+        d = fs_engine.evaluate_card(make_job("Member of Technical Staff - MTS 1"))
+        self.assertTrue(d.passed, f"MTS failed: {d.reason} {d.detail}")
 
     def test_seniority_title_blocklist_removed_low_band_passes(self):
         """Run-605 gap fix: 'senior'/'sr.'/'sr'/'staff' left the title

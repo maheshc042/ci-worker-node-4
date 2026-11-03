@@ -382,7 +382,7 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("solutions engineer", "solutions engineering") and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
                     is_override = True
-                elif hit in ("ml", "machine learning", "ai engineer", "genai", "llm") and _contains_any(title, ["full stack", "fullstack", "react", "node", "python"]):
+                elif hit in ("support engineer", "support engineering") and _contains_any(title, ["cloud", "aws", "azure", "gcp"]):
                     is_override = True
 
                 if not is_override:
