@@ -380,6 +380,10 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("golang", "golang developer", "golang engineer", "go developer", "go engineer") and _contains_any(title, ["python", "django", "fastapi"]):
                     is_override = True
+                elif hit in ("solutions engineer", "solutions engineering") and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
+                    is_override = True
+                elif hit in ("ml", "machine learning", "ai engineer", "genai", "llm") and _contains_any(title, ["full stack", "fullstack", "react", "node", "python"]):
+                    is_override = True
 
                 if not is_override:
                     return FilterDecision(

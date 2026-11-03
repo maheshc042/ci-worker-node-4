@@ -419,6 +419,30 @@ class TestFilterEngine(unittest.TestCase):
         self.assertFalse(d.passed)
         self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
 
+        # 10. Qualcomm abbreviated SW TEST passes
+        d = fs_engine.evaluate_card(make_job("Engineer I - SW TEST"))
+        self.assertTrue(d.passed, f"SW TEST failed: {d.reason} {d.detail}")
+
+        # 11. EY Gen AI Cloud Developer passes
+        d = fs_engine.evaluate_card(make_job("Gen AI Developer - AWS Cloud"))
+        self.assertTrue(d.passed, f"EY Gen AI Developer failed: {d.reason} {d.detail}")
+
+        # 12. Techvalens Python + React Developer (AI/ML) passes
+        d = fs_engine.evaluate_card(make_job("Python + React Developer (AI/ML)"))
+        self.assertTrue(d.passed, f"Techvalens failed: {d.reason} {d.detail}")
+
+        # 13. Leading Client Python Full-Stack AI Engineer passes
+        d = fs_engine.evaluate_card(make_job("Python Full-Stack AI Engineer"))
+        self.assertTrue(d.passed, f"Python Full-Stack AI failed: {d.reason} {d.detail}")
+
+        # 14. Softmaji AI Solutions Engineer passes
+        d = ai_engine.evaluate_card(make_job("AI Solutions Engineer"))
+        self.assertTrue(d.passed, f"AI Solutions Engineer failed: {d.reason} {d.detail}")
+
+        # 15. Intel Software Application Development Engineer passes
+        d = fs_engine.evaluate_card(make_job("Software Application Development Engineer"))
+        self.assertTrue(d.passed, f"Software Application Development Engineer failed: {d.reason} {d.detail}")
+
     def test_seniority_title_blocklist_removed_low_band_passes(self):
         """Run-605 gap fix: 'senior'/'sr.'/'sr'/'staff' left the title
         blocklists (FS + AI profiles and all unified platform sets). A
