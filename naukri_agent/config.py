@@ -593,7 +593,7 @@ class FilterRules(_Model):
     # reject. Adjacent software families (data engineering, QA, DevOps, cloud,
     # platform/SRE, database, support) are judged on total software tenure via
     # the general experience gates instead of a family-specific cap.
-    dedicated_ai_max_years: float = Field(default=2.0, ge=0, le=50)
+    dedicated_ai_max_years: float = Field(default=3.0, ge=0, le=50)
     # Upper end of wide startup bands (e.g. "2-10 years") at or below this is
     # shortlisted; above it the requisition reads senior. Bands starting above
     # the 3.5y general ceiling keep a fixed 6.0y net in the engine.

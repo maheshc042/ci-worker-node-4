@@ -895,6 +895,7 @@ profiles:
       allowed_locations: []
       blocked_locations: []
       blocked_companies: []
+      dedicated_ai_max_years: 3.0
       experience:
         min_years: 0
         max_years: 3.5
@@ -996,6 +997,7 @@ profiles:
       allowed_locations: []
       blocked_locations: []
       blocked_companies: []
+      dedicated_ai_max_years: 3.0
       experience:
         min_years: 0
         max_years: 3.5
