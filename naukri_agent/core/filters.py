@@ -369,9 +369,22 @@ class FilterEngine:
         if rules.title_must_exclude_any:
             hit = _contains_any(title, rules.title_must_exclude_any)
             if hit:
-                return FilterDecision(
-                    False, SkipReason.FILTER_TITLE, f"title contains blocked term '{hit}'"
-                )
+                # Surgical check: when an apparent block term is actually part of an
+                # explicit target stack or modern compound role:
+                # 1) 'data scientist' in a title that explicitly specifies GenAI / Agentic AI
+                #    (e.g. 'Junior Data Scientist - GenAI & Agentic AI', 'Data Scientist - LLMs')
+                # 2) 'golang' in a title where 'python' is explicitly specified as an alternative/core backend
+                #    (e.g. 'Backend engineer(Python/Golang)', 'Python / Golang Developer')
+                is_override = False
+                if hit == "data scientist" and _contains_any(title, ["genai", "generative ai", "agentic", "rag", "llm"]):
+                    is_override = True
+                elif hit in ("golang", "golang developer", "golang engineer", "go developer", "go engineer") and _contains_any(title, ["python", "django", "fastapi"]):
+                    is_override = True
+
+                if not is_override:
+                    return FilterDecision(
+                        False, SkipReason.FILTER_TITLE, f"title contains blocked term '{hit}'"
+                    )
 
         # 1.1 Disjoint Specialization Reality Gate
         # Candidate is a Full-Stack / Software / AI Engineer (FastAPI, Python, React, TypeScript).

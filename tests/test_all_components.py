@@ -362,6 +362,63 @@ class TestFilterEngine(unittest.TestCase):
             decision = engine.evaluate_card(job)
             self.assertTrue(decision.passed, f"{title} failed with reason: {decision.reason}")
 
+    def test_compound_and_hybrid_title_refinements(self):
+        """Verify surgical handling for compound/hybrid titles:
+        1. 'Junior Data Scientist - GenAI & Agentic AI' passes AI profile.
+        2. Pure 'Data Scientist' is rejected by AI profile.
+        3. 'Backend engineer(Python/Golang)' passes AI profile.
+        4. Pure 'Golang System Developer' is rejected by AI profile.
+        5. 'AI Product Engineer' passes AI profile.
+        6. 'Engineer II, Software Test' passes FS profile.
+        7. 'Software Engineer, Test Engineering' passes FS profile.
+        8. 'Production Support Engineer' is rejected.
+        9. 'Fullstack Mobile Engineer (React Native + NodeJS)' is rejected.
+        """
+        from naukri_agent.core.models import SkipReason
+        ai_engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
+
+        def make_job(title):
+            return Job(job_id=f"test-{title}", title=title, company="Test", location="Bengaluru", url="http://test.com", platform="naukri")
+
+        # 1. GenAI data scientist override
+        d = ai_engine.evaluate_card(make_job("Junior Data Scientist - GenAI & Agentic AI"))
+        self.assertTrue(d.passed, f"GenAI data scientist failed: {d.reason} {d.detail}")
+
+        # 2. Pure data scientist rejected
+        d = ai_engine.evaluate_card(make_job("Data Scientist"))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
+
+        # 3. Python/Golang compound backend passes
+        d = ai_engine.evaluate_card(make_job("Backend engineer(Python/Golang)"))
+        self.assertTrue(d.passed, f"Python/Golang failed: {d.reason} {d.detail}")
+
+        # 4. Pure Golang rejected
+        d = ai_engine.evaluate_card(make_job("Golang System Developer"))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
+
+        # 5. AI Product Engineer passes
+        d = ai_engine.evaluate_card(make_job("AI Product Engineer"))
+        self.assertTrue(d.passed, f"AI Product Engineer failed: {d.reason} {d.detail}")
+
+        # 6 & 7. Inverted test engineering passes
+        d = fs_engine.evaluate_card(make_job("Engineer II, Software Test"))
+        self.assertTrue(d.passed, f"Software Test failed: {d.reason} {d.detail}")
+        d = fs_engine.evaluate_card(make_job("Software Engineer, Test Engineering"))
+        self.assertTrue(d.passed, f"Test Engineering failed: {d.reason} {d.detail}")
+
+        # 8. Production Support Engineer rejected
+        d = fs_engine.evaluate_card(make_job("Production Support Engineer"))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
+
+        # 9. Fullstack Mobile Engineer rejected
+        d = fs_engine.evaluate_card(make_job("Fullstack Mobile Engineer (React Native + NodeJS)"))
+        self.assertFalse(d.passed)
+        self.assertEqual(d.reason, SkipReason.FILTER_TITLE)
+
     def test_seniority_title_blocklist_removed_low_band_passes(self):
         """Run-605 gap fix: 'senior'/'sr.'/'sr'/'staff' left the title
         blocklists (FS + AI profiles and all unified platform sets). A
