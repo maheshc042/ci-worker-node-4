@@ -3249,6 +3249,7 @@ class CutshortPlatform(BaseJobPlatform):
         max_rounds = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
 
         thread_selector = (
+            "div[role='button']:has(p.conversation-date), div[role='button']:has([class*='conversation']), "
             "div[class*='onversation'], div[class*='hread'], li[class*='hread'], "
             "div[class*='hat-item'], a[class*='onversation']"
         )

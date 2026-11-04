@@ -329,7 +329,7 @@ class ApplyEngine:
                 # Outlier guard: If card had a low explicit max (e.g. <= 4.0y), but JD min extracted
                 # is an extreme outlier (e.g. >= 10.0y or > 2.5 * card max), it is almost certainly a tech version
                 # or typo in the JD text. Keep card numbers instead of falsely skipping a matching role.
-                card_max = job.max_experience
+                card_max = float(job.max_experience) if job.max_experience is not None else None
                 is_outlier = (
                     card_max is not None
                     and card_max > 0

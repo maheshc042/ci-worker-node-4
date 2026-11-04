@@ -415,6 +415,15 @@ answers:
   # "currently located in bangalore" covers every phrasing ("Are you
   # currently located in Bangalore?", "currently located in...") at 0.9.
   currently located in bangalore: "Yes"
+  currently living in bengaluru: "Yes"
+  are you currently living in bengaluru: "Yes"
+  living in bengaluru: "Yes"
+  living in bangalore: "Yes"
+  previously employed by cognizant: "No"
+  employed by cognizant: "No"
+  which aws service is used to host a managed mysql database: "Amazon RDS"
+  aws service is used to host a managed mysql database: "Amazon RDS"
+  managed mysql database on aws: "Amazon RDS"
   are you an ex-infosys employee: "No"
   ex-infosys employee id: "No"
   ex-employee of infosys: "No"
