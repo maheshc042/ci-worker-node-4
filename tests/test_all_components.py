@@ -2009,7 +2009,7 @@ class TestLateDrawerRecovery(unittest.IsolatedAsyncioTestCase):
         return Job(job_id="reco-9", title="SDE", company="Acme",
                    url="https://www.naukri.com/job-listings-1")
 
-    async def _submit_with_drawer(self, drawer_on_first_check):
+    async def _submit_with_drawer(self, drawer_on_first_check, verify_verdict="applied"):
         from unittest.mock import AsyncMock, patch
 
         from naukri_agent.naukri import apply as apply_mod
@@ -2042,7 +2042,7 @@ class TestLateDrawerRecovery(unittest.IsolatedAsyncioTestCase):
              patch.object(apply_mod, "human_pause", new=AsyncMock()), \
              patch.object(engine, "_fast_check", new=AsyncMock(side_effect=fast_check)), \
              patch.object(engine, "_wait_for_post_apply_event", new=AsyncMock(return_value="timeout")), \
-             patch.object(engine, "_verify_post_submit", new=AsyncMock(return_value="unknown")), \
+             patch.object(engine, "_verify_post_submit", new=AsyncMock(return_value=verify_verdict)), \
              patch.object(apply_mod, "ChatbotHandler", return_value=fake_bot):
             return await engine._submit(self._job(), "P", 1, MagicMock())
 

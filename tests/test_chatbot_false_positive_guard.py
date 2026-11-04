@@ -84,6 +84,7 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
             return sels == S.APPLY_SUCCESS
 
         engine._fast_check = AsyncMock(side_effect=mock_fast_check)
+        engine._verify_post_submit = AsyncMock(return_value="applied")
 
         res = ChatbotResult()
         res.completed = True
@@ -95,6 +96,29 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(outcome)
         self.assertEqual(outcome.status, ApplicationStatus.APPLIED)
         self.assertEqual(outcome.questions_answered, 1)
+
+    async def test_apply_engine_chatbot_completed_but_reload_unknown_fails_closed(self):
+        """Even when result.completed is True and questions > 0, if reload
+        verification returns 'unknown', _handle_chatbot_result MUST return None
+        (fail closed) so it never falsely marks APPLIED."""
+        page = MagicMock()
+        page.url = "https://www.naukri.com/job-listings-091026027616"
+        page.title = AsyncMock(return_value="AEM Fullstack Developer")
+        artifacts = MagicMock()
+
+        engine = ApplyEngine(
+            page, MagicMock(), artifacts, policy=RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+        engine._verify_post_submit = AsyncMock(return_value="unknown")
+
+        res = ChatbotResult()
+        res.completed = True
+        res.answered = 1
+        job = Job(job_id="reco-091026027616", title="AEM Fullstack Developer", company="Cognizant", url=page.url)
+
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=None)):
+            outcome = await engine._handle_chatbot_result(job, "P", 1, res)
+        self.assertIsNone(outcome)
 
 
 

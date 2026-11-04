@@ -724,7 +724,7 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        # Instant check for genuine URL redirect or ACP modal.
+        # Instant check for genuine URL redirect or ACP modal post-submit.
         cur_title = ""
         try:
             t = self.page.title()
@@ -732,17 +732,14 @@ class ApplyEngine:
         except Exception:
             pass
         cur_url = self.page.url or ""
-        if "/apply/confirmation" in cur_url or "Apply Confirmation" in cur_title:
-            return ApplyOutcome(
-                status=ApplicationStatus.APPLIED,
-                detail="Naukri submission confirmation observed",
-                attempts=attempts,
-                confirmation_type="confirmation_page",
-                confirmation_evidence="Apply Confirmation page observed",
-            )
+        has_post_apply_success = (
+            event_type == "success"
+            or "/apply/confirmation" in cur_url
+            or "apply confirmation" in cur_title.lower()
+            or await self._fast_check(S.APPLY_SUCCESS)
+        )
 
-        if (event_type == "success" or await self._fast_check(S.APPLY_SUCCESS)) \
-                and await self._presubmit_button_gone():
+        if has_post_apply_success and await self._presubmit_button_gone():
             verdict = await self._verify_post_submit(job)
             if verdict == "applied":
                 return ApplyOutcome(
@@ -797,27 +794,6 @@ class ApplyEngine:
             shot = await self.artifacts.capture_failure(self.page, "apply-error-toast", profile, job.job_id)
             return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Toast error: {toast[:100]}", screenshot_path=shot, attempts=attempts)
 
-        # Fail-Fast Verification: Check page title and confirmation redirect
-        t_ver_0 = time.perf_counter()
-        is_url_confirmed = False
-        try:
-            t = self.page.title()
-            c_title = (await t if hasattr(t, "__await__") else str(t)) or ""
-            if "Apply Confirmation" in c_title or "/apply/confirmation" in (self.page.url or ""):
-                is_url_confirmed = True
-        except Exception:
-            pass
-        jt.verify_s += time.perf_counter() - t_ver_0
-
-        if is_url_confirmed:
-            return ApplyOutcome(
-                status=ApplicationStatus.APPLIED,
-                detail="Naukri submission confirmation observed",
-                attempts=attempts,
-                confirmation_type="confirmation_page",
-                confirmation_evidence="Apply Confirmation page observed after submission",
-            )
-
         if await first_visible(self.page, S.JD_ALREADY_APPLIED, timeout_ms=1_000) is not None:
             return ApplyOutcome(
                 status=ApplicationStatus.ALREADY_APPLIED,
@@ -845,28 +821,6 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        # Verify pass (runs 488/490: 6 straight "no confirmation" fails on the
-        # secondary account): the submit click already fired, so a stuck drawer
-        # DOM proves nothing. One fresh reload + marker re-check separates a
-        # genuinely lost submit from a confirmation the stale page never
-        # rendered. A reload is a plain GET — it can never double-submit.
-        verdict = await self._verify_post_submit(job)
-        if verdict == "applied":
-            return ApplyOutcome(
-                status=ApplicationStatus.APPLIED,
-                detail="Naukri submission confirmation observed on verify pass",
-                attempts=attempts,
-                confirmation_type="verify_pass",
-                confirmation_evidence="Success marker observed after job page reload",
-            )
-        if verdict == "already_applied":
-            return ApplyOutcome(
-                status=ApplicationStatus.ALREADY_APPLIED,
-                reason=SkipReason.ALREADY_APPLIED,
-                detail="Already applied marker observed on verify pass",
-                attempts=attempts,
-            )
-
         # Late-drawer recovery: the screening chatbot can hydrate AFTER the
         # 15s post-click event poll on slow renders. Answering it now still
         # completes the apply — declaring the submit lost without this check
@@ -887,8 +841,33 @@ class ApplyEngine:
             if late_outcome is not None:
                 return late_outcome
 
-        shot = await self.artifacts.capture_failure(self.page, "no-confirmation", profile, job.job_id)
-        return ApplyOutcome(status=ApplicationStatus.FAILED, detail="No success confirmation within SLA", screenshot_path=shot, attempts=attempts)
+        # Compulsory verify pass for 1-click apply:
+        # One fresh reload + server-rendered marker re-check separates a genuinely
+        # lost submit from a genuine application. A reload is a plain GET.
+        verdict = await self._verify_post_submit(job)
+        if verdict == "applied":
+            return ApplyOutcome(
+                status=ApplicationStatus.APPLIED,
+                detail="Naukri submission confirmation observed on verify pass",
+                attempts=attempts,
+                confirmation_type="verify_pass",
+                confirmation_evidence="Success marker observed after job page reload",
+            )
+        if verdict == "already_applied":
+            return ApplyOutcome(
+                status=ApplicationStatus.ALREADY_APPLIED,
+                reason=SkipReason.ALREADY_APPLIED,
+                detail="Already applied marker observed on verify pass",
+                attempts=attempts,
+            )
+
+        shot = await self.artifacts.capture_failure(self.page, "apply-unconfirmed-reload", profile, job.job_id)
+        return ApplyOutcome(
+            status=ApplicationStatus.FAILED,
+            detail="Application submitted but active Apply button still visible on verify pass",
+            screenshot_path=shot,
+            attempts=attempts,
+        )
 
     async def _handle_chatbot_result(self, job: Job, profile: str, attempts: int, result) -> ApplyOutcome | None:
         """Map a finished screening run to an outcome.
@@ -911,30 +890,7 @@ class ApplyEngine:
                 detail += f" (submit also failed: {result.error[:150]})"
             return ApplyOutcome(status=ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.UNANSWERED_QUESTION, detail=detail, screenshot_path=shot, questions_answered=result.answered, unanswered_questions=list(result.unanswered), attempts=attempts)
 
-        cur_title = ""
-        try:
-            t = self.page.title()
-            cur_title = ((await t if hasattr(t, "__await__") else str(t)) or "").lower()
-        except Exception:
-            pass
-        cur_url = (getattr(self.page, "url", "") or "").lower()
-
-        is_page_confirmed = (
-            "/apply/confirmation" in cur_url
-            or "apply confirmation" in cur_title
-            or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
-        )
-
         if result.error:
-            if is_page_confirmed:
-                return ApplyOutcome(
-                    status=ApplicationStatus.APPLIED,
-                    detail="Naukri submission confirmation observed",
-                    questions_answered=result.answered,
-                    attempts=attempts,
-                    confirmation_type="confirmation_page",
-                    confirmation_evidence="Apply Confirmation page or jobapplied layout observed",
-                )
             if result.answered > 0:
                 log.info("apply.chatbot_error_verifying_reload", job_id=job.job_id, answered=result.answered)
                 verdict = await self._verify_post_submit(job)
@@ -972,10 +928,10 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        if result.answered == 0 and not is_page_confirmed:
+        if result.answered == 0:
             try:
                 shot = await self.artifacts.capture_failure(self.page, "chatbot-zero-answered", profile, job.job_id)
-            except TypeError:
+            except (TypeError, AttributeError):
                 shot = None
             return ApplyOutcome(
                 status=ApplicationStatus.FAILED,
@@ -985,17 +941,8 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        confirmed = is_page_confirmed or (result.completed and result.answered > 0)
-        if confirmed:
-            return ApplyOutcome(
-                status=ApplicationStatus.APPLIED,
-                detail="Naukri submission confirmation observed",
-                questions_answered=result.answered,
-                attempts=attempts,
-                confirmation_type="confirmation_page" if is_page_confirmed else "chatbot_completed",
-                confirmation_evidence="Screening flow completed and Naukri success marker observed",
-            )
-
+        # Compulsory verification pass for all answered screening chatbot flows:
+        # A completed screening flow MUST be verified against Naukri's server-rendered state.
         if result.answered > 0:
             log.info("apply.chatbot_verifying_reload", job_id=job.job_id, answered=result.answered, completed=result.completed)
             verdict = await self._verify_post_submit(job)
@@ -1032,16 +979,7 @@ class ApplyEngine:
             return "unknown"
         await human_pause(1000, 2000)
 
-        # 1. Native confirmation redirect
-        try:
-            t = self.page.title()
-            title = (await t if hasattr(t, "__await__") else str(t)) or ""
-            if "Apply Confirmation" in title or "/apply/confirmation" in (self.page.url or ""):
-                return "applied"
-        except Exception:
-            pass
-
-        # 2. Inspect the primary apply button FIRST.
+        # 1. Inspect the primary apply button FIRST.
         # If the active "Apply" button is still present and not "Applied", the job is NOT applied.
         try:
             apply_btn = await first_visible(self.page, ["button#apply-button", *S.JD_APPLY_BUTTON], timeout_ms=3_000)
@@ -1053,6 +991,18 @@ class ApplyEngine:
                 if "apply" in btn_text:
                     log.info("apply.verify_active_apply_button_found", job_id=job.job_id, btn_text=btn_text)
                     return "unknown"
+        except Exception:
+            pass
+
+        # 2. Native confirmation redirect
+        try:
+            cur_url = (self.page.url or "").lower()
+            if "/apply/confirmation" in cur_url:
+                return "applied"
+            t = self.page.title()
+            title = ((await t if hasattr(t, "__await__") else str(t)) or "").lower()
+            if "apply confirmation" in title:
+                return "applied"
         except Exception:
             pass
 

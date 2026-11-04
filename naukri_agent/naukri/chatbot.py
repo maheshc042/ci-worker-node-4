@@ -737,7 +737,6 @@ class ChatbotHandler:
                             is_confirmed = (
                                 "/apply/confirmation" in cur_url
                                 or "apply confirmation" in cur_title
-                                or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
                             )
                         except Exception:
                             is_confirmed = False
@@ -843,9 +842,8 @@ class ChatbotHandler:
                 # Before raising failure, verify if the submission triggered page redirect to Apply Confirmation
                 is_confirmed = (
                     await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=1_500) is not None
-                    or "applied" in self.page.url.lower()
-                    or "confirmation" in (await self.page.title()).lower()
-                    or await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0
+                    or "/apply/confirmation" in self.page.url.lower()
+                    or "apply confirmation" in (await self.page.title()).lower()
                 )
                 if is_confirmed:
                     result.completed = True
@@ -890,9 +888,8 @@ class ChatbotHandler:
                 is_confirmed = (
                     await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=1_000) is not None
                     or await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=1_500) is not None
-                    or "applied" in cur_url
-                    or "confirmation" in cur_title
-                    or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
+                    or "/apply/confirmation" in cur_url
+                    or "apply confirmation" in cur_title
                 )
             except Exception:
                 is_confirmed = False
