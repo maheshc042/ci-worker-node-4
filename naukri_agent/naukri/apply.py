@@ -578,11 +578,7 @@ class ApplyEngine:
             return False
 
     async def _wait_for_post_apply_event(self) -> str:
-        extended_success = S.APPLY_SUCCESS + [
-            "div:has-text('Application sent')",
-            "div:has-text('Successfully applied')",
-            "div.acp-header-container:has-text('Applied to')",
-        ]
+        extended_success = S.APPLY_SUCCESS
         for _ in range(100):  # ~15s resilient SLA poll for enterprise network latency
             if self._popup_opened:
                 return "popup"
@@ -728,19 +724,41 @@ class ApplyEngine:
                 attempts=attempts,
             )
 
-        # Instant check for genuine success banner. Guarded: an unordered
-        # success hit is only trusted once the pre-submit button is gone —
-        # a lingering button means fall through to the verify flow below,
-        # which still catches real success via title/URL/reload.
-        if (event_type == "success" or await self._fast_check(S.APPLY_SUCCESS)) \
-                and await self._presubmit_button_gone():
+        # Instant check for genuine URL redirect or ACP modal.
+        cur_title = ""
+        try:
+            t = self.page.title()
+            cur_title = (await t if hasattr(t, "__await__") else str(t)) or ""
+        except Exception:
+            pass
+        cur_url = self.page.url or ""
+        if "/apply/confirmation" in cur_url or "Apply Confirmation" in cur_title:
             return ApplyOutcome(
                 status=ApplicationStatus.APPLIED,
                 detail="Naukri submission confirmation observed",
                 attempts=attempts,
-                confirmation_type=event_type if event_type != "timeout" else "dom_marker",
-                confirmation_evidence="Naukri ACP confirmation or success marker observed",
+                confirmation_type="confirmation_page",
+                confirmation_evidence="Apply Confirmation page observed",
             )
+
+        if (event_type == "success" or await self._fast_check(S.APPLY_SUCCESS)) \
+                and await self._presubmit_button_gone():
+            verdict = await self._verify_post_submit(job)
+            if verdict == "applied":
+                return ApplyOutcome(
+                    status=ApplicationStatus.APPLIED,
+                    detail="Naukri submission confirmation observed on verify pass",
+                    attempts=attempts,
+                    confirmation_type="verify_pass",
+                    confirmation_evidence="Success marker observed after job page reload",
+                )
+            if verdict == "already_applied":
+                return ApplyOutcome(
+                    status=ApplicationStatus.ALREADY_APPLIED,
+                    reason=SkipReason.ALREADY_APPLIED,
+                    detail="Already applied marker observed on verify pass",
+                    attempts=attempts,
+                )
 
         chatbot = ChatbotHandler(
             self.page,
@@ -757,12 +775,15 @@ class ApplyEngine:
             if outcome is not None:
                 return outcome
 
-            shot = await self.artifacts.capture_failure(
-                self.page,
-                "chatbot-no-confirmation",
-                profile,
-                job.job_id,
-            )
+            try:
+                shot = await self.artifacts.capture_failure(
+                    self.page,
+                    "chatbot-no-confirmation",
+                    profile,
+                    job.job_id,
+                )
+            except (TypeError, AttributeError):
+                shot = None
             return ApplyOutcome(
                 status=ApplicationStatus.FAILED,
                 detail="Screening answers sent but no submission confirmation observed",
@@ -776,29 +797,25 @@ class ApplyEngine:
             shot = await self.artifacts.capture_failure(self.page, "apply-error-toast", profile, job.job_id)
             return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Toast error: {toast[:100]}", screenshot_path=shot, attempts=attempts)
 
-        # Fail-Fast Verification: Check page title and DOM confirmation markers
+        # Fail-Fast Verification: Check page title and confirmation redirect
         t_ver_0 = time.perf_counter()
-        is_success = False
+        is_url_confirmed = False
         try:
-            cur_title = await self.page.title()
-            if "Apply Confirmation" in cur_title or "/apply/confirmation" in self.page.url:
-                is_success = True
+            t = self.page.title()
+            c_title = (await t if hasattr(t, "__await__") else str(t)) or ""
+            if "Apply Confirmation" in c_title or "/apply/confirmation" in (self.page.url or ""):
+                is_url_confirmed = True
         except Exception:
             pass
-        if not is_success:
-            marker_hit = await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=3_000) is not None
-            # Same pre-submit-button guard as the instant check above: a bare
-            # marker hit with the Apply button still present is untrustworthy.
-            is_success = marker_hit and await self._presubmit_button_gone()
         jt.verify_s += time.perf_counter() - t_ver_0
 
-        if is_success:
+        if is_url_confirmed:
             return ApplyOutcome(
                 status=ApplicationStatus.APPLIED,
                 detail="Naukri submission confirmation observed",
                 attempts=attempts,
-                confirmation_type="dom_marker",
-                confirmation_evidence="Naukri success or ACP confirmation marker observed after submission",
+                confirmation_type="confirmation_page",
+                confirmation_evidence="Apply Confirmation page observed after submission",
             )
 
         if await first_visible(self.page, S.JD_ALREADY_APPLIED, timeout_ms=1_000) is not None:
@@ -894,11 +911,18 @@ class ApplyEngine:
                 detail += f" (submit also failed: {result.error[:150]})"
             return ApplyOutcome(status=ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.UNANSWERED_QUESTION, detail=detail, screenshot_path=shot, questions_answered=result.answered, unanswered_questions=list(result.unanswered), attempts=attempts)
 
+        cur_title = ""
+        try:
+            t = self.page.title()
+            cur_title = ((await t if hasattr(t, "__await__") else str(t)) or "").lower()
+        except Exception:
+            pass
+        cur_url = (getattr(self.page, "url", "") or "").lower()
+
         is_page_confirmed = (
-            await self._fast_check(S.APPLY_SUCCESS)
-            or "applied" in self.page.url.lower()
-            or "confirmation" in (await self.page.title()).lower()
-            or await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0
+            "/apply/confirmation" in cur_url
+            or "apply confirmation" in cur_title
+            or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
         )
 
         if result.error:
@@ -968,12 +992,12 @@ class ApplyEngine:
                 detail="Naukri submission confirmation observed",
                 questions_answered=result.answered,
                 attempts=attempts,
-                confirmation_type="chatbot_completed" if result.completed else "dom_marker",
+                confirmation_type="confirmation_page" if is_page_confirmed else "chatbot_completed",
                 confirmation_evidence="Screening flow completed and Naukri success marker observed",
             )
 
         if result.answered > 0:
-            log.info("apply.chatbot_unconfirmed_verifying_reload", job_id=job.job_id, answered=result.answered)
+            log.info("apply.chatbot_verifying_reload", job_id=job.job_id, answered=result.answered, completed=result.completed)
             verdict = await self._verify_post_submit(job)
             if verdict == "applied":
                 return ApplyOutcome(
@@ -1007,28 +1031,43 @@ class ApplyEngine:
             log.debug("apply.verify_goto_failed", job_id=job.job_id, error=str(exc)[:120])
             return "unknown"
         await human_pause(1000, 2000)
+
+        # 1. Native confirmation redirect
         try:
-            title = await self.page.title()
-            if "Apply Confirmation" in (title or "") or "/apply/confirmation" in (self.page.url or ""):
+            t = self.page.title()
+            title = (await t if hasattr(t, "__await__") else str(t)) or ""
+            if "Apply Confirmation" in title or "/apply/confirmation" in (self.page.url or ""):
                 return "applied"
         except Exception:
             pass
+
+        # 2. Inspect the primary apply button FIRST.
+        # If the active "Apply" button is still present and not "Applied", the job is NOT applied.
         try:
-            if await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=4_000) is not None:
+            apply_btn = await first_visible(self.page, ["button#apply-button", *S.JD_APPLY_BUTTON], timeout_ms=3_000)
+            if apply_btn is not None and hasattr(apply_btn, "is_visible") and await apply_btn.is_visible():
+                btn_text = ((await apply_btn.inner_text()) or "").strip().lower()
+                is_disabled = await apply_btn.is_disabled() if hasattr(apply_btn, "is_disabled") else False
+                if "applied" in btn_text:
+                    return "applied" if not is_disabled else "already_applied"
+                if "apply" in btn_text:
+                    log.info("apply.verify_active_apply_button_found", job_id=job.job_id, btn_text=btn_text)
+                    return "unknown"
+        except Exception:
+            pass
+
+        # 3. Check specific success markers on the reloaded page
+        try:
+            if await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=2_000) is not None:
                 return "applied"
         except Exception:
             pass
+
+        # 4. Check explicit already-applied markers (only reached if no active Apply button)
         try:
             if await first_visible(self.page, S.JD_ALREADY_APPLIED, timeout_ms=2_000) is not None:
                 return "already_applied"
         except Exception:
             pass
-        try:
-            apply_btn = await first_visible(self.page, ["button#apply-button", *S.JD_APPLY_BUTTON], timeout_ms=2_000)
-            if apply_btn is not None and await apply_btn.is_visible():
-                btn_text = ((await apply_btn.inner_text()) or "").strip().lower()
-                if "apply" in btn_text and "applied" not in btn_text:
-                    return "unknown"
-        except Exception:
-            pass
+
         return "unknown"

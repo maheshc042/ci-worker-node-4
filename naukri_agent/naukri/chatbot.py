@@ -711,7 +711,8 @@ class ChatbotHandler:
         for index in range(self.max_questions):
             await asyncio.sleep(1.2)  # let the drawer render the next bubble
 
-            if result.answered > 0 and await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=1_200):
+            drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=800)
+            if drawer is not None and result.answered > 0 and await first_visible(drawer, S.CHATBOT_COMPLETE, timeout_ms=1_000):
                 result.completed = True
                 log.info("chatbot.completed", answered=result.answered)
                 break
@@ -734,10 +735,8 @@ class ChatbotHandler:
                             except Exception:
                                 pass
                             is_confirmed = (
-                                await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=800) is not None
-                                or await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=800) is not None
-                                or "applied" in cur_url
-                                or "confirmation" in cur_title
+                                "/apply/confirmation" in cur_url
+                                or "apply confirmation" in cur_title
                                 or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
                             )
                         except Exception:

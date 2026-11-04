@@ -293,13 +293,11 @@ APPLY_SUCCESS = [
     # Specific confirmation banners with unambiguous positive text
     "div.apply-message:has-text('successfully applied')",
     "div.apply-message:has-text('Application sent')",
-    "span:has-text('You have successfully applied')",
-    "div:has-text('You have successfully applied')",
-    "div:has-text('Application sent')",
-    "div:has-text('Applied successfully')",
+    "div.styles_apply-message:has-text('successfully applied')",
+    "div.styles_apply-message:has-text('Application sent')",
     # Primary Apply button transitioned to applied state
     "button#apply-button[disabled]:has-text('Applied')",
-    "button#apply-button:has-text('Applied')",
+    "button#apply-button:has-text('Applied')", 
 ]
 
 APPLY_ERROR_TOAST = [
@@ -429,14 +427,13 @@ CHATBOT_CLOSE = [
     ".crossIcon",
 ]
 CHATBOT_COMPLETE = [
-    "div:has-text('Your application has been submitted')",
-    "div:has-text('Your application has been received')",
-    "div:has-text('Application submitted successfully')",
-    "div:has-text('successfully applied')",
+    "div.botMsg:has-text('application has been submitted')",
+    "div.botMsg:has-text('application has been received')",
+    "div.botMsg:has-text('Application submitted successfully')",
     "div.botMsg:has-text('Thank you for applying')",
     "div.botMsg:has-text('Thank you for submitting')",
-    "div.botMsg:has-text('application has been submitted')",
     "div.botMsg:has-text('successfully submitted')",
+    "div.botMsg:has-text('successfully applied')", 
 ]
 
 # -------------------------------------------------------- resume management

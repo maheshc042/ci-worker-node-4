@@ -207,5 +207,100 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.completed)
         self.assertEqual(result.answered, 1)
 
+    async def test_verify_post_submit_active_apply_button_returns_unknown(self):
+        """If the reloaded page still renders an active 'Apply' button, _verify_post_submit
+        MUST return 'unknown', never 'applied', even if ambient success markers exist."""
+        page = MagicMock()
+        page.goto = AsyncMock()
+        page.url = "https://www.naukri.com/job-listings-091026027616"
+        page.title = AsyncMock(return_value="AEM Fullstack Developer - Cognizant")
+
+        apply_btn = MagicMock()
+        apply_btn.is_visible = AsyncMock(return_value=True)
+        apply_btn.inner_text = AsyncMock(return_value="Apply")
+        apply_btn.is_disabled = AsyncMock(return_value=False)
+
+        engine = ApplyEngine(
+            page, MagicMock(), MagicMock(), policy=RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=apply_btn)):
+            verdict = await engine._verify_post_submit(
+                Job(job_id="reco-091026027616", title="AEM Fullstack Developer", company="Cognizant", url=page.url)
+            )
+        self.assertEqual(verdict, "unknown")
+
+    async def test_verify_post_submit_applied_button_returns_applied(self):
+        """If the reloaded page renders 'Applied' on an enabled button, _verify_post_submit
+        returns 'applied'."""
+        page = MagicMock()
+        page.goto = AsyncMock()
+        page.url = "https://www.naukri.com/job-listings-091026027616"
+        page.title = AsyncMock(return_value="AEM Fullstack Developer - Cognizant")
+
+        apply_btn = MagicMock()
+        apply_btn.is_visible = AsyncMock(return_value=True)
+        apply_btn.inner_text = AsyncMock(return_value="Applied")
+        apply_btn.is_disabled = AsyncMock(return_value=False)
+
+        engine = ApplyEngine(
+            page, MagicMock(), MagicMock(), policy=RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=apply_btn)):
+            verdict = await engine._verify_post_submit(
+                Job(job_id="reco-091026027616", title="AEM Fullstack Developer", company="Cognizant", url=page.url)
+            )
+        self.assertEqual(verdict, "applied")
+
+    async def test_verify_post_submit_applied_disabled_returns_already_applied(self):
+        """If the reloaded page renders 'Applied' on a disabled button, _verify_post_submit
+        returns 'already_applied'."""
+        page = MagicMock()
+        page.goto = AsyncMock()
+        page.url = "https://www.naukri.com/job-listings-091026027616"
+        page.title = AsyncMock(return_value="AEM Fullstack Developer - Cognizant")
+
+        apply_btn = MagicMock()
+        apply_btn.is_visible = AsyncMock(return_value=True)
+        apply_btn.inner_text = AsyncMock(return_value="Applied")
+        apply_btn.is_disabled = AsyncMock(return_value=True)
+
+        engine = ApplyEngine(
+            page, MagicMock(), MagicMock(), policy=RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=apply_btn)):
+            verdict = await engine._verify_post_submit(
+                Job(job_id="reco-091026027616", title="AEM Fullstack Developer", company="Cognizant", url=page.url)
+            )
+        self.assertEqual(verdict, "already_applied")
+
+    async def test_screening_chatbot_silent_drawer_close_without_server_verify_fails_closed(self):
+        """When drawer closes silently after answering questions (res.completed = False),
+        if the page is not an unambiguous native confirmation URL and reload verification
+        returns 'unknown', it must fail closed and return None."""
+        page = MagicMock()
+        page.url = "https://www.naukri.com/job-listings-091026027616"
+        page.title = AsyncMock(return_value="AEM Fullstack Developer - Cognizant")
+        page.locator.return_value.count = AsyncMock(return_value=0)
+
+        artifacts = MagicMock()
+        engine = ApplyEngine(
+            page, MagicMock(), artifacts, policy=RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+        engine._fast_check = AsyncMock(return_value=False)
+        engine._verify_post_submit = AsyncMock(return_value="unknown")
+
+        res = ChatbotResult()
+        res.completed = False  # Silent drawer close
+        res.answered = 1
+        job = Job(job_id="reco-091026027616", title="AEM Fullstack Developer", company="Cognizant", url=page.url)
+
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=None)):
+            outcome = await engine._handle_chatbot_result(job, "P", 1, res)
+        self.assertIsNone(outcome)
+
 if __name__ == "__main__":
     unittest.main()
+
