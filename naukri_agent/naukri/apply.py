@@ -460,6 +460,14 @@ class ApplyEngine:
                 attempts=attempt_used,
             )
 
+        if pre_submit_check is not None:
+            decision = pre_submit_check(job)
+            if not decision.passed:
+                jt.total_s = time.perf_counter() - t_job_start
+                if self.metrics:
+                    self.metrics.job_timings.append(jt)
+                return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=decision.reason or SkipReason.FILTER_DESCRIPTION, detail=decision.detail, attempts=attempt_used)
+
         if state == "external":
             jt.total_s = time.perf_counter() - t_job_start
             if self.metrics:
@@ -468,14 +476,6 @@ class ApplyEngine:
             log.info("naukri.apply.external_resolved", job_id=job.job_id,
                      resolved=bool(ats_url))
             return ApplyOutcome(status=ApplicationStatus.EXTERNAL, reason=SkipReason.EXTERNAL_APPLY, detail="apply-on-company-site only", attempts=attempt_used, external_url=ats_url)
-
-        if pre_submit_check is not None:
-            decision = pre_submit_check(job)
-            if not decision.passed:
-                jt.total_s = time.perf_counter() - t_job_start
-                if self.metrics:
-                    self.metrics.job_timings.append(jt)
-                return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=decision.reason or SkipReason.FILTER_DESCRIPTION, detail=decision.detail, attempts=attempt_used)
 
         if not self.policy.may_mutate:
             jt.total_s = time.perf_counter() - t_job_start
@@ -616,6 +616,8 @@ class ApplyEngine:
 
         t_click_0 = time.perf_counter()
         pre_click_state = await self._submit_button_state()
+        _, _, was_enabled, pre_click_text = pre_click_state
+        started_unapplied = was_enabled is True and (pre_click_text or "").strip() == "apply"
         # Pre-click micro-retry: a transient overlay or React re-render can break
         # exactly one click attempt. Retrying here is safe — nothing has been
         # submitted yet. Post-click outcomes below are deliberately never retried.
@@ -716,7 +718,7 @@ class ApplyEngine:
         if event_type == "popup" or self._popup_opened:
             return ApplyOutcome(status=ApplicationStatus.EXTERNAL, reason=SkipReason.EXTERNAL_APPLY, detail="Third-party tab opened", attempts=attempts, external_url=self._is_company_url(self._last_popup_url))
 
-        if event_type == "already_applied" or await self._fast_check(S.JD_ALREADY_APPLIED):
+        if not started_unapplied and (event_type == "already_applied" or await self._fast_check(S.JD_ALREADY_APPLIED)):
             return ApplyOutcome(
                 status=ApplicationStatus.ALREADY_APPLIED,
                 reason=SkipReason.ALREADY_APPLIED,
@@ -733,7 +735,7 @@ class ApplyEngine:
             pass
         cur_url = self.page.url or ""
         has_post_apply_success = (
-            event_type == "success"
+            event_type in {"success", "already_applied"}
             or "/apply/confirmation" in cur_url
             or "apply confirmation" in cur_title.lower()
             or await self._fast_check(S.APPLY_SUCCESS)
@@ -741,7 +743,7 @@ class ApplyEngine:
 
         if has_post_apply_success and await self._presubmit_button_gone():
             verdict = await self._verify_post_submit(job)
-            if verdict == "applied":
+            if verdict == "applied" or (verdict == "already_applied" and started_unapplied):
                 return ApplyOutcome(
                     status=ApplicationStatus.APPLIED,
                     detail="Naukri submission confirmation observed on verify pass",
@@ -845,7 +847,7 @@ class ApplyEngine:
         # One fresh reload + server-rendered marker re-check separates a genuinely
         # lost submit from a genuine application. A reload is a plain GET.
         verdict = await self._verify_post_submit(job)
-        if verdict == "applied":
+        if verdict == "applied" or (verdict == "already_applied" and started_unapplied):
             return ApplyOutcome(
                 status=ApplicationStatus.APPLIED,
                 detail="Naukri submission confirmation observed on verify pass",
@@ -864,7 +866,8 @@ class ApplyEngine:
         shot = await self.artifacts.capture_failure(self.page, "apply-unconfirmed-reload", profile, job.job_id)
         return ApplyOutcome(
             status=ApplicationStatus.FAILED,
-            detail="Application submitted but active Apply button still visible on verify pass",
+            reason=SkipReason.SUBMISSION_UNCONFIRMED,
+            detail="Naukri application state could not be confirmed after reopening the job",
             screenshot_path=shot,
             attempts=attempts,
         )

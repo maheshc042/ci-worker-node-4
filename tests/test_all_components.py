@@ -3541,21 +3541,15 @@ class TestLinkedInVerifySubmit(unittest.IsolatedAsyncioTestCase):
 
         marker = MagicMock()
         m = await self._verify({
-            ("div[data-test-modal]:has-text('Application sent')",
-             "div[role='dialog']:has-text('Application sent')",
-             "h3:has-text('Application sent')",
-             "h2:has-text('Application sent')",
-             "span:has-text('Application sent')",
-             "div:has-text('Your application was sent')",
-             "button:has-text('Done')",
-             "button[aria-label='Done']"): marker,
+            ("[role='dialog'] :text-is('Application sent')",
+             "[role='dialog'] :text-is('Your application was sent')",
+             "[data-test-modal] :text-is('Application sent')",
+             "[data-test-modal] :text-is('Your application was sent')"): marker,
         })
         self.assertTrue(m)
 
-    async def test_closed_modal_counts(self):
-        # No confirmation, no badge, modal gone == submitted.
-        m = await self._verify({})
-        self.assertTrue(m)
+    async def test_closed_modal_without_confirmation_fails(self):
+        self.assertFalse(await self._verify({}))
 
     async def test_open_modal_no_markers_fails(self):
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -4641,9 +4635,8 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         (5, "text=Application sent"),
         (3, "fieldset"),
         (4, "fieldset"),
-        (12, "text=Application sent"),
         (6, "div:has(img[src*='close.png'])"),
-        (3, "button:has-text('Applied')"),
+        (4, "button:text-is('Applied')"),
     ]
 
     async def test_defer_mode_answers_without_submitting(self):
@@ -4724,7 +4717,7 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         """The whole cutshort apply flow succeeds end-to-end when the modal is
         pre-Send questionnaire aware: pre-Send chips answered via
         allow_submit=False, single caller Send click, post-Send chatbot
-        verifies, APPLIED with questions_answered=2 and no reload probe."""
+        is followed by confirmation on the exact job page."""
         from types import SimpleNamespace
         from unittest.mock import call, patch
 
@@ -4772,6 +4765,7 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
             (7, "button:has-text('Send')"): send_btn,
             (3, "fieldset"): truthy_q,
             (4, "fieldset"): truthy_q,
+            (4, "button:text-is('Applied')"): object(),
         }
         seen_keys = []
 
@@ -4855,16 +4849,15 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send_btn.click.await_count, 1)
         self.assertEqual(send_btn.evaluate.await_count, 0)
 
-        # Verdict: APPLIED via the chatbot's own landing verification, with the
-        # answered-question count carried in the outcome itself.
+        # The target job page confirms submission and preserves the answer count.
         self.assertEqual(outcome.status, ApplicationStatus.APPLIED)
         self.assertEqual(outcome.questions_answered, 2)
         self.assertEqual(outcome.confirmation_type, "dom_marker")
-        self.assertIn("questions_answered=2", outcome.confirmation_evidence)
+        self.assertIn("target job page", outcome.confirmation_evidence)
 
-        # Reload verification must be SKIPPED when the chatbot verified its own
-        # landing: exactly two gotos — dedicated job page, then nav-back.
+        # Open the job, revisit it for confirmation, and return to the feed.
         self.assertEqual(page.goto.await_args_list, [
+            call("https://cutshort.io/job/test123", wait_until="domcontentloaded"),
             call("https://cutshort.io/job/test123", wait_until="domcontentloaded"),
             call("https://cutshort.io/profile/all-jobs", wait_until="domcontentloaded"),
         ])
@@ -6733,3 +6726,30 @@ if __name__ == "__main__":
 
 
 
+
+class TestTenureAnswerUnits(unittest.TestCase):
+    def test_matched_role_tenure_fallback_and_units(self):
+        from naukri_agent.core.answers import AnswerEngine, ExperienceAnswers
+        from naukri_agent.core.models import ScreeningQuestion
+
+        engine = AnswerEngine([], experience=ExperienceAnswers(
+            total_years=3, default_years=1, skills={"python": 3, "cobol": 0},
+        ))
+        cases = [
+            ("How many years have you worked with Temporal?", [], "1"),
+            ("How many months of experience with Temporal?", [], "12"),
+            ("How many months of experience with Python?", [], "36"),
+            ("How many years of experience with Temporal?", ["1 month", "1 year"], "1 year"),
+            ("How many years of experience with Temporal?", ["Less than 1 year", "1 to 2 years"], "1 to 2 years"),
+            ("Do you have at least 1 year of experience with Temporal?", ["Yes", "No"], "Yes"),
+            ("Do you have more than 1 year of experience with Temporal?", ["Yes", "No"], "No"),
+            ("Do you have at least 12 months of experience with Temporal?", ["Yes", "No"], "Yes"),
+            ("Do you have more than 2 years of experience?", ["Yes", "No"], "Yes"),
+            ("Do you have at least 1 year of experience with Cobol?", ["Yes", "No"], "No"),
+        ]
+        for text, options, expected in cases:
+            with self.subTest(text=text, options=options):
+                kind = "radio" if options else "text"
+                answer = engine.resolve(ScreeningQuestion(text, kind, options))
+                self.assertIsNotNone(answer)
+                self.assertEqual(answer.value, expected)

@@ -507,6 +507,9 @@ class AnswerEngine:
         # Stage 1.7: Known-absent skill ("Do you have X experience?" where X
         # is in no skill map -> honest "No"). Runs before the tenure math so
         # unknown skills never inherit default_years.
+        comparison = self._resolve_tenure_comparison(text, question)
+        if comparison is not None:
+            return comparison
         absence = self._resolve_skill_absence(text, question)
         if absence is not None:
             return absence
@@ -520,8 +523,7 @@ class AnswerEngine:
         # self-descriptions ("which best describes your experience ...?").
         # None match any KB intent; without them the job dies in review
         # (run 569 #71, #73; run 571 #94).
-        for intent in (self._resolve_tenure_comparison, self._resolve_presence_no,
-                       self._resolve_self_describe):
+        for intent in (self._resolve_presence_no, self._resolve_self_describe):
             hit = intent(text, question)
             if hit is not None:
                 return hit
@@ -1026,38 +1028,31 @@ class AnswerEngine:
         return None
 
     def _resolve_tenure_comparison(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
-        """"Do you have more than 5 years of exp?" — compare the threshold
-        against verified total tenure instead of typing a number into a
-        Yes/No-shaped question (run 569 #71 went to review: "exp" carries
-        no tenure noun so the experience stages never fire)."""
+        """Compare the requested threshold with total or named-skill tenure."""
+        if re.search(r"\bhow\s+(?:many|much)\b", text):
+            return None
         m = re.search(
-            r"\b(?:more\s+than|over|above|greater\s+than|at\s+least|minimum(?:\s+of)?|"
-            r"atleast|5\s*\+|(\d+)\s*\+\s*(?:years?|yrs?|exp))\s*"
-            r"(\d+(?:\.\d+)?)?\s*(?:years?|yrs?|\by\b|\bexp\b)?",
+            r"\b(?:(more\s+than|over|above|greater\s+than|at\s+least|minimum(?:\s+of)?|atleast)\s+"
+            r"(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*\+)\s*(years?|yrs?|months?|exp)\b",
             text,
         )
         if not m:
             return None
-        if not re.search(r"\b(?:years?|yrs?|\bexp\b|experience)\b", text):
-            return None
-        num = m.group(2) or m.group(1)
-        # "5+ years" form carries the number outside group 2.
-        if num is None:
-            m2 = re.search(r"(\d+(?:\.\d+)?)\s*\+", text)
-            num = m2.group(1) if m2 else None
-        if num is None:
-            return None
-        try:
-            threshold = float(num)
-        except (TypeError, ValueError):
-            return None
-        try:
-            total = float(self.experience.total_years) if self.experience.total_years is not None else None
-        except (TypeError, ValueError):
-            total = None
+        operator, amount, plus_amount, unit = m.groups()
+        threshold = float(amount or plus_amount)
+        total = self.experience.total_years
+        if re.search(r"\b(?:in|with|using|on|as)\s+\w", text[m.end():]):
+            skill_tenure = self._resolve_experience(text, ScreeningQuestion(text, "text"))
+            if skill_tenure is None:
+                return None
+            total = float(skill_tenure.value)
         if total is None:
             return None
-        want = "Yes" if total >= threshold else "No"
+        if unit.startswith("month"):
+            threshold /= 12
+        exclusive = " ".join((operator or "").split()) in {"more than", "over", "above", "greater than"}
+        meets_threshold = total > threshold if exclusive else total >= threshold
+        want = "Yes" if meets_threshold else "No"
         fitted = self._fit_to_options(want, question, f"tenure-compare:{threshold:g}", "tenure-map")
         if fitted is not None:
             log.info("answers.tenure_comparison", question=question.text[:120],
@@ -1158,8 +1153,13 @@ class AnswerEngine:
         if not _EXPERIENCE_INTENT.search(text):
             return None
 
+        def fit_years(years: float, pattern: str) -> ResolvedAnswer | None:
+            if not question.options and re.search(r"\b(?:how many|number of)\s+months?\b", text):
+                years *= 12
+            return self._fit_to_options(_format_years(years), question, pattern, "experience-map")
+
         if _TOTAL_EXPERIENCE_INTENT.search(text) and config.total_years is not None:
-            return self._fit_to_options(_format_years(config.total_years), question, "experience:total", "experience-map")
+            return fit_years(config.total_years, "experience:total")
 
         matched: list[tuple[str, float]] = []
         for skill, years in (config.skills or {}).items():
@@ -1181,7 +1181,7 @@ class AnswerEngine:
                 value = min(value, config.total_years)
 
             log.info("answers.experience_map", skills=[phrase for phrase, _ in matched][:6], strategy=strategy, value=value)
-            return self._fit_to_options(_format_years(value), question, f"experience:{longest}", "experience-map")
+            return fit_years(value, f"experience:{longest}")
 
         # Named-ROLE tenure ("... as a Site Reliability Engineer?") with no
         # map hit: recruiters verify titles against the resume, so a default
@@ -1200,13 +1200,15 @@ class AnswerEngine:
         # For unlisted skills on matched jobs, default to 1 year so automated
         # ATS screening doesn't drop an otherwise-strong candidate.
         m = re.search(
-            r"(?:experience|knowledge|expertise)\s+(?:in|with|of)\s+([a-z][a-z0-9+#.\- ]{0,30})\s*\??$",
+            r"(?:experience|knowledge|expertise)\s+(?:in|with|of|on|using)\s+([a-z][a-z0-9+#.\- ]{0,30})\s*\??$",
             text,
         ) or re.search(
             r"(?:in|with|of)\s+([a-z][a-z0-9+#.\- ]{1,30})\s*\??$",
             text,
         )
-        if m and _EXP_WORD.search(text):
+        if m and (_EXP_WORD.search(text) or re.search(
+            r"\bhow\s+(?:many|much)\s+(?:years?|yrs?|months?)\b.*\bworked\b", text
+        )):
             maps: set[str] = set()
             for s in (config.skills or {}):
                 maps |= _tokenise(s)
@@ -1217,13 +1219,13 @@ class AnswerEngine:
                     question=question.text[:120],
                     skill=unlisted_skill,
                 )
-                return self._fit_to_options("1", question, f"experience:unlisted_default:{unlisted_skill}", "experience-map")
+                return fit_years(1, f"experience:unlisted_default:{unlisted_skill}")
 
         if config.default_years is not None and _EXP_WORD.search(text):
-            return self._fit_to_options(_format_years(config.default_years), question, "experience:default", "experience-map")
+            return fit_years(config.default_years, "experience:default")
 
         if config.total_years is not None and _EXP_WORD.search(text):
-            return self._fit_to_options(_format_years(config.total_years), question, "experience:total_fallback", "experience-map")
+            return fit_years(config.total_years, "experience:total_fallback")
 
         # Unknown required facts block the application; never invent experience.
         return None
@@ -1444,7 +1446,9 @@ class AnswerEngine:
 
         for option in options:
             low = _opt_low(option)
-            if _contains_word(low, wanted) or _contains_word(wanted, low):
+            if not re.fullmatch(r"\d+(?:\.\d+)?", wanted) and (
+                _contains_word(low, wanted) or _contains_word(wanted, low)
+            ):
                 return ResolvedAnswer(option, pattern, source)
 
         # The candidate's own city comes from config; match any spelling of it
@@ -1477,12 +1481,16 @@ class AnswerEngine:
                     return ResolvedAnswer(option, pattern, "option-match")
                 if len(bounds) == 1:
                     target_b = bounds[0]
-                    if target_b == value:
-                        exact_single = option
-                    elif ("<" in option or "less than" in opt_low or "under" in opt_low) and value <= target_b:
-                        return ResolvedAnswer(option, pattern, "option-match")
-                    elif (">" in option or "+" in option or "more than" in opt_low or "greater than" in opt_low) and value >= target_b:
+                    if "<" in option or "less than" in opt_low or "under" in opt_low:
+                        if value < target_b:
+                            return ResolvedAnswer(option, pattern, "option-match")
+                    elif "+" in option and value >= target_b:
                         exact_single = exact_single or option
+                    elif ">" in option or "more than" in opt_low or "greater than" in opt_low:
+                        if value > target_b:
+                            exact_single = exact_single or option
+                    elif target_b == value:
+                        exact_single = option
                 elif not bounds:
                     if ("no experience" in opt_low or "none" in opt_low or "not much" in opt_low or "fresher" in opt_low) and value <= 0.5:
                         return ResolvedAnswer(option, pattern, "option-match")

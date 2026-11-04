@@ -1569,40 +1569,12 @@ class LinkedInPlatform(BaseJobPlatform):
                         confirmation_evidence="LinkedIn post-submit confirmation or modal completion observed",
                     )
 
-                # Guarded re-submit (run 518: TCS submit unconfirmed with zero
-                # field errors — the click landed before React attached the
-                # handler). Recover fields first, click once more, re-verify.
-                # A fired submit always disturbs something, so a second click
-                # cannot double-apply a completed submit.
-                log.info("linkedin.apply.resubmitting", job_id=job.job_id)
-                await self._recover_step_errors(modal)
-                try:
-                    await submit_loc.scroll_into_view_if_needed(timeout=2000)
-                except Exception:
-                    pass
-                try:
-                    await submit_loc.click(force=True, timeout=3000)
-                except Exception:
-                    try:
-                        await submit_loc.evaluate("node => node.click()")
-                    except Exception:
-                        pass
-                await human_pause(2500, 4000)
-                if await self._verify_submit(modal, job):
-                    _record_timing()
-                    return ApplyOutcome(
-                        status=ApplicationStatus.APPLIED,
-                        detail="Submitted via LinkedIn Easy Apply",
-                        confirmation_type="dom_marker",
-                        confirmation_evidence="LinkedIn post-submit confirmation observed on re-submit",
-                    )
-
                 error_el = await first_visible(modal, [".artdeco-inline-feedback--error", "p.artdeco-inline-feedback", "[data-test-form-builder-error]"], timeout_ms=1000)
                 err_txt = (await safe_text(error_el)).strip() if error_el else "Submission unconfirmed; modal remained open"
                 log.warning("linkedin.apply.submit_unconfirmed", job_id=job.job_id, error=err_txt)
                 await self._dismiss_modal()
                 _record_timing()
-                return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Submission failed: {err_txt}")
+                return ApplyOutcome(status=ApplicationStatus.FAILED, reason=SkipReason.SUBMISSION_UNCONFIRMED, detail=f"Submission unconfirmed: {err_txt}")
 
             # Check if modal advanced (inspecting actual input counts and modal body text)
             form_text = (await safe_text(modal)).strip()
@@ -1616,41 +1588,6 @@ class LinkedInPlatform(BaseJobPlatform):
                 if input_count > 0 or form_text:
                     log.info("linkedin.apply.step_empty_reloaded", step=step)
             step_sig = f"inputs:{input_count}::{form_text[:250]}"
-
-            # Single-page questionnaire: >8 inputs means LinkedIn shows all
-            # questions on one page (not multi-step). Fill all inputs, then
-            # look for submit/review button directly instead of looping.
-            if input_count > 8:
-                log.info("linkedin.apply.single_page_detected", step=step, inputs=input_count)
-                for attempt in range(3):
-                    submit_loc = self.page.locator("button:has-text('Submit application'), button[aria-label*='Submit application' i], button:has-text('Review'), button[aria-label*='Review your application' i]").first
-                    if await submit_loc.count() > 0:
-                        try:
-                            await submit_loc.scroll_into_view_if_needed(timeout=2000)
-                        except Exception:
-                            pass
-                        if self.policy.dry_run:
-                            await self._dismiss_modal()
-                            return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=SkipReason.DRY_RUN, detail="Dry-run submit reached")
-                        self.require_mutation("submit_application")
-                        log.info("linkedin.apply.single_page_submitting", job_id=job.job_id)
-                        await submit_loc.click(force=True)
-                        await human_pause(2500, 4000)
-                        if await self._verify_submit(modal, job):
-                            _record_timing()
-                            return ApplyOutcome(status=ApplicationStatus.APPLIED, detail="Submitted via LinkedIn single-page questionnaire")
-                        await self._recover_step_errors(modal)
-                        try:
-                            await submit_loc.click(force=True, timeout=3000)
-                        except Exception:
-                            pass
-                        await human_pause(2500, 4000)
-                        if await self._verify_submit(modal, job):
-                            _record_timing()
-                            return ApplyOutcome(status=ApplicationStatus.APPLIED, detail="Submitted via LinkedIn single-page questionnaire")
-                        break
-                    await human_pause(1500, 2500)
-                log.info("linkedin.apply.single_page_no_submit", step=step, attempts=3)
 
             if step > 1 and step_sig == prev_step_signature:
                 stuck_count += 1
@@ -2704,50 +2641,29 @@ class LinkedInPlatform(BaseJobPlatform):
             log.debug("linkedin.apply.error_recovery_failed", error=str(exc))
 
     async def _verify_submit(self, modal, job) -> bool:
-        """Post-submit confirmation sweep (pure observation).
-
-        True when the submit observably landed: explicit confirmation, an
-        applied badge, or the modal closing itself. Never raises.
-        """
+        """Require an explicit submission message or the target job's status."""
         try:
             confirmation = await first_visible(
                 self.page,
                 [
-                    "div[data-test-modal]:has-text('Application sent')",
-                    "div[role='dialog']:has-text('Application sent')",
-                    "h3:has-text('Application sent')",
-                    "h2:has-text('Application sent')",
-                    "span:has-text('Application sent')",
-                    "div:has-text('Your application was sent')",
-                    "button:has-text('Done')",
-                    "button[aria-label='Done']",
+                    "[role='dialog'] :text-is('Application sent')",
+                    "[role='dialog'] :text-is('Your application was sent')",
+                    "[data-test-modal] :text-is('Application sent')",
+                    "[data-test-modal] :text-is('Your application was sent')",
                 ],
                 timeout_ms=5000,
             )
-
-            # Click Done/Dismiss if present
-            await click_if_present(
-                self.page,
-                ["button:has-text('Done')", "button[aria-label='Done']", "button[aria-label='Dismiss']"],
-            )
-            await human_pause(1000, 2000)
-
-            modal_still_open = await first_visible(self.page, MODAL_CONTAINER_SELECTORS, timeout_ms=1000)
-            submitted_badge = await first_visible(
-                self.page,
-                [
-                    "span:has-text('Application submitted')",
-                    "div:has-text('Application submitted')",
-                    "button:has-text('Applied')",
-                    "span:has-text('Applied')",
-                    "div:has-text('Your application was sent')",
-                    "div[data-test-modal]:has-text('Application sent')",
-                ],
-                timeout_ms=1500,
-            )
-            if confirmation or submitted_badge or not modal_still_open:
-                log.info("linkedin.apply.submitted_successfully", job_id=job.job_id)
+            if confirmation is not None:
+                await click_if_present(self.page, ["[role='dialog'] button:text-is('Done')"])
                 return True
+            job_id = job.job_id.removeprefix("linkedin-")
+            current_url = self.page.url
+            if re.search(rf"/jobs/view/{re.escape(job_id)}(?:[/?#]|$)", current_url):
+                return await first_visible(
+                    self.page,
+                    ["main button:text-is('Applied')", "main span:text-is('Application submitted')"],
+                    timeout_ms=1500,
+                ) is not None
         except Exception as exc:
             log.debug("linkedin.apply.verify_submit_failed", error=str(exc)[:120])
         return False

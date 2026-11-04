@@ -80,6 +80,7 @@ class SkipReason(str, Enum):
     BLOCKED_LOCATION = "blocked_location"
     STALE_JOB = "stale_job"
     STUCK_FLOW = "stuck_flow"
+    SUBMISSION_UNCONFIRMED = "submission_unconfirmed"
     CLOUDFLARE_CHALLENGE = "cloudflare_challenge"
     ASSESSMENT_REQUIRED = "assessment_required"
 

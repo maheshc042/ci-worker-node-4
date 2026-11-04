@@ -608,7 +608,10 @@ class HiringCafePlatform(BaseJobPlatform):
         if not apply_url:
             log.info("hiringcafe.detail_no_apply_link", url=detail_url[:80])
             return None
-        title = (data or {}).get("title") or term
+        title = (data or {}).get("title")
+        if not title or not title.strip():
+            log.info("hiringcafe.detail_missing_title", url=detail_url[:80])
+            return None
         company = (data or {}).get("company") or "Company"
         job_id = f"hc-{hashlib.sha1(apply_url.encode()).hexdigest()[:20]}"
         body = (data or {}).get("body") or ""
@@ -714,7 +717,14 @@ class HiringCafePlatform(BaseJobPlatform):
         Returns EXTERNAL so the orchestrator routes the job to the Sidekick
         outbox via the universal external-job hook.
         """
-        _ = (profile_name, pre_submit_check)
+        if pre_submit_check is not None:
+            decision = pre_submit_check(job)
+            if not decision.passed:
+                return ApplyOutcome(
+                    status=ApplicationStatus.SKIPPED,
+                    reason=decision.reason or SkipReason.FILTER_DESCRIPTION,
+                    detail=decision.detail,
+                )
         return ApplyOutcome(
             status=ApplicationStatus.EXTERNAL,
             reason=SkipReason.EXTERNAL_APPLY,

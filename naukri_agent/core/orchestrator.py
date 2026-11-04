@@ -308,6 +308,13 @@ class Orchestrator:
                 f"{self.platform_consecutive_failures} consecutive failures on {platform_name} — stopping platform"
             )
 
+    def _remember_job_outcome(self, company_key: str, title_key: str, outcome: ApplyOutcome) -> None:
+        if company_key and (
+            outcome.status in {ApplicationStatus.APPLIED, ApplicationStatus.ALREADY_APPLIED, ApplicationStatus.EXTERNAL}
+            or outcome.reason in {SkipReason.EXTERNAL_APPLY, SkipReason.SUBMISSION_UNCONFIRMED}
+        ):
+            self._seen_company_title.add((company_key, title_key))
+
     def _company_rejection(self, company_key: str, title_key: str) -> SkipReason | None:
         """Company-level pre-apply gates: per-company daily cap and same-run
         repost collapse.
@@ -1516,9 +1523,6 @@ class Orchestrator:
                     log.info("job.repost_collapsed", job_id=job.job_id, company=job.company[:40])
                     failed_outcomes.append((job, outcome))
                     continue
-                if company_key:
-                    self._seen_company_title.add((company_key, title_key))
-
                 try:
                     outcome = await self._process_job(
                         job, profile, filters, platform, page, artifacts,
@@ -1534,6 +1538,8 @@ class Orchestrator:
                         status=ApplicationStatus.FAILED,
                         detail=f"Unhandled job error: {exc}",
                     )
+
+                self._remember_job_outcome(company_key, title_key, outcome)
 
                 # Cloudflare wall: the page cannot produce a modal, so every
                 # remaining job would fail identically. Pause the platform and
@@ -1704,8 +1710,6 @@ class Orchestrator:
             title_key = _normalize_title(job.title)
             if self._company_rejection(company_key, title_key) is not None:
                 continue
-            if company_key:
-                self._seen_company_title.add((company_key, title_key))
             try:
                 outcome = await self._process_job(
                     job, profile, filters, platform, page, artifacts,
@@ -1716,6 +1720,7 @@ class Orchestrator:
             except Exception as exc:
                 log.exception("job.retry_unhandled_error", job_id=job.job_id, error=str(exc))
                 continue
+            self._remember_job_outcome(company_key, title_key, outcome)
             if outcome.reason == SkipReason.CLOUDFLARE_CHALLENGE:
                 await self.repo.pause_platform(
                     self.account_key,

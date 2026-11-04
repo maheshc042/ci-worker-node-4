@@ -1021,27 +1021,9 @@ class InstahyrePlatform(BaseJobPlatform):
                 except Exception:
                     pass
 
-        # 1. Check if Modal is ALREADY open (carousel swiper mode)
-        modal = await first_visible(
-            self.page, ["div.modal-content", "div#employer-profile-modal", "div[class*='modal']"], timeout_ms=2000
-        )
-
-        if modal:
-            # Stale-modal guard: a leftover carousel from the PREVIOUS job must
-            # not receive this job's Apply/decline clicks.
-            modal_text = (await safe_text(modal)).lower()
-            matches_job = (
-                bool(job.title) and job.title.lower()[:40] in modal_text
-            ) or (bool(job.company) and job.company.lower() in modal_text)
-            if not matches_job:
-                log.warning(
-                    "instahyre.apply.stale_modal_closed",
-                    job_id=job.job_id,
-                    expected=f"{job.title[:40]} / {job.company}".lower(),
-                )
-                await self._ensure_modal_closed()
-                modal = None
-
+        # Reopen from the target card so the apply and confirmation share an identity.
+        await self._ensure_modal_closed()
+        modal = None
         if not modal:
             cur_view = getattr(self, "_current_view", "search")
             if cur_view != "search":
@@ -1076,68 +1058,17 @@ class InstahyrePlatform(BaseJobPlatform):
                     if not switched:
                         log.warning("instahyre.apply.page_switch_unconfirmed", from_page=current_page_num, to_page=target_page)
 
-            # Open modal from card — find by company or distinct title
-            safe_title = job.title.replace("'", "\\'")
-            safe_company = job.company.replace("'", "\\'")
-
             async def _find_card_on_current_view():
-                job_comp_lower = (job.company or "").lower().strip()
-                job_title_lower = (job.title or "").lower().strip()
-
-                async def _is_applied_card(row_loc) -> bool:
-                    try:
-                        applied_marker = row_loc.locator("button:has-text('Applied'), span:has-text('Applied'), div:has-text('Applied')").first
-                        return await applied_marker.count() > 0 and await applied_marker.is_visible()
-                    except Exception:
-                        return False
-
-                # 1. First priority: Card containing BOTH company name and title
-                if safe_company and safe_title:
-                    try:
-                        loc = self.page.locator(f"div.employer-row:has-text('{safe_company}'):has-text('{safe_title}')").first
-                        if await loc.count() > 0 and await loc.is_visible():
-                            return loc
-                    except Exception:
-                        pass
-
-                all_rows = await self.page.locator("div.employer-row").all()
-
-                # Pass 1: both company and title match in row text
-                clean_comp = re.sub(r'\b(pvt|ltd|limited|private|technologies|inc|corp|labs)\b|[.\s]ai\b|[.\s]io\b', '', job_comp_lower).strip()
-                if job_comp_lower and job_title_lower:
-                    for row in all_rows:
-                        row_text = (await safe_text(row)).lower()
-                        comp_match = (job_comp_lower in row_text) or (len(clean_comp) >= 3 and clean_comp in row_text)
-                        title_match = (job_title_lower in row_text or job_title_lower[:25] in row_text)
-                        if comp_match and title_match:
-                            return row
-
-                # Pass 2: exact company match in row text WHERE the card is NOT already applied
-                unapplied_comp_row = None
-                if job_comp_lower:
-                    for row in all_rows:
-                        row_text = (await safe_text(row)).lower()
-                        comp_match = (job_comp_lower in row_text) or (len(clean_comp) >= 3 and clean_comp in row_text)
-                        if comp_match:
-                            if not await _is_applied_card(row):
-                                return row
-                            if unapplied_comp_row is None:
-                                unapplied_comp_row = row
-
-                # Pass 3: distinctive title match (only if title is not overly generic)
-                generic_titles = {
-                    "software engineer", "software developer", "developer",
-                    "backend developer", "frontend developer", "full stack developer",
-                    "backend engineer", "frontend engineer", "full stack engineer",
-                    "sde", "sde 1", "sde 2", "sde-1", "sde-2",
-                }
-                if job_title_lower and job_title_lower not in generic_titles and len(job_title_lower) > 5:
-                    for row in all_rows:
-                        row_text = (await safe_text(row)).lower()
-                        if job_title_lower[:30] in row_text:
-                            return row
-
-                return unapplied_comp_row
+                company = " ".join(job.company.lower().split())
+                title = " ".join(job.title.lower().split())
+                if not company or not title:
+                    return None
+                matches = []
+                for row in await self.page.locator("div.employer-row").all():
+                    row_text = " ".join((await safe_text(row)).lower().split())
+                    if company in row_text and title in row_text:
+                        matches.append(row)
+                return matches[0] if len(matches) == 1 else None
 
             card = await _find_card_on_current_view()
 
@@ -1415,7 +1346,7 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception as exc:
                 log.debug("instahyre.html_dump_failed", error=str(exc))
 
-            if await first_visible(self.page, ["text=Applied", "button.btn-disabled:has-text('Applied')"]):
+            if await first_visible(card, ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"]):
                 _record_timing()
                 return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
             _record_timing()
@@ -1468,78 +1399,27 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception:
                 pass
 
-        confirmation = await first_visible(
-            self.page,
-            [
-                "text=Application sent",
-                "text=Successfully applied",
-                "text=You have applied",
-                "button:has-text('Applied')",
-                "button.btn-disabled:has-text('Applied')",
-                "button[class*='applied']",
-                "span[class*='applied']",
-                "div[class*='applied']",
-                "span.applied-badge",
-                "div.apply button:has-text('Applied')",
-                "div.apply[class*='disabled']",
-                "div.apply[class*='applied']",
-                "div#refer",
-                "div#go-premium-modal",
-                "div[class*='bulk-apply']",
-                "button[ng-click*='applyBulk']",
-                "div.alert:has-text('applied')",
-                "div.alert-success",
-                ".toaster",
-                ".toast",
-            ],
-            timeout_ms=5000,
-        )
+        confirmation = None
+        if card is not None:
+            confirmation = await first_visible(
+                card,
+                ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"],
+                timeout_ms=5000,
+            )
 
-        modal_closed_after_submit = False
-        if not confirmation and modal:
-            try:
-                # If the modal closed / disappeared from view after clicking apply, it was submitted successfully
-                is_modal_vis = await modal.is_visible()
-                if not is_modal_vis:
-                    modal_closed_after_submit = True
-                else:
-                    # If modal is open but displays a different job/company, carousel advanced upon submission
-                    modal_title_el = modal.locator(".employer-job-name, .company-name, h3, h4").first
-                    if await modal_title_el.count() > 0:
-                        current_modal_text = (await safe_text(modal_title_el)).lower()
-                        if job.title.lower()[:20] not in current_modal_text and (not job.company or job.company.lower() not in current_modal_text):
-                            modal_closed_after_submit = True
-            except Exception:
-                modal_closed_after_submit = True
-
-        if not confirmation and not modal_closed_after_submit and card:
-            try:
-                card_applied = card.locator("button:has-text('Applied'), span:has-text('Applied'), div:has-text('Applied'), [class*='applied']").first
-                if await card_applied.count() > 0 and await card_applied.is_visible():
-                    confirmation = card_applied
-            except Exception:
-                pass
-
-        # Post-apply cleanup: Instahyre advances the carousel / pops the bulk
-        # "apply to similar jobs" modal after an application — either can leave
-        # a backdrop that eats the next card's clicks.
         await self._ensure_modal_closed()
         await self._dismiss_modals()
 
-        if confirmation or modal_closed_after_submit:
-            evidence = (
-                "Instahyre application success marker observed"
-                if confirmation
-                else "Instahyre modal closed or advanced upon application submission"
-            )
+        if confirmation is not None:
             _record_timing()
             return ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 confirmation_type="dom_marker",
-                confirmation_evidence=evidence,
+                confirmation_evidence="Instahyre target card shows Applied",
             )
         _record_timing()
         return ApplyOutcome(
             ApplicationStatus.FAILED,
+            reason=SkipReason.SUBMISSION_UNCONFIRMED,
             detail="Submission clicked but no Instahyre success confirmation was observed",
         )

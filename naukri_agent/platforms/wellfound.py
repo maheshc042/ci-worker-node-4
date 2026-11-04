@@ -1044,8 +1044,7 @@ class WellfoundPlatform(BaseJobPlatform):
                 self.page, [
                     "text=Application sent",
                     "text=You applied",
-                    "button:has-text('Applied')",
-                    "div[class*='success']",
+                    "button:text-is('Applied')",
                 ],
                 timeout_ms=5000,
             ):
@@ -1067,5 +1066,9 @@ class WellfoundPlatform(BaseJobPlatform):
                 self._metrics.job_timings.append(jt)
             except Exception:
                 pass
-        return ApplyOutcome(ApplicationStatus.FAILED, detail="No success confirmation received")
+        return ApplyOutcome(
+            ApplicationStatus.FAILED,
+            reason=SkipReason.SUBMISSION_UNCONFIRMED,
+            detail="No success confirmation received",
+        )
 

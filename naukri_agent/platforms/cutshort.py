@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page
 
@@ -2759,7 +2760,6 @@ class CutshortPlatform(BaseJobPlatform):
         # -able in the DB from the run-644 false-positive signature. Wired
         # below so the outcome itself carries the evidence.
         cb_answered = pre_send_answered
-        confirmation = None
         if submission_attempted:
             # If an in-modal screening questionnaire/chatbot pops up immediately, answer it
             # (run-655: window widened 1500→3000ms — a slightly slow modal
@@ -2793,38 +2793,6 @@ class CutshortPlatform(BaseJobPlatform):
                     error=cb_error,
                     confirms_submit=chatbot_submitted,
                 )
-
-            confirmation = await first_visible(
-                self.page,
-                [
-                    "text=Application sent",
-                    "text=successfully applied",
-                    "text=Employer will review",
-                    "text=Applied successfully",
-                    "text=Your response has been recorded",
-                    "text=Thanks for your response",
-                    "text=Message sent",
-                    "div:has-text('Application sent')",
-                    "div:has-text('Applied successfully')",
-                    "button:has-text('Applied')",
-                    "button:has-text('View conversation')",
-                    "a:has-text('View conversation')",
-                ],
-                timeout_ms=4000,
-            )
-
-        # Check if modal closed or disappeared
-        modal_closed = False
-        if modal:
-            try:
-                modal_closed = not (await modal.is_visible(timeout=2000))
-            except Exception:
-                modal_closed = True
-        elif textarea:
-            try:
-                modal_closed = not (await textarea.is_visible(timeout=2000))
-            except Exception:
-                modal_closed = True
 
         # Close modal if still open (keep the page clean for the next job)
         close_btn = await first_visible(
@@ -2861,107 +2829,37 @@ class CutshortPlatform(BaseJobPlatform):
         except Exception:
             pass
 
-        # Check if card button updated to Applied or View conversation
-        card_applied = await first_visible(
-            self.page,
-            ["button:has-text('Applied')", "a:has-text('View conversation')", "button:has-text('View conversation')"],
-            timeout_ms=1500,
-        )
-
-        # Landing audit (ground truth 2026-11-01, probes for cutshort-63gmA9Gf):
-        # TWO sibling evidences failed live. (1) run-644 chatbot success=True,
-        # answered=3 — questionnaire answered but POST never landed; fixed by
-        # the chatbot's own form-gone/confirm-marker verification. (2) The
-        # outer dom_marker gate reported confirmation=True, modal_closed=True,
-        # card_applied=True on a retry whose job page STILL showed
-        # "Apply to this job" minutes later — modal_closed is pure UI state
-        # (it even defaults to True when the modal handle detaches), and the
-        # weak :has-text selectors can match unrelated page furniture. Neither
-        # proves the application was delivered. Fail closed: unless the
-        # chatbot just verified its own landing, reload the job page and
-        # require the same applied markers the ALREADY_APPLIED detection
-        # trusts (button 'Applied' / 'View conversation' / applied texts).
-        # Landing verification:
-        # 1. Chatbot completed within the modal (multi-step screening flow).
-        # 2. Authoritative card button updated to 'Applied' or 'View conversation' anchor.
-        # 3. Confirmation banner/toast was observed post-Send.
-        landing_verified = bool(chatbot_submitted) or bool(card_applied) or bool(confirmation)
-        if submission_attempted and not landing_verified:
-            _reload_ok = True
+        landing_verified = False
+        if submission_attempted and job.url:
             try:
-                # Keep on current candidate feed if already there, else goto job.url
-                target_url = self.page.url if "/profile/" in (self.page.url or "") else job.url
-                await self.page.goto(target_url, wait_until="domcontentloaded")
-                await human_pause(2500, 3500)
-                applied_after_reload = await first_visible(
-                    self.page,
-                    [
-                        "button:has-text('Applied')",
-                        "a:has-text('View conversation')",
-                        "button:has-text('View conversation')",
-                        "text=Already applied",
+                target = urlsplit(job.url)
+                await self.page.goto(job.url, wait_until="domcontentloaded")
+                current = urlsplit(self.page.url)
+                if (
+                    target.hostname == current.hostname
+                    and target.path.startswith("/job/")
+                    and target.path.rstrip("/") == current.path.rstrip("/")
+                ):
+                    applied_markers = [
+                        "button:text-is('Applied')",
+                        "a:text-is('View conversation')",
+                        "button:text-is('View conversation')",
                         "text=You have already applied",
-                        "div:has-text('Already applied')",
-                    ],
-                    timeout_ms=4000,
-                )
-                if applied_after_reload is None:
-                    # Eventual-consistency grace: one more sweep after a beat.
-                    await human_pause(2000, 3000)
-                    applied_after_reload = await first_visible(
-                        self.page,
-                        [
-                            "button:has-text('Applied')",
-                            "a:has-text('View conversation')",
-                            "button:has-text('View conversation')",
-                            "text=Already applied",
-                            "text=You have already applied",
-                            "div:has-text('Already applied')",
-                        ],
-                        timeout_ms=3000,
-                    )
-                landing_verified = applied_after_reload is not None
+                    ]
+                    landing_verified = await first_visible(
+                        self.page, applied_markers, timeout_ms=7000,
+                    ) is not None
             except Exception as exc:
-                # Cannot verify → cannot claim. Fail closed.
-                log.warning(
-                    "cutshort.apply.landing_reload_failed",
-                    error=str(exc)[:120],
-                    job_id=job.job_id,
-                )
-                landing_verified = False
-            log.info(
-                "cutshort.apply.landing_verification",
-                job_id=job.job_id,
-                verified=landing_verified,
-                chatbot_submitted=chatbot_submitted,
-                card_applied=bool(card_applied),
-            )
+                log.warning("cutshort.apply.landing_reload_failed", job_id=job.job_id, error=str(exc)[:120])
 
-        outcome: ApplyOutcome
-        if submission_attempted and landing_verified:
-            if chatbot_submitted:
-                evidence = (
-                    f"Cutshort application confirmed by chatbot landing verification "
-                    f"(questions_answered={cb_answered})"
-                )
-            else:
-                _pre_note = (
-                    f", pre_send_answered={pre_send_answered}" if pre_send_answered else ""
-                )
-                evidence = (
-                    "Cutshort application confirmed: job page shows applied state after reload "
-                    f"(weak markers also present: card_applied={bool(card_applied)}, modal_closed={modal_closed}"
-                    f"{_pre_note})"
-                )
+        if landing_verified:
             outcome = ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 detail="Application confirmed",
                 questions_answered=cb_answered,
                 confirmation_type="dom_marker",
-                confirmation_evidence=evidence,
+                confirmation_evidence="Cutshort target job page shows applied state after navigation",
             )
-        elif not submission_attempted and card_applied:
-            outcome = ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
         else:
             # DUMP DOM for debugging
             try:
@@ -2984,6 +2882,7 @@ class CutshortPlatform(BaseJobPlatform):
                     _page_url = "<unknown>"
                 outcome = ApplyOutcome(
                     ApplicationStatus.FAILED,
+                    reason=SkipReason.SUBMISSION_UNCONFIRMED if submission_attempted else None,
                     detail=f"cutshort apply stalled at stage={stage} page_url={_page_url} (modal={bool(modal)}, textarea={bool(textarea)}, send={bool(send_btn)}) for {job.title} at {job.company}",
                 )
 
