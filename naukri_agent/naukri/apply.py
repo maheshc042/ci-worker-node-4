@@ -315,8 +315,9 @@ class ApplyEngine:
             pass
         return False
 
-    async def enrich(self, job: Job) -> None:
-        description = await safe_text(await first_visible(self.page, S.JD_DESCRIPTION, timeout_ms=3_000))
+    async def enrich(self, job: Job) -> bool:
+        description_node = await first_visible(self.page, [", ".join(S.JD_DESCRIPTION)], timeout_ms=12_000)
+        description = (await description_node.inner_text(timeout=1500)).strip() if description_node is not None else ""
         if description:
             job.description = description[:12_000]
             # JD statements outrank card numbers: a card saying "2-4 Yrs"
@@ -369,6 +370,7 @@ class ApplyEngine:
                 if valid_emails:
                     job.recruiter_emails = list(dict.fromkeys(valid_emails))
                     log.info("job.recruiter_emails_found", job_id=job.job_id, count=len(job.recruiter_emails))
+        return bool(description.strip())
 
     async def apply(self, job: Job, profile: str, pre_submit_check: Callable[[Job], FilterDecision] | None = None) -> ApplyOutcome:
         t_job_start = time.perf_counter()
@@ -386,8 +388,11 @@ class ApplyEngine:
             jt.goto_s += time.perf_counter() - t_goto_0
 
             t_ready_0 = time.perf_counter()
-            await self.enrich(job)
             state = await self._state()
+            if state in {"easy_apply", "external"}:
+                description_loaded = await self.enrich(job)
+                if pre_submit_check is not None and not description_loaded:
+                    raise PWTimeoutError("Naukri job description did not load before the pre-submit check")
             jt.readiness_s += time.perf_counter() - t_ready_0
 
             if state == "unknown":
@@ -448,13 +453,8 @@ class ApplyEngine:
             if self.metrics:
                 self.metrics.job_timings.append(jt)
             log.info("naukri.apply.stale_skipped", job_id=job.job_id, title=job.title[:60])
-            # ALREADY_APPLIED status (not plain SKIPPED) so the job enters
-            # the 90-day dedupe set: an expired posting renders no apply
-            # machinery ever again, and a plain skip would re-visit it every
-            # run (runs 612-619 strike-loop). reason=STALE_JOB keeps the
-            # audit truthful.
             return ApplyOutcome(
-                status=ApplicationStatus.ALREADY_APPLIED,
+                status=ApplicationStatus.SKIPPED,
                 reason=SkipReason.STALE_JOB,
                 detail="Expired posting detected at classification (no apply machinery on page)",
                 attempts=attempt_used,
@@ -785,6 +785,7 @@ class ApplyEngine:
                 shot = None
             return ApplyOutcome(
                 status=ApplicationStatus.FAILED,
+                reason=SkipReason.SUBMISSION_UNCONFIRMED,
                 detail="Screening answers sent but no submission confirmation observed",
                 screenshot_path=shot,
                 questions_answered=result.answered,
@@ -948,7 +949,14 @@ class ApplyEngine:
         # A completed screening flow MUST be verified against Naukri's server-rendered state.
         if result.answered > 0:
             log.info("apply.chatbot_verifying_reload", job_id=job.job_id, answered=result.answered, completed=result.completed)
+            if result.completed:
+                # Let the final screening request settle before replacing the document.
+                await human_pause(2500, 3500)
             verdict = await self._verify_post_submit(job)
+            if verdict == "unknown" and result.completed:
+                # Observe the job again without submitting a second application.
+                await human_pause(2500, 3500)
+                verdict = await self._verify_post_submit(job)
             if verdict == "applied":
                 return ApplyOutcome(
                     status=ApplicationStatus.APPLIED,

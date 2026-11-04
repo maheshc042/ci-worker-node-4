@@ -502,8 +502,10 @@ class Repository:
         retry channel. But re-offering it on the SAME day wastes applies when
         the failure is durable (run 602 -> run 605: the same dead-click jobs
         re-attempted three times within hours). ``failed_cooldown_hours``
-        keeps failed rows inside the known set until they are that old;
-        0 keeps the old behaviour (failed rows immediately re-eligible).
+        keeps ordinary failures inside the known set until they are that old.
+        Unconfirmed submissions remain known for the entire dedupe window;
+        they may already have landed.
+        A zero cooldown makes only ordinary failures immediately re-eligible.
         """
         try:
             rows = await self._fetch_with_retry(
@@ -515,6 +517,7 @@ class Repository:
                    AND a.created_at > now() - ($1 || ' days')::interval
                    AND (
                         a.status <> 'failed'
+                        OR a.reason = 'submission_unconfirmed'
                         OR a.created_at > now() - ($5 || ' hours')::interval
                    )
                    AND NOT (
@@ -1195,10 +1198,12 @@ class Repository:
         best_same_profile = False
         TIE_BONUS_SAME_PROFILE = 0.02
         q_lower = q_norm.lower()
+        numbers = re.findall(r"\d+(?:\.\d+)?", q_lower)
         for row in resolved_rows:
-            ratio = SequenceMatcher(
-                None, q_lower, (row["question"] or "").lower(), autojunk=False
-            ).ratio()
+            other_question = (row["question"] or "").lower()
+            if re.findall(r"\d+(?:\.\d+)?", other_question) != numbers:
+                continue
+            ratio = SequenceMatcher(None, q_lower, other_question, autojunk=False).ratio()
             same_profile = row["profile"] == profile
             score = ratio + (TIE_BONUS_SAME_PROFILE if same_profile else 0.0)
             if score > best_score:
@@ -1264,7 +1269,7 @@ class Repository:
                    options = EXCLUDED.options,
                    screenshot_path = COALESCE(EXCLUDED.screenshot_path,
                                               question_review.screenshot_path)
-            RETURNING id
+            RETURNING id, times_seen
             """,
             job_id,
             profile,
@@ -1276,7 +1281,7 @@ class Repository:
         review_id = row["id"] if row else None
 
         # Send Interactive Telegram Alert with [#review_id]
-        if review_id:
+        if review_id and row.get("times_seen", 1) == 1:
             try:
                 from ..config import AgentConfig, get_settings
                 from ..notify.notifier import build_notifier

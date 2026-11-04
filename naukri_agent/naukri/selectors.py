@@ -448,7 +448,7 @@ RESUME_SUCCESS = [
     "div:has-text('Resume has been successfully uploaded')",
     "span:has-text('successfully uploaded')",
 ]
-RESUME_CURRENT_NAME = ["div.filename", "span.fileName", "div[class*='filename']"]
+RESUME_CURRENT_NAME = [".resume-name-inline .truncate.exten", "div.filename", "span.fileName", "div[class*='filename']"]
 
 # ------------------------------------------------------- profile refresh
 # Naukri ranks profiles in recruiter search by "profile last updated", so a

@@ -70,11 +70,11 @@ class TestApplyEngineOutlierGuard(unittest.IsolatedAsyncioTestCase):
             max_experience=3.0,
         )
 
-        # Mock JD description containing "Angular 18+ and TypeScript"
-        with (
-            patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=MagicMock())),
-            patch("naukri_agent.naukri.apply.safe_text", new=AsyncMock(return_value="Angular 18+ and TypeScript experience required")),
-        ):
+        # Mock the rendered JD text containing a framework version.
+        description = MagicMock(
+            inner_text=AsyncMock(return_value="Angular 18+ and TypeScript experience required")
+        )
+        with patch("naukri_agent.naukri.apply.first_visible", new=AsyncMock(return_value=description)):
             await engine.enrich(job)
 
         # Card metadata must be preserved

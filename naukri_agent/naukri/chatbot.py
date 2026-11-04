@@ -208,7 +208,10 @@ class ChatbotHandler:
     # ------------------------------------------------------------------ write
     async def _answer_text(self, value: str) -> bool:
         await self._dismiss_blocking_overlays()
-        field = await first_visible(self.page, S.CHATBOT_TEXT_INPUT, timeout_ms=4_000)
+        drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=1500)
+        if drawer is None:
+            return False
+        field = await first_visible(drawer, S.CHATBOT_TEXT_INPUT, timeout_ms=4000)
         if field is None:
             return False
         try:
@@ -661,9 +664,12 @@ class ChatbotHandler:
 
     async def _submit(self) -> bool:
         await self._dismiss_blocking_overlays()
+        drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=1500)
+        if drawer is None:
+            return False
         for selector in S.CHATBOT_SAVE + S.CHATBOT_SEND:
             try:
-                locator = self.page.locator(selector).first
+                locator = drawer.locator(selector).first
                 if await locator.count() and await locator.is_visible():
                     try:
                         await locator.click(force=True, timeout=2_500)
@@ -676,9 +682,6 @@ class ChatbotHandler:
         # often label the control Done/OK/Confirm/Apply instead of Save/Send.
         # Drawer-scoped ONLY: page-level "Apply" could hit the job button.
         try:
-            drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=1_500)
-            if drawer is None:
-                return False
             for el in await drawer.locator("button").all():
                 try:
                     if not await el.is_visible():

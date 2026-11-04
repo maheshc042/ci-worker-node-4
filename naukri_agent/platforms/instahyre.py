@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from playwright.async_api import Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..browser.artifacts import ArtifactStore
 from ..browser.resilience import (
@@ -173,14 +174,7 @@ class InstahyrePlatform(BaseJobPlatform):
         return remaining
 
     async def _select_skill(self, _tags_text, skill: str) -> None:
-        """Select one skill tag: exact-match dropdown option, else Enter.
-
-        Resolves the input fresh on EVERY call: selectize swaps the input
-        node after each tag lands, so a reused handle goes permanently
-        non-actionable (runs 396/400/402: SDET lands, then fourteen straight
-        10s click timeouts on the dead node). Raises on persistent failure;
-        the caller time-boxes and logs.
-        """
+        """Select the visible exact suggestion from the current skill input."""
         try:
             await self.page.keyboard.press("Escape")
             await human_pause(100, 200)
@@ -206,114 +200,24 @@ class InstahyrePlatform(BaseJobPlatform):
             await skills_input.focus()
         await human_pause(150, 300)
         await skills_input.fill("")
-        try:
-            await human_type(skills_input, skill)
-        except Exception:
-            # human_type starts with an unbounded click; on a covered input
-            # that is another 10s burn. Focus + raw typing needs no coverage.
-            await skills_input.focus()
-            await self.page.keyboard.type(skill, delay=20)
-        await human_pause(300, 500)
+        await skills_input.press_sequentially(skill, delay=45)
 
-        picked = False
+        # Selectize keeps hidden suggestions attached, including results from
+        # the previous skill. Wait for the exact current suggestion to appear.
+        options = self.page.locator(
+            ".selectize-dropdown:visible .selectize-option, .selectize-dropdown:visible .option"
+        )
+        exact_option = options.filter(
+            has_text=re.compile(rf"^\s*{re.escape(skill)}\s*$", re.IGNORECASE)
+        ).first
         try:
-            # The dropdown populates on a debounce — wait for options instead
-            # of snapshotting an empty list (runs 396-404: Enter commits
-            # nothing when no option is highlighted and creation is off).
-            # NOTE Sep 2026: Instahyre renamed option nodes from
-            # `.option` to `.selectize-option` (old dumps: 0 selectize-option
-            # nodes; new dumps: 15). Match both so either markup works.
-            _opt_sel = ".selectize-dropdown .selectize-option, .selectize-dropdown .option"
-            try:
-                await self.page.locator(_opt_sel).first.wait_for(state="attached", timeout=2000)
-            except Exception:
-                pass
-            options = self.page.locator(_opt_sel)
-            count = await options.count()
-            try:
-                _typed = await skills_input.input_value()
-                _dd_visible = await self.page.locator(".selectize-dropdown").first.is_visible()
-                _samples = []
-                for _si in range(min(count, 3)):
-                    try:
-                        _samples.append(
-                            ((await options.nth(_si).inner_text()) or "").strip()[:30]
-                        )
-                    except Exception:
-                        pass
-            except Exception:
-                _typed, _dd_visible, _samples = "?", False, []
-            log.debug(
-                "instahyre.filters.dropdown_options",
-                skill=skill,
-                count=count,
-                typed=_typed,
-                dropdown_visible=_dd_visible,
-                samples=_samples,
-            )
-            for idx in range(min(count, 8)):
-                try:
-                    text = ((await options.nth(idx).inner_text()) or "").strip().lower()
-                except Exception:
-                    continue
-                if text == skill.lower():
-                    await options.nth(idx).click()
-                    picked = True
-                    break
-        except Exception:
-            pass
-        if not picked:
-            # No exact option: keyboard-navigate (ArrowDown highlights the
-            # top suggestion) before Enter — bare Enter on an unhighlighted
-            # list commits nothing when creation is disabled.
-            try:
-                await skills_input.press("ArrowDown")
-                await human_pause(200, 400)
-            except Exception:
-                pass
-            await skills_input.press("Enter")
+            await exact_option.click(timeout=3000)
+        except PlaywrightTimeoutError:
+            log.warning("instahyre.filters.skill_missing", skill=skill)
+            return
         await human_pause(250, 450)
-
         if skill.lower() not in await _tags_text():
-            # Retry against a freshly resolved input (same swap hazard).
-            try:
-                retry_input = await first_visible(
-                    self.page,
-                    ["#skills-selectized", "input[placeholder*='skills' i]"],
-                    timeout_ms=2000,
-                )
-                if retry_input is not None:
-                    await retry_input.click(timeout=2000)
-                    await human_pause(150, 300)
-                    await retry_input.press("Enter")
-                    await human_pause(250, 450)
-            except Exception as exc:
-                log.debug("instahyre.filters.skill_retry_failed", skill=skill, error=str(exc))
-            if skill.lower() not in await _tags_text():
-                # Forensics for the next round: box size, enabled state and
-                # whatever element sits on top of the input at its center.
-                try:
-                    probe = await first_visible(
-                        self.page, ["div.selectize-input input"], timeout_ms=1500
-                    )
-                    if probe is not None:
-                        box = await probe.bounding_box()
-                        enabled = await probe.is_enabled()
-                        coverer = await probe.evaluate(
-                            "el => { const r = el.getBoundingClientRect();"
-                            " const t = document.elementFromPoint(r.x + r.width/2, r.y + r.height/2);"
-                            " return t ? (t.tagName + '.' + (t.className.baseVal ?? t.className)) : 'none'; }"
-                        )
-                        log.warning(
-                            "instahyre.filters.input_forensics",
-                            skill=skill,
-                            box=box,
-                            enabled=enabled,
-                            coverer=str(coverer)[:120],
-                        )
-                except Exception as exc:
-                    log.debug("instahyre.filters.forensics_failed", error=str(exc)[:100])
-                log.warning("instahyre.filters.skill_missing", skill=skill)
+            log.warning("instahyre.filters.skill_not_applied", skill=skill)
 
     async def _apply_ui_filters(self, profile: JobProfile) -> None:
         """Interactively opens and sets the filter UI on Instahyre opportunities page."""
@@ -1305,27 +1209,10 @@ class InstahyrePlatform(BaseJobPlatform):
             )
 
         apply_btn = await first_visible(
-            self.page,
-            [
-                "#candidate-suggested-employers div.apply.ng-scope > button",
-                "#candidate-suggested-employers div.apply",
-                "div.apply",
-                "div.apply button",
-                "button.btn-primary.new-btn",
-                "div.bar-actions div.apply button",
-                "button#btn-apply",
-                "button[ng-click*='submitChoice' i]",
-                "button[ng-click*='apply' i]",
-                "button[ng-click*='interested' i]",
-                ".apply-button",
-                "button:has-text('Apply')",
-                "button.btn-success:has-text('Apply')",
-                "button.btn-primary:has-text('Apply')",
-                "a:has-text('Apply')",
-            ],
+            modal,
+            ["div.apply[ng-click*='submitChoice']", "button:text-is('Apply')"],
             timeout_ms=4000,
         )
-
 
         if not apply_btn:
             # Debug: Log all visible buttons on page
@@ -1363,41 +1250,21 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception:
                 pass
 
+        success_panel = (
+            ".candidate-apply-all-modal .modal-info-panel:has(img[src$='application-sent.svg'])"
+        )
+        success_panel_before = await first_visible(self.page, [success_panel], timeout_ms=400)
         try:
-            # Click div.apply / button which carries ng-click="submitChoice(opp, true)"
-            apply_target = self.page.locator("div.bar-actions div.apply, div.apply, button.btn-primary.new-btn:has-text('Apply'), button:has-text('Apply')").first
-            if await apply_target.count() > 0:
-                await apply_target.scroll_into_view_if_needed()
-                await human_pause(300, 600)
-                try:
-                    await apply_target.click()
-                except Exception:
-                    await apply_target.evaluate("node => node.click()")
-            else:
-                await apply_btn.scroll_into_view_if_needed()
-                await apply_btn.click(force=True)
+            await apply_btn.scroll_into_view_if_needed()
+            await apply_btn.click(timeout=4000)
             await human_pause(1000, 2000)
         except Exception as exc:
             _record_timing()
-            return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Click apply failed: {exc!s}")
-
-
-        # Handle Confirmation Modal ("Are you sure you want to apply?")
-        confirm_btn = await first_visible(
-            self.page,
-            [
-                "button:has-text('Confirm')",
-                "button:has-text('Yes')",
-                "button.btn-primary:has-text('Apply')",
-            ],
-            timeout_ms=1500,
-        )
-        if confirm_btn:
-            try:
-                await confirm_btn.click()
-                await human_pause(1000, 2000)
-            except Exception:
-                pass
+            return ApplyOutcome(
+                ApplicationStatus.FAILED,
+                reason=SkipReason.SUBMISSION_UNCONFIRMED,
+                detail=f"Instahyre Apply click could not be verified: {exc!s}",
+            )
 
         confirmation = None
         if card is not None:
@@ -1407,6 +1274,16 @@ class InstahyrePlatform(BaseJobPlatform):
                 timeout_ms=5000,
             )
 
+        evidence = "Instahyre target card shows Applied"
+        if confirmation is None and success_panel_before is None and job.company:
+            panel = await first_visible(self.page, [success_panel], timeout_ms=2000)
+            if panel is not None:
+                panel_text = " ".join((await safe_text(panel)).lower().split())
+                company = " ".join(job.company.lower().split())
+                if re.search(rf"\bapplication sent to {re.escape(company)}\s*\.", panel_text):
+                    confirmation = panel
+                    evidence = "Instahyre displayed a new application-sent panel for the target employer"
+
         await self._ensure_modal_closed()
         await self._dismiss_modals()
 
@@ -1415,7 +1292,7 @@ class InstahyrePlatform(BaseJobPlatform):
             return ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 confirmation_type="dom_marker",
-                confirmation_evidence="Instahyre target card shows Applied",
+                confirmation_evidence=evidence,
             )
         _record_timing()
         return ApplyOutcome(

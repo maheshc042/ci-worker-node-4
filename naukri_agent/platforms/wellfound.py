@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page
 
@@ -20,6 +21,7 @@ from ..browser.resilience import (
     safe_text,
 )
 from ..config import JobProfile, NaukriAccount, get_settings
+from ..core.filters import impute_seniority
 from ..core.gemini_writer import GeminiWriter
 from ..core.models import (
     ApplicationStatus,
@@ -31,7 +33,7 @@ from ..core.models import (
 )
 from ..core.run_policy import RunPolicy
 from ..logging_setup import get_logger
-from ..naukri.parser import parse_salary_lpa
+from ..naukri.parser import extract_jd_experience, parse_salary_lpa
 from .base import BaseJobPlatform
 
 log = get_logger(__name__)
@@ -127,6 +129,33 @@ def _parse_posted_days(text: str) -> int | None:
     if unit.startswith("y"):
         return n * 365
     return n
+
+
+_INR_AMOUNT = r"\d[\d,]*(?:\.\d+)?(?:\s*(?:lakhs?|lacs?|lpa|l)\b)?"
+_INR_COMPENSATION = re.compile(
+    rf"(?:₹|(?<!\w)(?:inr|rs\.?)\s+)\s*{_INR_AMOUNT}"
+    rf"(?:\s*[-–—]\s*(?:(?:₹|inr|rs\.?)\s*)?{_INR_AMOUNT})?"
+    r"(?:\s*(?:per month|/month|monthly|per year|/year|annual(?:ly)?))?",
+    re.IGNORECASE,
+)
+_APPLIED_JOB_MARKERS = [
+    "button[data-test='Button']:not(nav button):text-matches('^[✓✔  ]*Applied$', 'i')",
+    "button:not(nav button):text-is('Applied')",
+    "main :text-matches('^You applied (on|.{0,20}ago)', 'i')",
+]
+_DESCRIPTION_SELECTORS = [
+    "[data-test='JobDescription']",
+    "div[class*='styles_description__']",
+    "main div[class*='description']",
+]
+
+
+def _wellfound_job_page(url: str, job_id: str) -> bool:
+    location = urlsplit(url)
+    if location.hostname not in {"wellfound.com", "www.wellfound.com"}:
+        return False
+    numeric_id = job_id.removeprefix("wellfound-")
+    return numeric_id.isdecimal() and re.match(rf"^/jobs/{re.escape(numeric_id)}(?:-|/|$)", location.path) is not None
 
 
 def _parse_card_experience(text: str) -> tuple[float | None, float | None]:
@@ -287,6 +316,8 @@ class WellfoundPlatform(BaseJobPlatform):
         if cfg is None:
             return []
         wanted = (profile_name or "").strip().lower()
+        if wanted == "wellfound unified (ai & full stack)":
+            return list(cfg.get_unified_wellfound_profile().core_skills)
         for p in getattr(cfg, "profiles", []) or []:
             if (p.name or "").strip().lower() == wanted:
                 skills = [s.strip() for s in (p.core_skills or []) if s and s.strip()]
@@ -677,9 +708,9 @@ class WellfoundPlatform(BaseJobPlatform):
                     continue
 
                 min_exp, max_exp = _parse_card_experience(f"{title} {raw_text}")
-                min_sal, max_sal = None, None
-                if "$" not in raw_text and _has_pay_signal(raw_text):
-                    min_sal, max_sal = parse_salary_lpa(raw_text)
+                pay = _INR_COMPENSATION.search(raw_text) if _has_pay_signal(raw_text) else None
+                salary_text = pay.group(0) if pay else ""
+                min_sal, max_sal = parse_salary_lpa(salary_text)
 
                 jobs.append(
                     Job(
@@ -690,6 +721,7 @@ class WellfoundPlatform(BaseJobPlatform):
                         location=location,
                         min_experience=min_exp,
                         max_experience=max_exp,
+                        salary_text=salary_text,
                         min_salary_lpa=min_sal,
                         max_salary_lpa=max_sal,
                         posted_days_ago=posted_days,
@@ -702,6 +734,19 @@ class WellfoundPlatform(BaseJobPlatform):
                 log.debug("wellfound.fetch.parse_error", error=str(exc))
                 continue
 
+        # The title estimate is useful only when the recruiter did not
+        # disclose tenure. Check a bounded set before the planner can reject.
+        inferred_senior = [
+            job for job in jobs if impute_seniority(job) and (job.min_experience or 0) >= 5
+        ]
+        for job in inferred_senior[:6]:
+            try:
+                await self.page.goto(job.url, wait_until="domcontentloaded", timeout=12000)
+                if _wellfound_job_page(self.page.url, job.job_id):
+                    await self._read_description(job)
+            except Exception as exc:
+                log.debug("wellfound.fetch.seniority_detail_failed", job_id=job.job_id, error=str(exc)[:100])
+
         log.info(
             "wellfound.fetch.done",
             count=len(jobs),
@@ -711,6 +756,18 @@ class WellfoundPlatform(BaseJobPlatform):
             drop_blocked=drop_blocked,
         )
         return jobs
+
+    async def _read_description(self, job: Job) -> bool:
+        node = await first_visible(self.page, _DESCRIPTION_SELECTORS, timeout_ms=8000)
+        description = (await node.inner_text(timeout=2000)).strip() if node is not None else ""
+        if not description:
+            return False
+        job.description = description
+        minimum, maximum = extract_jd_experience(description)
+        if minimum is not None:
+            job.min_experience, job.max_experience = minimum, maximum
+            job.experience_imputed = False
+        return True
 
     async def apply_to_job(
         self,
@@ -744,36 +801,20 @@ class WellfoundPlatform(BaseJobPlatform):
         except Exception as exc:
             return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Failed to load: {exc!s}")
 
-        # Check if already applied.
-        # Target the application button/badge inside the job detail, NEVER the navbar link!
-        # (The timestamp fallback below only handles layout drift where even
-        # the detail-page marker is absent; buttons/links stay excluded.)
-        already_applied = await first_visible(
-            self.page,
-            [
-                "button[disabled]:has-text('Applied')",
-                "div[class*='JobDetail'] button:has-text('Applied')",
-                "div[class*='primaryContent'] button:has-text('Applied')",
-                "main button:has-text('Applied')",
-                "button:has-text('Applied')",
-                "text=/You applied (on|.{0,20}ago)/i",
-            ],
-            timeout_ms=1500,
-        )
-        if already_applied:
-            is_nav = await already_applied.evaluate(
-                "el => !!el.closest('header, nav') || el.getAttribute('href') === '/jobs/applications' || el.tagName === 'A'"
-            )
-            if not is_nav:
-                return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+        if not _wellfound_job_page(self.page.url, job.job_id):
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="Wellfound did not open the target listing")
 
-        # Enrich job description to generate a better pitch
-        desc_el = await first_visible(self.page, ["div[data-test='JobDescription']", "div[class*='description']"])
-        if desc_el:
-            job.description = await safe_text(desc_el)
-            links, emails = extract_description_metadata(job.description)
-            job.form_links = links
-            job.recruiter_emails = emails
+        if await first_visible(self.page, _APPLIED_JOB_MARKERS, timeout_ms=2000) is not None:
+            return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+
+        if not await self._read_description(job):
+            shot = await self.artifacts.capture_failure(self.page, "wellfound-description-missing", profile_name, job.job_id)
+            return ApplyOutcome(
+                ApplicationStatus.FAILED,
+                detail="Wellfound job description did not load before the pre-submit check",
+                screenshot_path=shot,
+            )
+        job.form_links, job.recruiter_emails = extract_description_metadata(job.description)
 
         # Freshness re-check on the detail page (cards often omit dates).
         # Past the 1-week window the post is dead — skip, don't burn an apply.
@@ -818,7 +859,11 @@ class WellfoundPlatform(BaseJobPlatform):
                 return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
 
         apply_btn = await first_visible(
-            self.page, ["button:has-text('Apply')", "button:has-text('Apply now')", "a:has-text('Apply')"]
+            self.page,
+            [
+                "button:not(nav button):not(header button):text-matches('^Apply( now| on Wellfound)?$', 'i')",
+                "a:not(nav a):not(header a):text-matches('^Apply( now| externally)?$', 'i')",
+            ],
         )
         if not apply_btn:
             return ApplyOutcome(ApplicationStatus.FAILED, detail="Apply button not found")
@@ -845,7 +890,7 @@ class WellfoundPlatform(BaseJobPlatform):
         await apply_btn.click()
         await human_pause(1000, 2000)
 
-        if self.page.url.startswith("http") and "wellfound.com" not in self.page.url.lower():
+        if urlsplit(self.page.url).hostname not in {"wellfound.com", "www.wellfound.com"}:
             return ApplyOutcome(
                 ApplicationStatus.EXTERNAL,
                 external_url=self.page.url,
@@ -1013,40 +1058,38 @@ class WellfoundPlatform(BaseJobPlatform):
             except Exception:
                 delivered = ""
             log.info("wellfound.apply.pitch_typed", chars=len(delivered or ""))
+            if (delivered or "").strip() != pitch.strip():
+                return ApplyOutcome(ApplicationStatus.FAILED, detail="Wellfound did not retain the application pitch")
 
-        # Submit Application inside Dialog
-        submit_btn = await first_visible(
-            self.page,
-            [
-                "[role='dialog'] button:has-text('Apply')",
-                "[role='dialog'] button:has-text('Send application')",
-                "[role='dialog'] button:has-text('Submit application')",
-                "[role='dialog'] button[type='submit']",
-                "button:has-text('Apply')",
-                "button:has-text('Send application')",
-                "button:has-text('Submit application')",
-                "button[type='submit']",
-            ],
-            timeout_ms=4000,
+        # Resolve the submit button inside the same form or dialog as the pitch.
+        form = (
+            textarea.locator("xpath=ancestor::*[self::form or @role='dialog'][1]").first
+            if textarea is not None
+            else await first_visible(self.page, ["[role='dialog']"], timeout_ms=1000)
         )
-        if submit_btn:
-            try:
-                await submit_btn.click(timeout=4_000)
-            except Exception:
-                try:
-                    await submit_btn.click(force=True, timeout=3_000)
-                except Exception:
-                    await submit_btn.evaluate("node => node.click()")
+        submit_btn = None
+        if form is not None:
+            submit_btn = await first_visible(
+                form,
+                [
+                    "button:text-matches('^(Send application|Submit application|Apply)$', 'i')",
+                    "button[type='submit']",
+                ],
+                timeout_ms=4000,
+            )
+        if submit_btn is None:
+            shot = await self.artifacts.capture_failure(self.page, "wellfound-submit-missing", profile_name, job.job_id)
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="Wellfound application form has no supported submit control", screenshot_path=shot)
+
+        try:
+            await submit_btn.click(timeout=4000)
             await human_pause(1500, 3000)
 
-            # Check for success
-            if await first_visible(
-                self.page, [
-                    "text=Application sent",
-                    "text=You applied",
-                    "button:text-is('Applied')",
-                ],
-                timeout_ms=5000,
+            # Reopen the exact listing and verify the persisted application state.
+            await self.page.goto(job.url, wait_until="domcontentloaded", timeout=25000)
+            if (
+                _wellfound_job_page(self.page.url, job.job_id)
+                and await first_visible(self.page, _APPLIED_JOB_MARKERS, timeout_ms=7000) is not None
             ):
                 if jt is not None and self._metrics is not None:
                     jt.total_s = _time.perf_counter() - t0
@@ -1057,9 +1100,13 @@ class WellfoundPlatform(BaseJobPlatform):
                 return ApplyOutcome(
                     ApplicationStatus.APPLIED,
                     confirmation_type="dom_marker",
-                    confirmation_evidence="Wellfound application success marker observed",
+                    confirmation_evidence="Wellfound target listing shows Applied after reopening",
                 )
 
+        except Exception as exc:
+            log.warning("wellfound.apply.submit_check_failed", job_id=job.job_id, error=str(exc)[:120])
+
+        shot = await self.artifacts.capture_failure(self.page, "wellfound-submit-unconfirmed", profile_name, job.job_id)
         if jt is not None and self._metrics is not None:
             jt.total_s = _time.perf_counter() - t0
             try:
@@ -1070,5 +1117,6 @@ class WellfoundPlatform(BaseJobPlatform):
             ApplicationStatus.FAILED,
             reason=SkipReason.SUBMISSION_UNCONFIRMED,
             detail="No success confirmation received",
+            screenshot_path=shot,
         )
 

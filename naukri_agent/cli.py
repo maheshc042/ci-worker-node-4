@@ -404,20 +404,14 @@ def login(
                         await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
                         await human_pause(2000, 3000)
 
-                        auth_sel = [
-                            "img.global-nav__me-photo",
-                            ".feed-identity-module",
-                            "button.global-nav__primary-link-me-menu-trigger",
-                            "button[aria-label*='Me ' i]",
-                            ".feed-identity-widget",
-                        ]
+                        from .platforms.linkedin import linkedin_signed_in
 
                         # Give LinkedIn up to 15 seconds if client-side signing-in handshake is active
                         for _ in range(15):
                             cur_url = page.url.lower()
                             if any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
                                 break
-                            if await first_visible(page, auth_sel, timeout_ms=1000):
+                            if await linkedin_signed_in(page, timeout_ms=1000):
                                 break
                             try:
                                 content = await page.content()
@@ -430,7 +424,7 @@ def login(
 
                         cur_url = page.url.lower()
                         is_login = any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall"))
-                        if not is_login and await first_visible(page, auth_sel, timeout_ms=3000):
+                        if not is_login and await linkedin_signed_in(page, timeout_ms=3000):
                             console.print("[green]✓ LinkedIn session already active![/green]")
                         else:
                             console.print("[yellow]Please log in to LinkedIn / complete security checkpoint in the open browser...[/yellow]")
@@ -442,7 +436,7 @@ def login(
                                 try:
                                     cur_url = page.url.lower()
                                     if not any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
-                                        if await first_visible(page, auth_sel, timeout_ms=1500):
+                                        if await linkedin_signed_in(page, timeout_ms=1500):
                                             console.print("[green]✓ LinkedIn login detected![/green]")
                                             logged_in = True
                                             break

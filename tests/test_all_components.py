@@ -3975,7 +3975,7 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         bot = self._bot(profile_answers={"notice period": "0 days"})
         bot.page = page
         bot, (ok, answered, err) = await self._run(page, bot=bot, safe_texts={label_loc: "What is your last working day?"})
-        self.assertEqual((ok, answered, err), (True, 0, "Form already submitted / read-only"))
+        self.assertEqual((ok, answered, err), (False, 0, "Questionnaire has unresolved answers"))
         self.assertEqual(len(bot.unanswered), 1)
         self.assertEqual(bot.unanswered[0]["kind"], "date")
 
@@ -4040,7 +4040,7 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
             page, bot=bot, safe_texts={_li_text_loc: "Upload your resume"},
         )
         files[0].set_input_files.assert_not_called()
-        self.assertEqual((ok, answered, err), (True, 0, "Form already submitted / read-only"))
+        self.assertEqual((ok, answered, err), (False, 0, "Questionnaire has unresolved answers"))
         self.assertEqual(len(bot.unanswered), 1)
         self.assertEqual(bot.unanswered[0]["kind"], "file")
 
@@ -4267,7 +4267,7 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         page.evaluate = AsyncMock(return_value=None)
         return page, btn
 
-    async def _run_submit(self, page, btn, bot=None):
+    async def _run_submit(self, page, btn, bot=None, receipt=False, confirm_btn=None):
         from unittest.mock import patch
 
         from naukri_agent.platforms import cutshort as cs_mod
@@ -4276,6 +4276,14 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         bot.page = page
 
         async def fake_first_visible(_page, selectors, timeout_ms=2000):
+            if any("Questionnaire submitted!" in str(s) for s in selectors):
+                final_btn = confirm_btn if confirm_btn is not None else btn
+                return object() if receipt and final_btn.click.await_count else None
+            if any("Responses cannot be changed" in s for s in selectors):
+                return object() if confirm_btn is not None and btn.click.await_count else None
+            if selectors == ["button[type='submit']:text-is('Yes')"]:
+                self.assertIs(_page, page.locator("form:has(fieldset)").first)
+                return confirm_btn
             # Only the submit-button candidate lists (they contain a
             # Submit selector); success-text waits return None, matching
             # a page that never confirms.
@@ -4292,6 +4300,26 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
              patch.object(cs_mod, "first_visible", new=AsyncMock(side_effect=fake_first_visible)):
             return await bot.run()
 
+    async def test_submit_accepts_exact_form_confirmation_before_receipt(self):
+        page, btn = self._submit_page()
+        confirm_btn = MagicMock()
+        confirm_btn.click = AsyncMock()
+
+        ok, _, error = await self._run_submit(page, btn, receipt=True, confirm_btn=confirm_btn)
+
+        self.assertTrue(ok, error)
+        btn.click.assert_awaited_once()
+        confirm_btn.click.assert_awaited_once()
+
+    async def test_selected_questionnaire_option_is_not_clicked_again(self):
+        bot = self._bot()
+        option = MagicMock()
+        option.evaluate = AsyncMock(return_value="selected:<div>Verified option</div>")
+        option.click = AsyncMock()
+
+        self.assertTrue(await bot._click_option_verified(option))
+        option.click.assert_not_awaited()
+
     async def test_submit_blocked_when_required_inputs_still_empty(self):
         empty_inp = MagicMock()
         empty_inp.is_visible = AsyncMock(return_value=True)
@@ -4300,17 +4328,33 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
 
         ok, answered, err = await self._run_submit(page, btn)
         self.assertFalse(ok)
-        self.assertIn("required input(s) still empty after submit", err)
+        self.assertIn("required input(s) still empty before submit", err)
+        btn.click.assert_not_awaited()
 
-    async def test_submit_success_when_form_gone(self):
-        # Post-submit the form navigates away (required locator empty) —
-        # the success path must stay intact, message still Genuine.
+    async def test_disappearing_form_without_receipt_is_unconfirmed(self):
         page, btn = self._submit_page(required_items=[])
 
         ok, answered, err = await self._run_submit(page, btn)
+        self.assertFalse(ok)
+        self.assertEqual(answered, 0)
+        self.assertIn("submit unconfirmed", err)
+        btn.click.assert_awaited_once()
+        page.evaluate.assert_not_awaited()
+
+    async def test_new_questionnaire_receipt_confirms_one_click(self):
+        page, btn = self._submit_page(required_items=[])
+        ok, answered, err = await self._run_submit(page, btn, receipt=True)
         self.assertTrue(ok)
-        self.assertGreaterEqual(answered, 1)
+        self.assertEqual(answered, 0)
         self.assertEqual(err, "")
+        btn.click.assert_awaited_once()
+
+    def test_chip_matching_does_not_invert_or_substring_match_answers(self):
+        bot = self._bot()
+        self.assertFalse(bot._match_chip("Not employed", "Employed"))
+        self.assertFalse(bot._match_chip("10 years", "1"))
+        self.assertFalse(bot._match_chip("Noida", "No"))
+        self.assertTrue(bot._match_chip("Yes, this works", "Yes"))
 
     async def test_submit_fail_closed_when_questionnaire_still_visible(self):
         # Run-644 ground truth: click "succeeded", answered=3, but the
@@ -4328,7 +4372,7 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         async def fake_first_visible(_page, selectors, timeout_ms=2000):
             sel_list = [str(s) for s in selectors]
             # Success-text markers: never appears.
-            if any("Application sent" in s or "successfully applied" in s for s in sel_list):
+            if any("Questionnaire submitted!" in s for s in sel_list):
                 return None
             # Form-gone probe: form is STILL visible (false-positive case).
             if all(s.startswith("form:") for s in sel_list):
@@ -4608,116 +4652,8 @@ class TestCutshortFalseWallAndFilterBadge(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await plat._skills_filter_badge(), 0)
 
 
-class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
-    """Run-655 regression for the run-652/654 phantom-Send signature
-    ("0 applied, 5 failed", stage=send, plain post-reload CTAs, zero
-    cutshort.chatbot.* log lines).
-
-    The pitch modal carries its screening questionnaire BEFORE Send, so the
-    flow must: (1) answer pre-Send in-modal controls through an answer-only
-    chatbot (allow_submit=False — submit deferred to the caller), (2) keep the
-    caller's Send click as the single mutation, and (3) continue into the
-    post-Send chatbot whose completed form submit is the APPLIED evidence."""
-
-    # first_visible (len(selectors), selectors[0]) keys in the exact order they
-    # fire on the full success path (no feed anchor -> dedicated CTA -> modal ->
-    # typed pitch -> pre-Send answers -> Send -> post-Send chatbot -> nav-back).
-    EXPECTED_KEYS: ClassVar[list] = [
-        (2, "#modal__content"),
-        (1, "a[href*='test123']"),
-        (6, "button:has-text('Applied')"),
-        (6, "text=no longer active"),
-        (4, "button:has-text('Apply to this job')"),
-        (10, "#modal__content"),
-        (5, "textarea[name='message']"),
-        (7, "button:has-text('Send')"),
-        (3, "fieldset"),
-        (5, "text=Application sent"),
-        (3, "fieldset"),
-        (4, "fieldset"),
-        (6, "div:has(img[src*='close.png'])"),
-        (4, "button:text-is('Applied')"),
-    ]
-
-    async def test_defer_mode_answers_without_submitting(self):
-        """allow_submit=False: the answer-only run resolves questions (the
-        run-642 resume-upload path) and returns success WITHOUT ever touching
-        the Send control — the caller owns the single Send click (no
-        double-send)."""
-        helper = TestCutshortDateFileRadiogroupFills()
-
-        # A REAL resume file: the chatbot fails closed without an existing
-        # path (exist() check before set_input_files).
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-        tmp.close()
-        resume_path = Path(tmp.name)
-        try:
-            file_inp = MagicMock()
-            file_inp.is_visible = AsyncMock(return_value=True)
-            file_inp.evaluate = AsyncMock(return_value=False)  # files.length == 0
-            file_inp.get_attribute = AsyncMock(return_value="Upload resume")
-            file_inp.scroll_into_view_if_needed = AsyncMock()
-            file_inp.set_input_files = AsyncMock()
-
-            file_loc = TestCutshortDateFileRadiogroupFills._empty_locator()
-            file_loc.all = AsyncMock(return_value=[file_inp])
-            empty = TestCutshortDateFileRadiogroupFills._empty_locator()
-
-            form = MagicMock()
-            form.count = AsyncMock(return_value=1)
-            form.is_visible = AsyncMock(return_value=True)
-            form.first = form
-            form.locator = MagicMock(
-                side_effect=lambda sel: (
-                    file_loc if "input[type='file']" in sel else empty
-                )
-            )
-
-            def _page_loc(sel):
-                if sel.startswith("form:has"):
-                    return form
-                return empty
-
-            page = MagicMock()
-            page.locator = MagicMock(side_effect=_page_loc)
-            page.evaluate = AsyncMock(return_value=None)
-
-            bot = helper._bot(resume_path=resume_path)
-            bot.allow_submit = False
-
-            # Sentinel for the submit-probe target: in defer mode the probe
-            # must never run, so this button must stay virgin throughout.
-            btn = MagicMock()
-            btn.scroll_into_view_if_needed = AsyncMock()
-            btn.click = AsyncMock()
-            btn.evaluate = AsyncMock()
-
-            ok, answered, err = await helper._run_submit(page, btn, bot=bot)
-
-            self.assertTrue(ok)
-            self.assertEqual(err, "")
-            self.assertGreaterEqual(answered, 1)
-            # The questionnaire answer happened exactly once.
-            self.assertEqual(file_inp.set_input_files.await_count, 1)
-            # Deferred: the submit control was never scrolled to, never
-            # clicked, never JS-clicked.
-            self.assertEqual(btn.click.await_count, 0)
-            self.assertEqual(btn.evaluate.await_count, 0)
-            self.assertEqual(btn.scroll_into_view_if_needed.await_count, 0)
-        finally:
-            resume_path.unlink(missing_ok=True)
-
-    async def test_default_mode_still_submits(self):
-        """Defer mode is an explicit opt-in; the plain chatbot keeps its
-        movie behavior of owning its own submit."""
-        helper = TestCutshortDateFileRadiogroupFills()
-        self.assertTrue(helper._bot().allow_submit)
-
-    async def test_full_applied_flow_answers_pre_send_questionnaire(self):
-        """The whole cutshort apply flow succeeds end-to-end when the modal is
-        pre-Send questionnaire aware: pre-Send chips answered via
-        allow_submit=False, single caller Send click, post-Send chatbot
-        is followed by confirmation on the exact job page."""
+class TestCutshortPitchApplication(unittest.IsolatedAsyncioTestCase):
+    async def test_pitch_sends_once_and_confirms_without_reopening_listing(self):
         from types import SimpleNamespace
         from unittest.mock import call, patch
 
@@ -4745,6 +4681,7 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         target_btn = _button()
         send_btn = _button()
         modal = MagicMock()
+        modal.get_by_text.return_value.first.is_visible = AsyncMock(return_value=True)
         modal.is_visible = AsyncMock(return_value=False)
         textarea = MagicMock()
         textarea.scroll_into_view_if_needed = AsyncMock()
@@ -4756,23 +4693,15 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda *a, **k: TestCutshortDateFileRadiogroupFills._empty_locator()
         )
 
-        # Questionnaire probes are only bool-tested by the flow.
-        truthy_q = object()
         returned = {
-            (4, "button:has-text('Apply to this job')"): target_btn,
+            (2, "button:text-is('Apply to this job')"): target_btn,
             (10, "#modal__content"): modal,
             (5, "textarea[name='message']"): textarea,
-            (7, "button:has-text('Send')"): send_btn,
-            (3, "fieldset"): truthy_q,
-            (4, "fieldset"): truthy_q,
-            (4, "button:text-is('Applied')"): object(),
+            (1, "button:text-is('Send')"): send_btn,
         }
-        seen_keys = []
 
         async def fake_first_visible(_scope, selectors, timeout_ms=2000):
-            key = (len(selectors), selectors[0])
-            seen_keys.append(key)
-            return returned.get(key)
+            return returned.get((len(selectors), selectors[0]))
 
         page = MagicMock()
         page.url = "https://cutshort.io/job/test123"
@@ -4781,13 +4710,7 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         page.keyboard.press = AsyncMock()
         page.evaluate = AsyncMock(return_value=None)
 
-        chatbot_calls = []
-
-        def fake_chatbot(_page, _answers, resume_path=None, allow_submit=True):
-            chatbot_calls.append({"resume_path": resume_path, "allow_submit": allow_submit})
-            instance = MagicMock()
-            instance.run = AsyncMock(return_value=(True, 2, ""))
-            return instance
+        thread_url = "https://cutshort.io/profile/conversations/candidate?thread=thread1"
 
         plat = object.__new__(CutshortPlatform)
         plat.page = page
@@ -4806,6 +4729,9 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         plat.config = None  # pitch flow short-circuits legacy config usage
         plat._cloudflare_wall = AsyncMock(return_value=False)
 
+        plat._capture_job_conversation = AsyncMock(side_effect=[None, None, thread_url])
+        plat._verify_job_conversation = AsyncMock(return_value=True)
+
         fake_cfg = SimpleNamespace(
             load=lambda: SimpleNamespace(
                 applicant_name="Mahesh Chitakoti",
@@ -4822,43 +4748,24 @@ class TestCutshortPreSendQuestionnaire(unittest.IsolatedAsyncioTestCase):
         with patch.object(cs_mod, "first_visible", new=fake_first_visible), \
              patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="")), \
              patch.object(cs_mod, "human_pause", new=AsyncMock()), \
-             patch.object(cs_mod, "CutshortChatbot", new=fake_chatbot), \
+             patch.object(cs_mod, "CutshortChatbot") as chatbot, \
              patch.object(cs_mod, "_track_resume_for", new=MagicMock(return_value=(None, None))), \
              patch.object(cs_mod, "AgentConfig", new=fake_cfg), \
              patch("naukri_agent.core.gemini_writer.applicant_snapshot",
                    new=MagicMock(return_value=fake_who)):
             outcome = await plat.apply_to_job(job, profile_name="Engineer")
 
-        # Full fingerprint: every first_visible probe on the success path, in
-        # order. Dropped/duplicated/edited probes fail loudly instead of
-        # silently weakening regression coverage.
-        self.assertEqual(seen_keys, self.EXPECTED_KEYS)
-
-        # First invocation: answer-only pre-Send runner (submit deferred).
-        # Second invocation: post-Send chatbot WITHOUT the allow_submit kwarg,
-        # which owns submission verification.
-        self.assertEqual(chatbot_calls, [
-            {"resume_path": None, "allow_submit": False},
-            {"resume_path": None, "allow_submit": True},
-        ])
-
-        # Exactly one pitch write: fill + two dispatch_event focus markers.
-        self.assertEqual(textarea.fill.await_count, 1)
-        self.assertEqual(textarea.dispatch_event.await_count, 2)
-        # The caller keeps the single Send click (never a JS evaluate fallback).
-        self.assertEqual(send_btn.click.await_count, 1)
-        self.assertEqual(send_btn.evaluate.await_count, 0)
-
-        # The target job page confirms submission and preserves the answer count.
+        chatbot.assert_not_called()
+        textarea.fill.assert_awaited_once()
+        send_btn.click.assert_awaited_once()
+        send_btn.evaluate.assert_not_awaited()
+        plat._verify_job_conversation.assert_awaited_once_with(thread_url, job.url)
         self.assertEqual(outcome.status, ApplicationStatus.APPLIED)
-        self.assertEqual(outcome.questions_answered, 2)
+        self.assertEqual(outcome.questions_answered, 0)
+        self.assertFalse(outcome.unanswered_questions)
         self.assertEqual(outcome.confirmation_type, "dom_marker")
-        self.assertIn("target job page", outcome.confirmation_evidence)
-
-        # Open the job, revisit it for confirmation, and return to the feed.
         self.assertEqual(page.goto.await_args_list, [
-            call("https://cutshort.io/job/test123", wait_until="domcontentloaded"),
-            call("https://cutshort.io/job/test123", wait_until="domcontentloaded"),
+            call(job.url, wait_until="domcontentloaded"),
             call("https://cutshort.io/profile/all-jobs", wait_until="domcontentloaded"),
         ])
 
@@ -6026,6 +5933,7 @@ class TestRun605Fixes(unittest.IsolatedAsyncioTestCase):
                                  max_attempts=3, failed_cooldown_hours=12)
 
         sql = pool.fetch.await_args.args[0]
+        self.assertIn("OR a.reason = 'submission_unconfirmed'", sql)
         self.assertIn("OR a.created_at > now() - ($5 || ' hours')::interval", sql)
         self.assertNotIn("WHERE a.status <> 'failed'", sql.split("AND (")[0])
         args = pool.fetch.await_args.args
@@ -6744,6 +6652,8 @@ class TestTenureAnswerUnits(unittest.TestCase):
             ("Do you have at least 1 year of experience with Temporal?", ["Yes", "No"], "Yes"),
             ("Do you have more than 1 year of experience with Temporal?", ["Yes", "No"], "No"),
             ("Do you have at least 12 months of experience with Temporal?", ["Yes", "No"], "Yes"),
+            ("Do you have 1 year of experience with Temporal?", ["Yes", "No"], "Yes"),
+            ("How much experience do you have in months with Python?", [], "36"),
             ("Do you have more than 2 years of experience?", ["Yes", "No"], "Yes"),
             ("Do you have at least 1 year of experience with Cobol?", ["Yes", "No"], "No"),
         ]
@@ -6753,3 +6663,172 @@ class TestTenureAnswerUnits(unittest.TestCase):
                 answer = engine.resolve(ScreeningQuestion(text, kind, options))
                 self.assertIsNotNone(answer)
                 self.assertEqual(answer.value, expected)
+
+    def test_cutshort_offer_ranges_use_configured_target(self):
+        from naukri_agent.core.answers import AnswerEngine
+        from naukri_agent.core.models import ScreeningQuestion
+
+        engine = AnswerEngine([], profile_answers={"expected ctc": "7"})
+        options = ["Yes, this works", "No, this does not work"]
+        for low, high, expected in [(10, 30, options[0]), (4, 6, options[1]), (12, 25, options[0])]:
+            with self.subTest(low=low, high=high):
+                question = ScreeningQuestion(
+                    f"This job offers around ₹{low}L - ₹{high}L / yr. Does this work for you?",
+                    "radio",
+                    options,
+                )
+                answer = engine.resolve(question)
+                self.assertIsNotNone(answer)
+                self.assertEqual(answer.value, expected)
+
+
+class TestPlatformDryRunRegressions(unittest.IsolatedAsyncioTestCase):
+    async def test_linkedin_recognizes_current_feed_and_rejects_checkpoint(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.platforms import linkedin
+
+        page = MagicMock(url="https://www.linkedin.com/feed/")
+        with patch.object(linkedin, "first_visible", new=AsyncMock(return_value=object())) as visible:
+            self.assertTrue(await linkedin.linkedin_signed_in(page))
+            self.assertIn("/messaging/", visible.await_args.args[1][0])
+            page.url = "https://www.linkedin.com/checkpoint/challenge"
+            self.assertFalse(await linkedin.linkedin_signed_in(page))
+            visible.assert_awaited_once()
+
+    async def test_naukri_shell_is_distinct_from_explicit_empty_feed(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from playwright.async_api import TimeoutError
+        from naukri_agent.naukri import search
+
+        page = MagicMock()
+        page.goto = AsyncMock(return_value=MagicMock(status=200))
+        page.wait_for_selector = AsyncMock(side_effect=TimeoutError("no cards"))
+        with (
+            patch.object(search, "dismiss_overlays", new=AsyncMock()),
+            patch.object(search, "scroll_page", new=AsyncMock()),
+            patch.object(search, "first_visible", new=AsyncMock(return_value=None)) as empty,
+        ):
+            with self.assertRaises(search.TransientPageError):
+                await search.JobSearcher(page)._goto_recommended()
+            empty.return_value = object()
+            await search.JobSearcher(page)._goto_recommended()
+
+
+class TestNaukriDetailReadiness(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_description_blocks_native_apply(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.core.models import ApplicationStatus
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.naukri.apply import ApplyEngine
+
+        page = MagicMock()
+        artifacts = MagicMock(capture_failure=AsyncMock(return_value=None))
+        engine = ApplyEngine(
+            page, MagicMock(), artifacts,
+            policy=RunPolicy(dry_run=False, side_effects_enabled=True),
+        )
+        job = Job(job_id="reco-123456", title="Backend Developer", company="Example", url="https://www.naukri.com/job-listings-123456")
+        with (
+            patch.object(engine, "_open_job", new=AsyncMock()),
+            patch.object(engine, "_state", new=AsyncMock(return_value="easy_apply")),
+            patch.object(engine, "enrich", new=AsyncMock(return_value=False)),
+            patch.object(engine, "_submit", new=AsyncMock()) as submit,
+        ):
+            outcome = await engine.apply(job, "Secondary", pre_submit_check=MagicMock())
+        self.assertEqual(outcome.status, ApplicationStatus.FAILED)
+        self.assertIn("job description did not load", outcome.detail)
+        submit.assert_not_awaited()
+
+
+class TestWellfoundApplicationEvidence(unittest.TestCase):
+    def test_job_identity_requires_exact_id_and_wellfound_host(self):
+        from naukri_agent.platforms.wellfound import _wellfound_job_page
+
+        job_id = "wellfound-123"
+        self.assertTrue(_wellfound_job_page("https://wellfound.com/jobs/123-title?src=search", job_id))
+        self.assertFalse(_wellfound_job_page("https://wellfound.com/jobs/1234-title", job_id))
+        self.assertFalse(_wellfound_job_page("https://wellfound.com/jobs/applied", job_id))
+        self.assertFalse(_wellfound_job_page("https://wellfound.com.example/jobs/123-title", job_id))
+
+    def test_only_compensation_span_feeds_salary_parser(self):
+        from naukri_agent.naukri.parser import parse_salary_lpa
+        from naukri_agent.platforms.wellfound import _INR_COMPENSATION
+
+        card = "Frontend Engineer • 3 years • ₹10L – ₹20L • 0.5% equity • posted 2 days ago"
+        match = _INR_COMPENSATION.search(card)
+        self.assertIsNotNone(match)
+        self.assertEqual(parse_salary_lpa(match.group()), (10.0, 20.0))
+        self.assertIsNone(_INR_COMPENSATION.search("3 years • salary undisclosed • 0.5% equity"))
+
+
+class TestWellfoundDetailExperience(unittest.IsolatedAsyncioTestCase):
+    async def test_stated_tenure_replaces_title_imputation(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.platforms import wellfound
+
+        platform = object.__new__(wellfound.WellfoundPlatform)
+        platform.page = MagicMock()
+        node = MagicMock(inner_text=AsyncMock(return_value="Experience required: 2+ years of full-stack experience"))
+        job = Job(
+            job_id="wellfound-123", title="Senior MERN Stack Developer", company="Example",
+            url="https://wellfound.com/jobs/123-title", min_experience=5, max_experience=10,
+            experience_imputed=True,
+        )
+        with patch.object(wellfound, "first_visible", new=AsyncMock(return_value=node)):
+            self.assertTrue(await platform._read_description(job))
+        self.assertEqual((job.min_experience, job.max_experience), (2.0, None))
+        self.assertFalse(job.experience_imputed)
+
+
+class TestCutshortDetailGate(unittest.IsolatedAsyncioTestCase):
+    async def test_full_description_experience_blocks_card_before_apply(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.core.models import ApplicationStatus, FilterDecision, SkipReason
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.platforms import cutshort
+
+        url = "https://cutshort.io/job/python-example"
+        detail = MagicMock(url=url, goto=AsyncMock(), close=AsyncMock())
+        page = MagicMock()
+        page.context.new_page = AsyncMock(return_value=detail)
+        description = MagicMock(inner_text=AsyncMock(
+            return_value="Minimum 4 years of professional software development experience, primarily using Python."
+        ))
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.page = page
+        platform.policy = RunPolicy(dry_run=False, side_effects_enabled=True)
+        platform._cloudflare_wall = AsyncMock(return_value=False)
+        job = Job(job_id="cutshort-example", title="Python Developer", company="Example", url=url, min_experience=2)
+
+        def check(candidate):
+            self.assertEqual(candidate.min_experience, 4)
+            return FilterDecision(False, SkipReason.FILTER_EXPERIENCE, "requires 4 years")
+
+        with patch.object(cutshort, "first_visible", new=AsyncMock(side_effect=[None, description])):
+            outcome = await platform.apply_to_job(job, "Cutshort", pre_submit_check=check)
+        self.assertEqual(outcome.status, ApplicationStatus.SKIPPED)
+        self.assertEqual(outcome.reason, SkipReason.FILTER_EXPERIENCE)
+        detail.close.assert_awaited_once()
+        page.locator.assert_not_called()
+
+class TestCutshortConversationReceipt(unittest.IsolatedAsyncioTestCase):
+    async def test_thread_receipt_requires_same_thread_and_exact_job_link(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.platforms import cutshort
+
+        thread_url = "https://cutshort.io/profile/conversations/candidate?thread=abc"
+        job_url = "https://cutshort.io/job/python-abc"
+        thread = MagicMock(url=thread_url, goto=AsyncMock(), close=AsyncMock())
+        page = MagicMock()
+        page.context.new_page = AsyncMock(return_value=thread)
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.page = page
+        link = MagicMock(get_attribute=AsyncMock(return_value=job_url))
+        with patch.object(cutshort, "first_visible", new=AsyncMock(return_value=link)):
+            self.assertTrue(await platform._verify_job_conversation(thread_url, job_url))
+            link.get_attribute.return_value = "https://cutshort.io/job/python-other"
+            self.assertFalse(await platform._verify_job_conversation(thread_url, job_url))
+            link.get_attribute.return_value = job_url
+            thread.url = "https://cutshort.io/profile/candidate-conversations?thread=other"
+            self.assertFalse(await platform._verify_job_conversation(thread_url, job_url))
+        self.assertEqual(thread.close.await_count, 3)

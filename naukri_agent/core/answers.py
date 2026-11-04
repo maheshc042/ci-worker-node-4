@@ -492,6 +492,23 @@ class AnswerEngine:
         if employment is not None:
             return employment
 
+        # Evaluate an advertised budget before generic willingness.
+        offer = re.search(
+            r"\boffers?\s+(?:around\s+)?₹\s*(\d+(?:\.\d+)?)\s*l\s*[-–—]\s*"
+            r"₹?\s*(\d+(?:\.\d+)?)\s*l\s*/\s*(?:yr|year)\b.*\bdoes this work\b",
+            text,
+        )
+        if offer and question.options:
+            low, high = map(float, offer.groups())
+            target = self._configured_ctc("expected")
+            if target is not None and 0 < low <= high:
+                return self._fit_to_options(
+                    "Yes" if high >= target else "No",
+                    question,
+                    "compensation:offer_range",
+                    "compensation-map",
+                )
+
         # Stage 1.6: Generic Affirmative & Location Fallback
         willingness = self._resolve_willingness(text, question)
         if willingness is not None:
@@ -1036,10 +1053,19 @@ class AnswerEngine:
             r"(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*\+)\s*(years?|yrs?|months?|exp)\b",
             text,
         )
-        if not m:
-            return None
-        operator, amount, plus_amount, unit = m.groups()
-        threshold = float(amount or plus_amount)
+        if m:
+            operator, amount, plus_amount, unit = m.groups()
+            threshold = float(amount or plus_amount)
+        else:
+            m = re.search(
+                r"\b(?:do you have|have you got)\s+(\d+(?:\.\d+)?)\s*(years?|yrs?|months?)\s+of\s+(?:experience|exp)\b",
+                text,
+            )
+            if m is None:
+                return None
+            amount, unit = m.groups()
+            threshold = float(amount)
+            operator = None
         total = self.experience.total_years
         if re.search(r"\b(?:in|with|using|on|as)\s+\w", text[m.end():]):
             skill_tenure = self._resolve_experience(text, ScreeningQuestion(text, "text"))
@@ -1154,7 +1180,7 @@ class AnswerEngine:
             return None
 
         def fit_years(years: float, pattern: str) -> ResolvedAnswer | None:
-            if not question.options and re.search(r"\b(?:how many|number of)\s+months?\b", text):
+            if not question.options and re.search(r"\b(?:(?:how many|number of)\s+months?|in months)\b", text):
                 years *= 12
             return self._fit_to_options(_format_years(years), question, pattern, "experience-map")
 

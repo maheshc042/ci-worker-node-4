@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from playwright.async_api import Locator, Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..browser.artifacts import ArtifactStore
 from ..browser.resilience import (
@@ -255,11 +256,13 @@ class JobSearcher:
         exclude = exclude_job_ids or set()
         log.info("reco.start", url=S.RECOMMENDED_JOBS_URL, tabs=cfg.tabs)
 
-        if not await self._open_recommended():
-            return []
+        opened = await self._open_recommended()
 
         if self.artifacts is not None:
             await self.artifacts.dump_html(self.page, "recommended-feed")
+
+        if not opened:
+            raise TransientPageError("Naukri recommendations did not load a job list or an explicit empty state")
 
         if await first_visible(self.page, S.RECO_EMPTY, timeout_ms=2_500):
             log.warning("reco.empty_feed")
@@ -385,17 +388,18 @@ class JobSearcher:
         response = await self.page.goto(
             S.RECOMMENDED_JOBS_URL, wait_until="domcontentloaded", timeout=60_000
         )
-        if response is not None and response.status >= 500:
+        if response is not None and response.status >= 400:
             raise TransientPageError(f"Naukri returned HTTP {response.status}")
         await dismiss_overlays(self.page)
 
         try:
             await self.page.wait_for_selector(
-                "a[href*='job-listings'], a[href*='job-details'], a[href*='job-'], div.tuple-wrapper, article.jobTuple, div.cust-job-tuple, div.srp-jobtuple-wrapper, a.title",
+                "a[href*='job-listings'], a[href*='job-details'], div.tuple-wrapper, article.jobTuple, div.cust-job-tuple, div.srp-jobtuple-wrapper, a.title",
                 timeout=15_000,
             )
-        except Exception:
-            pass
+        except PlaywrightTimeoutError as exc:
+            if await first_visible(self.page, S.RECO_EMPTY, timeout_ms=2500) is None:
+                raise TransientPageError("Naukri recommendations stayed on the page shell") from exc
 
         await scroll_page(self.page, steps=2)
 

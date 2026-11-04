@@ -18,6 +18,23 @@ on:
           - primary
           - secondary
           - all-accounts
+      dry_run:
+        description: 'Check login and job selection without sending applications'
+        required: true
+        default: true
+        type: boolean
+      platform:
+        description: 'Platform to check'
+        default: 'all-enabled'
+        type: choice
+        options:
+          - all-enabled
+          - naukri
+          - linkedin
+          - cutshort
+          - wellfound
+          - instahyre
+          - hiringcafe
 
 concurrency:
   group: naukri-auto-apply-agent
@@ -75,6 +92,9 @@ jobs:
 
       - name: Run Naukri Agent
         env:
+          MANUAL_ACCOUNT: ${{ inputs.account }}
+          MANUAL_DRY_RUN: ${{ inputs.dry_run }}
+          MANUAL_PLATFORM: ${{ inputs.platform }}
           # --- Core & Database ---
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DB_SCHEMA: ${{ secrets.DB_SCHEMA || 'naukri' }}
@@ -114,12 +134,20 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          echo "Testing checkout $(git rev-parse HEAD)"
           # If triggered manually, use the input provided by the user
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            if [ "${{ github.event.inputs.account }}" == "all-accounts" ]; then
-              python -m naukri_agent run --all-accounts
+            args=()
+            if [ "$MANUAL_DRY_RUN" = "true" ]; then
+              args+=(--dry-run)
+            fi
+            if [ -n "$MANUAL_PLATFORM" ] && [ "$MANUAL_PLATFORM" != "all-enabled" ]; then
+              args+=(--platform "$MANUAL_PLATFORM")
+            fi
+            if [ "$MANUAL_ACCOUNT" = "all-accounts" ]; then
+              python -m naukri_agent run --all-accounts "${args[@]}"
             else
-              python -m naukri_agent run -a ${{ github.event.inputs.account }}
+              python -m naukri_agent run --account "$MANUAL_ACCOUNT" "${args[@]}"
             fi
           else
             # If triggered by Cron schedule, check the UTC hour

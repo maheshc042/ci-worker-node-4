@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 from playwright.async_api import Page
 
@@ -31,6 +31,7 @@ from ..core.models import (
 )
 from ..core.run_policy import RunPolicy
 from ..logging_setup import get_logger
+from ..naukri.parser import extract_jd_experience
 from .base import BaseJobPlatform
 
 log = get_logger(__name__)
@@ -188,8 +189,9 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
         text_for_resume = f"{job.title} {extra_text} {job.description}".lower()
         is_ai_job = any(
             k in text_for_resume
-            for k in ["ai", "llm", "genai", "gpt", "machine learning", "ml", "rag", "agent", "prompt", "nlp", "chatbot", "fastapi"]
+            for k in ["genai", "machine learning", "chatbot", "fastapi"]
         )
+        is_ai_job |= bool(re.search(r"\b(?:ai|ml|llms?|gpt|rag|agents?|nlp)\b", text_for_resume))
         profiles = [
             p for p in (getattr(cfg, "profiles", []) or [])
             if p.enabled and getattr(p, "resume_file", None)
@@ -221,7 +223,6 @@ class CutshortChatbot:
         answers: AnswerEngine,
         max_questions: int = 10,
         resume_path: Path | None = None,
-        allow_submit: bool = True,
     ):
         self.page = page
         self.answers = answers
@@ -231,11 +232,6 @@ class CutshortChatbot:
         # touched). Inbox threads pass None — file inputs there queue for
         # review (fail closed), since a thread context identifies no job.
         self.resume_path = resume_path
-        # allow_submit=False is the pre-Send answer-only mode: the pitch
-        # modal's questionnaire is answered by this run, but the Send click
-        # stays owned by the caller — a chatbot submit here would double-fire
-        # or bypass the caller's require_mutation gate.
-        self.allow_submit = allow_submit
         # Questions this run could not answer (populated during run(),
         # drained by the caller into the review queue). Bounded: same
         # question re-queues only bump times_seen via upsert.
@@ -253,26 +249,24 @@ class CutshortChatbot:
         self.unanswered.append({"text": text, "kind": kind, "options": list(options or [])[:12]})
 
     def _match_chip(self, chip_text: str, resolved_val: str) -> bool:
-        """Fuzzy matches a quick-reply chip against the resolved answer."""
-        ct = chip_text.strip().lower()
-        rv = resolved_val.strip().lower()
-        if not ct or not rv:
+        """Match the resolved option or an explicit boolean answer."""
+        chip = " ".join(chip_text.lower().split())
+        answer = " ".join(resolved_val.lower().split())
+        if not chip or not answer:
             return False
-        if ct == rv or rv in ct or ct in rv:
+        if chip == answer:
             return True
-        if rv in ("yes", "true") and any(w in ct for w in ["yes", "agree", "comfortable", "available", "willing", "open", "ready", "works"]):
-            return True
-        if rv in ("no", "false") and any(w in ct for w in ["no", "never", "not"]):
-            return True
-        if "0" in rv or "immediate" in rv or "15" in rv:
-            if any(w in ct for w in ["immediate", "served notice", "serving", "< 15", "0-15", "15 days", "0 days"]):
-                return True
+        if answer in {"yes", "true", "no", "false"}:
+            return AnswerEngine._polarity(chip) is (answer in {"yes", "true"})
         return False
 
     _JS_CHIP_FINGERPRINT = (
         "el => {"
         " var scope = el.closest('fieldset') || el.closest(\"div[role='radiogroup']\") || el.parentElement;"
         " var marks = scope ? scope.querySelectorAll(\"[aria-checked='true'], input:checked\").length : -1;"
+        " if (el.matches(\"[aria-checked='true'], input:checked\")"
+        " || el.querySelector(\"input:checked, [class*='sc-dde0ab83-2'] > [class*='sc-dde0ab83-3']\"))"
+        " return 'selected:' + el.outerHTML;"
         " return el.outerHTML + '@' + marks;"
         "}"
     )
@@ -302,6 +296,8 @@ class CutshortChatbot:
         caller can fail closed instead of counting a phantom answer.
         """
         before = await self._chip_fingerprint(opt)
+        if before.startswith("selected:"):
+            return True
         try:
             await opt.scroll_into_view_if_needed()
         except Exception:
@@ -418,90 +414,23 @@ class CutshortChatbot:
                 continue
         return count
 
-    def _extract_composite_answers(self, text: str) -> str | None:
-        """
-        Parses recruiter messages asking multiple screening questions at once
-        and builds a polite, structured multi-part response.
-        """
-        norm_text = text.lower()
-        needed_fields: list[tuple[str, str]] = []
-        cfg = AgentConfig.load()
-        phone = (cfg.applicant_phone or "").strip()
-        email = (cfg.applicant_email or "").strip()
-
-        # 1. Contact Number / Mobile / Phone / WhatsApp
-        if phone and any(k in norm_text for k in ["contact number", "contact no", "mobile number", "mobile no", "phone number", "phone no", "whatsapp", "call you", "share your contact", "share your number", "share your phone"]):
-            needed_fields.append(("Contact Number", phone))
-
-        # 2. Email Address
-        if email and any(k in norm_text for k in ["email address", "email id", "mail address", "mail id", "share your email", "share your mail"]):
-            needed_fields.append(("Email", email))
-
-        # 3. Notice period / LWD
-        if any(k in norm_text for k in ["notice period", "notice", "how soon", "when can you join", "joining time", "lwd", "last working"]):
-            resolved = self.answers.resolve(ScreeningQuestion(text="notice period", kind="unknown", options=[]))
-            if resolved is not None:
-                needed_fields.append(("Notice Period", resolved.value))
-
-        # 4. Current CTC
-        if any(k in norm_text for k in ["current ctc", "current salary", "cctc", "present ctc"]):
-            resolved = self.answers.resolve(ScreeningQuestion(text="current ctc", kind="unknown", options=[]))
-            if resolved is not None:
-                needed_fields.append(("Current CTC", resolved.value))
-
-        # 5. Expected CTC
-        if any(k in norm_text for k in ["expected ctc", "expected salary", "ectc"]):
-            resolved = self.answers.resolve(ScreeningQuestion(text="expected ctc", kind="unknown", options=[]))
-            if resolved is not None:
-                needed_fields.append(("Expected CTC", resolved.value))
-
-        # 6. Total Experience
-        if any(k in norm_text for k in ["total experience", "overall experience", "total exp", "years of experience"]):
-            resolved = self.answers.resolve(ScreeningQuestion(text="total experience", kind="unknown", options=[]))
-            if resolved is not None:
-                needed_fields.append(("Total Experience", resolved.value))
-
-        # 7. Relevant / Specific Skill Experience
-        for skill in ["python", "fastapi", "ai", "llm", "rag", "react", "node", "typescript", "full stack"]:
-            if f"experience in {skill}" in norm_text or f"{skill} experience" in norm_text:
-                resolved = self.answers.resolve(ScreeningQuestion(text=f"experience in {skill}", kind="unknown", options=[]))
-                if resolved:
-                    needed_fields.append((f"Experience with {skill.title()}", f"{resolved.value} years"))
-
-        # 8. Location / Relocation / Hybrid
-        if any(k in norm_text for k in ["current location", "where are you based", "relocate", "relocation", "wfo", "work from office", "hybrid"]):
-            resolved = self.answers.resolve(
-                ScreeningQuestion(text=text[:250], kind="unknown", options=[])
-            )
-            if resolved is not None:
-                needed_fields.append(("Location / Availability", resolved.value))
-
-        if not needed_fields:
-            single_res = self.answers.resolve(ScreeningQuestion(text=text[:250], kind="unknown", options=[]))
-            if single_res:
-                return single_res.value
-            return None
-
-        # Format structured reply
-        reply_lines = ["Hi,\n\nPlease find the requested details below:"]
-        for key, val in needed_fields:
-            reply_lines.append(f"• {key}: {val}")
-        reply_lines.append(f"\nPlease let me know if you need any additional information.\n\nBest regards,\n{(cfg.applicant_name or '').strip() or 'Applicant'}")
-        return "\n".join(reply_lines)
-
     async def run(self) -> tuple[bool, int, str]:
         """Returns (success, questions_answered, error_message)."""
         answered = 0
-        last_question = ""
-        stagnant_rounds = 0
         self.unanswered = []
+        receipt_selectors = [
+            ":is(:text-is('Questionnaire submitted!'), :text-is('Your response has been recorded'))",
+        ]
 
-        for _ in range(self.max_questions):
+        for attempt in range(self.max_questions):
             await human_pause(1200, 2000)
 
             # Phase 1: Cutshort Form-based Questionnaires (Textareas + Fieldset Radios)
             form_loc = self.page.locator("form:has(fieldset), form:has(textarea), form:has(button[type='submit'])").first
             form_present = await form_loc.count() > 0 and await form_loc.is_visible()
+            receipt_scope = form_loc if form_present else self.page
+            if await first_visible(receipt_scope, receipt_selectors, timeout_ms=600) is not None:
+                return True, answered, ""
 
             # 1A0. DATE inputs (run 642: notice-period end date rendered as
             # input[type=date] or a dd-mm-yyyy text input). Must run before
@@ -1117,130 +1046,58 @@ class CutshortChatbot:
                     log.warning("cutshort.chatbot.audio_picker_failed", error=str(exc))
 
             if form_present or fieldsets or audio_btn:
-                if not self.allow_submit:
-                    # Pre-Send answer-only mode (run-655): the caller owns
-                    # the application Send click. Returning without
-                    # submitting keeps the questionnaire answers in the
-                    # modal's React state and avoids a double-send.
-                    log.info(
-                        "cutshort.chatbot.submit_deferred_to_caller",
-                        answered=answered,
-                    )
-                    return True, answered, ""
+                if self.unanswered:
+                    return False, answered, "Questionnaire has unresolved answers"
+                empty_required = await self._count_empty_required()
+                if empty_required:
+                    return False, answered, f"{empty_required} required input(s) still empty before submit"
                 submit_btn = await first_visible(
-                    self.page,
+                    form_loc if form_present else self.page,
                     [
-                        "form button[type='submit']",
-                        "form button:has-text('Submit')",
-                        "button:has-text('Submit')",
-                        "button:has-text('Send response')",
-                        "button:has-text('Confirm')",
-                        "button[type='submit']",
+                        "button[type='submit']:text-is('Submit')",
+                        "button:text-is('Submit')",
+                        "button:text-is('Send response')",
                     ],
                     timeout_ms=2500,
                 )
-                if submit_btn:
-                    try:
-                        await human_pause(800, 1200)
-                        await submit_btn.scroll_into_view_if_needed()
+                if submit_btn is None:
+                    return False, answered, "Questionnaire submit control unavailable"
+                try:
+                    valid = await submit_btn.evaluate("el => el.form ? el.form.checkValidity() : true")
+                    if valid is False:
+                        return False, answered, "Questionnaire has invalid or empty required fields"
+                    await submit_btn.click(timeout=3000)
+                except Exception as exc:
+                    log.warning("cutshort.chatbot.submit_failed", error=str(exc)[:120])
+                    return False, answered, "Questionnaire submit click could not be verified"
+
+                log.info("cutshort.chatbot.submit_clicked", answered=answered)
+                if form_present:
+                    confirmation = await first_visible(
+                        form_loc,
+                        [":text-is('Responses cannot be changed after submission. Are you sure?')"],
+                        timeout_ms=3000,
+                    )
+                    if confirmation is not None:
+                        yes = await first_visible(
+                            form_loc, ["button[type='submit']:text-is('Yes')"], timeout_ms=1500,
+                        )
+                        if yes is None:
+                            return False, answered, "Questionnaire confirmation button unavailable"
                         try:
-                            await submit_btn.click(force=True, timeout=1500)
-                        except Exception:
-                            await submit_btn.evaluate("el => el.click()")
-                        try:
-                            await self.page.evaluate("() => { const f = document.querySelector('form'); if(f) f.requestSubmit(); }")
-                        except Exception:
-                            pass
-                        log.info("cutshort.chatbot.submitted_form", answered=answered)
-
-                        # Await form submission completion & response recording
-                        await human_pause(2500, 4000)
-                        confirm_marker = await first_visible(
-                            self.page,
-                            [
-                                "text=Application sent",
-                                "text=successfully applied",
-                                "text=Applied successfully",
-                                "text=Your response has been recorded",
-                                "text=Thanks for your response",
-                            ],
-                            timeout_ms=3000,
-                        )
-                        # Stall hardening (run 644): a conditional required
-                        # question revealed right before submit can leave
-                        # required inputs empty while the page still shows
-                        # no error? No — the reverse: the form never leaves.
-                        # If it's still on screen with empty required
-                        # fields, the submission was rejected client-side.
-                        # Native radios report a non-empty input_value()
-                        # even unchecked (the hidden <option>), so they are
-                        # excluded; a real empty state on radiogroups shows
-                        # through the aria pattern instead.
-                        empty_required = await self._count_empty_required()
-                        if empty_required > 0:
-                            log.warning(
-                                "cutshort.chatbot.submit_blocked_required",
-                                empty_required=empty_required,
-                            )
-                            return False, answered, (
-                                f"{empty_required} required input(s) still empty after submit"
-                            )
-                        # Landing hardening (live ground truth 2026-11-01):
-                        # clicking submit is NOT proof the application landed.
-                        # Run 644 and its validation probe both recorded
-                        # success=True, answered=3, error="" while the job
-                        # page still showed "Apply to this job" and no
-                        # conversation thread existed — the questionnaire had
-                        # been ANSWERED but the POST never landed. Fail closed
-                        # unless an explicit confirmation shows up or the
-                        # questionnaire form actually disappears.
-                        _cb_form_gone = not await first_visible(
-                            self.page,
-                            [
-                                "form:has(fieldset)",
-                                "form:has(textarea)",
-                                "form:has(button[type='submit'])",
-                            ],
-                            timeout_ms=1500,
-                        )
-                        log.info(
-                            "cutshort.chatbot.submit_verification",
-                            confirm=bool(confirm_marker),
-                            form_gone=_cb_form_gone,
-                        )
-                        if not (confirm_marker or _cb_form_gone):
-                            log.warning("cutshort.chatbot.submit_unconfirmed")
-                            return False, answered, (
-                                "submit unconfirmed: questionnaire still visible "
-                                "after click, no confirmation marker"
-                            )
-                        return True, max(answered, 1), ""
-                    except Exception as exc:
-                        log.error("cutshort.chatbot.submit_failed", error=str(exc))
-                else:
-                    # If fieldsets or form is present, but no submit button exists,
-                    # this form was already submitted or is read-only. Avoid looping in vain.
-                    log.info("cutshort.chatbot.form_already_completed", answered=answered)
-                    return True, answered, "Form already submitted / read-only"
-
-            # Check if chat is already complete
-            if await first_visible(
-                self.page, [
-                    "text=Application sent",
-                    "text=successfully applied",
-                    "text=Applied successfully",
-                    "text=Your response has been recorded",
-                ],
-                timeout_ms=1000
-            ):
-                return True, answered, ""
-
-            # Phase 2: Check for Quick-Reply Chips / Buttons on the screen
-            chips = await self.page.locator(
-                "button.chip, div[class*='quick-reply'], button[class*='option'], "
-                "button[class*='choice'], button[class*='pill'], button[class*='btn-reply'], "
-                "div[class*='Chip'], button[class*='Chip']"
-            ).all()
+                            await yes.click(timeout=3000)
+                        except Exception as exc:
+                            log.warning("cutshort.chatbot.confirm_click_uncertain", error=str(exc)[:120])
+                confirm_marker = await first_visible(
+                    self.page,
+                    receipt_selectors,
+                    timeout_ms=15000,
+                )
+                if confirm_marker is not None:
+                    log.info("cutshort.chatbot.submitted_form", answered=answered)
+                    return True, answered, ""
+                log.warning("cutshort.chatbot.submit_unconfirmed")
+                return False, answered, "submit unconfirmed: no questionnaire receipt observed"
 
             # Find incoming recruiter bubbles (excluding candidate's own pitch)
             incoming_bubbles = await self.page.locator(
@@ -1264,155 +1121,14 @@ class CutshortChatbot:
                 recruiter_text = b_text
                 break
 
-            if not recruiter_text and not chips and not fieldsets:
-                stagnant_rounds += 1
-                if stagnant_rounds > 2:
-                    break
+            if not recruiter_text and attempt < min(2, self.max_questions - 1):
                 continue
+            if "?" in recruiter_text:
+                self._queue_unanswered(recruiter_text, "text", [])
+                return False, answered, "Recruiter question needs review"
+            return True, answered, ""
 
-            if recruiter_text == last_question and not chips and not fieldsets:
-                stagnant_rounds += 1
-                if stagnant_rounds > 2:
-                    return False, answered, "Questionnaire stalled without a completion marker"
-                continue
-
-            last_question = recruiter_text
-            stagnant_rounds = 0
-            answered_successfully = False
-
-            # Step 1: If interactive option chips / choice buttons are present
-            if chips:
-                chip_options: list[str] = []
-                for chip in chips:
-                    txt = (await safe_text(chip)).strip()
-                    if txt:
-                        chip_options.append(txt)
-
-                prompt_text = recruiter_text or "screening question"
-                resolved = self.answers.resolve(ScreeningQuestion(text=prompt_text, kind="radio", options=chip_options))
-                target_val = resolved.value if resolved else ""
-
-                for chip in chips:
-                    chip_text = (await safe_text(chip)).strip()
-                    if target_val and (self._match_chip(chip_text, target_val) or chip_text.lower() == target_val.lower()):
-                        await chip.click()
-                        await human_pause(800, 1500)
-                        answered_successfully = True
-                        answered += 1
-                        break
-
-                if answered_successfully:
-                    submit_btn = await first_visible(
-                        self.page,
-                        [
-                            "button:has-text('Submit')",
-                            "button:has-text('Send')",
-                            "button:has-text('Confirm')",
-                            "button:has-text('Next')",
-                            "button:has-text('Save')",
-                            "button[type='submit']",
-                        ],
-                        timeout_ms=1000
-                    )
-                    if submit_btn:
-                        try:
-                            await submit_btn.click()
-                            await human_pause(800, 1500)
-                        except Exception:
-                            pass
-
-            # Step 2: Handle single in-chat text inputs for specific questions
-            if not answered_successfully:
-                chat_inputs = await self.page.locator("div[class*='chat'] input[type='text'], div[class*='message'] input[type='text'], div[class*='questionnaire'] input").all()
-                for inp in chat_inputs:
-                    if await inp.is_visible():
-                        placeholder = (await inp.get_attribute("placeholder") or "").lower()
-                        name_attr = (await inp.get_attribute("name") or "").lower()
-                        combined = f"{placeholder} {name_attr} {recruiter_text}".lower()
-                        ans_val = None
-                        if any(k in combined for k in ["phone", "mobile", "contact", "whatsapp"]):
-                            ans_val = (AgentConfig.load().applicant_phone or "").strip()
-                        elif any(k in combined for k in ["email", "mail id"]):
-                            ans_val = (AgentConfig.load().applicant_email or "").strip()
-                        elif any(k in combined for k in ["notice", "how soon", "when can you join", "lwd"]):
-                            notice_res = self.answers.resolve(ScreeningQuestion(text="notice period", kind="text", options=[]))
-                            ans_val = notice_res.value if notice_res and notice_res.value else None
-                        elif any(k in combined for k in ["expected ctc", "ectc"]):
-                            exp_res = self.answers.resolve(ScreeningQuestion(text="expected ctc", kind="text", options=[]))
-                            ans_val = exp_res.value if exp_res and exp_res.value else None
-                        elif any(k in combined for k in ["current ctc", "cctc"]):
-                            cur_res = self.answers.resolve(ScreeningQuestion(text="current ctc", kind="text", options=[]))
-                            ans_val = cur_res.value if cur_res and cur_res.value else None
-                        else:
-                            resolved = self.answers.resolve(ScreeningQuestion(text=f"{placeholder} {recruiter_text}", kind="text", options=[]))
-                            if resolved:
-                                ans_val = resolved.value
-
-                        if ans_val:
-                            await human_type(inp, ans_val)
-                            await human_pause(300, 600)
-                            answered_successfully = True
-                            answered += 1
-
-                if answered_successfully:
-                    submit_btn = await first_visible(
-                        self.page,
-                        ["button:has-text('Submit')", "button:has-text('Send')", "button:has-text('Confirm')"],
-                        timeout_ms=1000
-                    )
-                    if submit_btn:
-                        try:
-                            await submit_btn.click()
-                            await human_pause(800, 1500)
-                        except Exception:
-                            pass
-
-            # Step 3: Handle direct chat textarea / input box for recruiter messages
-            text_input = await first_visible(
-                self.page,
-                [
-                    "textarea[name='message']",
-                    "textarea[placeholder*='message' i]",
-                    "textarea[placeholder*='reply' i]",
-                    "textarea",
-                    "input[type='text'][placeholder*='message' i]",
-                    "div[contenteditable='true']",
-                ],
-                timeout_ms=1500
-            )
-
-            if not answered_successfully and (recruiter_text or text_input):
-                composite_reply = self._extract_composite_answers(recruiter_text or "recruiter message")
-                if not composite_reply and recruiter_text:
-                    single_res = self.answers.resolve(ScreeningQuestion(text=recruiter_text, kind="text", options=[]))
-                    if single_res:
-                        composite_reply = single_res.value
-
-                if composite_reply and text_input:
-                    await human_type(text_input, composite_reply)
-                    await human_pause(400, 800)
-                    send_btn = await first_visible(
-                        self.page,
-                        [
-                            "button:has-text('Send')",
-                            "button[aria-label='Send']",
-                            "button[class*='send' i]",
-                            "button[type='submit']",
-                        ],
-                        timeout_ms=1500
-                    )
-                    if send_btn:
-                        await send_btn.click()
-                    else:
-                        await text_input.press("Enter")
-                    await human_pause(1000, 2000)
-                    answered_successfully = True
-                    answered += 1
-
-            if not answered_successfully and not fieldsets:
-                return False, answered, f"Could not answer recruiter message: {recruiter_text[:80]}"
-
-        return True, answered, ""
+        return False, answered, "Cutshort chat ended without a completion receipt"
 
 def _parse_cutshort_salary(text: str) -> tuple[float | None, float | None]:
     if not text:
@@ -2111,6 +1827,69 @@ class CutshortPlatform(BaseJobPlatform):
         )
         return widget is not None
 
+    async def _capture_job_conversation(self, job_url: str) -> str | None:
+        """Capture a View conversation link attached to this exact listing."""
+        try:
+            return await self.page.evaluate(
+                """(jobUrl) => {
+                    const exact = new URL(jobUrl).pathname.replace(/[/]$/, '');
+                    for (const link of document.querySelectorAll('a[href*="thread="]')) {
+                        if (!link.getClientRects().length || link.innerText.trim() !== 'View conversation') continue;
+                        for (let node = link.parentElement; node && node !== document.body; node = node.parentElement) {
+                            const jobs = [...node.querySelectorAll('a[href*="/job/"]')]
+                                .map(a => new URL(a.href).pathname.replace(/[/]$/, ''));
+                            if (!jobs.length) continue;
+                            if (jobs.every(path => path === exact)) return link.href;
+                            break;
+                        }
+                    }
+                    // A dedicated listing can omit a self-link. Its candidate
+                    // conversation still has to link back to this exact job.
+                    if (location.pathname.replace(/[/]$/, '') === exact) {
+                        const links = [...document.querySelectorAll('a[href*="thread="]')]
+                            .filter(a => a.getClientRects().length && a.innerText.trim() === 'View conversation');
+                        if (links.length === 1) return links[0].href;
+                    }
+                    return null;
+                }""",
+                job_url,
+            )
+        except Exception:
+            return None
+
+    async def _verify_job_conversation(self, conversation_url: str, job_url: str) -> bool:
+        """Open the captured thread read-only and verify its own job link."""
+        conversation = urlsplit(conversation_url)
+        thread_id = parse_qs(conversation.query).get("thread", [])
+        paths = {"/profile/conversations/candidate", "/profile/candidate-conversations"}
+        if conversation.hostname not in {"cutshort.io", "www.cutshort.io"} or conversation.path not in paths or len(thread_id) != 1:
+            return False
+        thread_page = await self.page.context.new_page()
+        try:
+            await thread_page.goto(conversation_url, wait_until="domcontentloaded", timeout=20000)
+            current = urlsplit(thread_page.url)
+            if (
+                current.hostname != conversation.hostname or current.path not in paths
+                or parse_qs(current.query).get("thread", []) != thread_id
+            ):
+                return False
+            link = await first_visible(
+                thread_page, ["a:text-is('View full job description')"], timeout_ms=7000,
+            )
+            href = await link.get_attribute("href") if link is not None else None
+            if not href:
+                return False
+            linked_job = urlsplit(urljoin(thread_page.url, href))
+            target_job = urlsplit(job_url)
+            return (
+                linked_job.hostname == target_job.hostname
+                and linked_job.path.rstrip("/") == target_job.path.rstrip("/")
+            )
+        except Exception:
+            return False
+        finally:
+            await thread_page.close()
+
     async def apply_to_job(
         self,
         job: Job,
@@ -2144,50 +1923,52 @@ class CutshortPlatform(BaseJobPlatform):
 
         modal = None
 
-        # 2. Try locating the job card in the current feed
-        anchor = await first_visible(self.page, [f"a[href*='{raw_id}']"], timeout_ms=2000)
-        if not anchor and job.recommendation_position:
+        if pre_submit_check is not None:
+            target = urlsplit(job.url)
+            if target.hostname not in {"cutshort.io", "www.cutshort.io"} or not target.path.startswith("/job/"):
+                return ApplyOutcome(ApplicationStatus.FAILED, detail="Cutshort target listing URL is unavailable")
+            detail_page = await self.page.context.new_page()
             try:
-                all_links = self.page.locator("a[href*='/job/']")
-                pos = job.recommendation_position - 1
-                if pos < await all_links.count():
-                    candidate_link = all_links.nth(pos)
-                    if raw_id in ((await candidate_link.get_attribute("href")) or ""):
-                        anchor = candidate_link
-            except Exception:
-                pass
+                await detail_page.goto(job.url, wait_until="domcontentloaded", timeout=20000)
+                current = urlsplit(detail_page.url)
+                if (current.hostname, current.path.rstrip("/")) != (target.hostname, target.path.rstrip("/")):
+                    return ApplyOutcome(ApplicationStatus.FAILED, detail="Cutshort redirected away from the target listing")
+                description = await first_visible(
+                    detail_page,
+                    ["div.prose", "[data-testid='job-description']"],
+                    timeout_ms=7000,
+                )
+                job_description = (await description.inner_text(timeout=2000)).strip() if description is not None else ""
+                if not job_description:
+                    return ApplyOutcome(ApplicationStatus.FAILED, detail="Cutshort job description did not load before the pre-submit check")
+                job.description = job_description
+                minimum, maximum = extract_jd_experience(job_description)
+                if minimum is not None:
+                    job.min_experience, job.max_experience = minimum, maximum
+                    job.experience_imputed = False
+                decision = pre_submit_check(job)
+                if not decision.passed:
+                    return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
+            except Exception as exc:
+                return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Cutshort job detail check failed: {str(exc)[:150]}")
+            finally:
+                await detail_page.close()
+
+        # Match the exact listing within the feed, including on a redirect.
+        card_anchor = f"a:is([href$='/{raw_id}'], [href*='/{raw_id}?'], [href*='-{raw_id}?'], [href$='-{raw_id}'])"
+        card_ancestor = (
+            "xpath=ancestor::div[descendant::button[normalize-space(.)='Apply now'"
+            " or normalize-space(.)='Apply to this job' or normalize-space(.)='Applied']"
+            " or descendant::a[normalize-space(.)='View conversation']][1]"
+        )
+        anchor = await first_visible(self.page, [card_anchor], timeout_ms=2000)
 
         if anchor:
-            card = anchor.locator(
-                "xpath=ancestor::div[descendant::button[contains(normalize-space(.),'Apply')"
-                " or contains(normalize-space(.),'Interested')"
-                " or contains(normalize-space(.),'Applied')]"
-                " or descendant::a[contains(normalize-space(.),'View conversation')]][1]"
-            ).first
+            card = anchor.locator(card_ancestor).first
             if await card.count() > 0:
-                if pre_submit_check:
-                    decision = pre_submit_check(job)
-                    if not decision.passed:
-                        not_interested = await first_visible(card, ["button:has-text('Not interested')", "a:has-text('Not interested')"])
-                        if not_interested:
-                            try:
-                                await not_interested.click()
-                                await human_pause(500, 1000)
-                            except Exception:
-                                pass
-                        return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
-
                 apply_btn = await first_visible(
                     card,
-                    [
-                        "button:has-text('Apply now')",
-                        "button:has-text('Apply to this job')",
-                        "button[label*='Apply to this job']",
-                        "button:has-text('Apply')",
-                        "button[label*='Apply']",
-                        "button:has-text('Interested')",
-                        "button[label*='Interested']",
-                    ],
+                    ["button:text-is('Apply now')", "button:text-is('Apply to this job')"],
                     timeout_ms=2500,
                 )
                 if not apply_btn and await first_visible(card, ["button:has-text('Applied')", "a:has-text('View conversation')", "button:has-text('View conversation')"]):
@@ -2237,11 +2018,6 @@ class CutshortPlatform(BaseJobPlatform):
             except Exception as exc:
                 return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Failed to load job page: {str(exc)[:150]}")
 
-            if pre_submit_check:
-                decision = pre_submit_check(job)
-                if not decision.passed:
-                    return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
-
             # Check for Already Applied on dedicated job page
             already_applied_marker = await first_visible(
                 self.page,
@@ -2282,10 +2058,8 @@ class CutshortPlatform(BaseJobPlatform):
             target_btn = await first_visible(
                 self.page,
                 [
-                    "button:has-text('Apply to this job')",
-                    "a:has-text('Apply to this job')",
-                    "button:has-text('Apply now')",
-                    "button:has-text('Apply')",
+                    "button:text-is('Apply to this job')",
+                    "a:text-is('Apply to this job')",
                 ],
                 timeout_ms=3000,
             )
@@ -2322,29 +2096,17 @@ class CutshortPlatform(BaseJobPlatform):
             # Step 3B: Only if modal did NOT appear and the page redirected to /profile/all-jobs?jobid=...
             # check the feed card and click its 'Apply now' button
             if not modal and "/profile/all-jobs" in self.page.url:
-                feed_apply = await first_visible(
-                    self.page,
-                    [
-                        "button:has-text('Apply now')",
-                        "button:has-text('Apply to this job')",
-                        "button[label*='Apply to this job']",
-                    ],
-                    timeout_ms=3000,
-                )
-                if not feed_apply:
-                    feed_already = await first_visible(
-                        self.page,
-                        [
-                            "button:has-text('Applied')",
-                            "a:has-text('View conversation')",
-                            "button:has-text('View conversation')",
-                            "text=Already applied",
-                        ],
-                        timeout_ms=1500,
+                redirect_anchor = await first_visible(self.page, [card_anchor], timeout_ms=3000)
+                feed_apply = None
+                if redirect_anchor is not None:
+                    card = redirect_anchor.locator(card_ancestor).first
+                    feed_apply = await first_visible(
+                        card,
+                        ["button:text-is('Apply now')", "button:text-is('Apply to this job')"],
+                        timeout_ms=3000,
                     )
-                    if feed_already:
-                        log.info("cutshort.apply.already_applied_on_feed_redirect", job_id=job.job_id)
-                        return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+                if feed_apply is None and await self._capture_job_conversation(job.url):
+                    return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
 
                 if feed_apply:
                     try:
@@ -2376,50 +2138,28 @@ class CutshortPlatform(BaseJobPlatform):
 
         modal_text = (await safe_text(modal)).strip() if modal else ""
 
-        # Dynamic Per-Job Resume Selection based on job engineering track.
-        # Track mapping is config-driven and lives in the module-level
-        # `_track_resume_for` helper (shared with the chatbot's file uploads).
-        _resume_path, _target_track = _track_resume_for(job, modal_text)
-        resume_path = _resume_path
-        target_track = _target_track or "Full Stack Engineer"
-        if resume_path is not None:
-            if resume_path.exists():
-                target_stem = resume_path.stem.lower()
-                current_resume_text = (await safe_text(modal)).lower() if modal else ""
-                if target_stem not in current_resume_text:
-                    upload_btn = await first_visible(
-                        modal or self.page,
-                        [
-                            "div:has-text('Upload another resume')",
-                            "button:has-text('Upload another resume')",
-                            "span:has-text('Upload another resume')",
-                            "a:has-text('Upload another resume')",
-                        ],
-                        timeout_ms=1500,
-                    )
-                    if upload_btn:
-                        try:
-                            await upload_btn.click(timeout=1500)
-                            await human_pause(500, 1000)
-                        except Exception:
-                            pass
-                        file_input = await first_visible(self.page, ["input[type='file']"], timeout_ms=1500)
-                        if file_input:
-                            await file_input.set_input_files(str(resume_path))
-                            await human_pause(1000, 2000)
-                            log.info(
-                                "cutshort.apply.dynamic_resume_selected",
-                                job_id=job.job_id,
-                                track=target_track,
-                                resume=str(resume_path.name),
-                            )
-                else:
-                    log.info(
-                        "cutshort.apply.resume_already_matched",
-                        job_id=job.job_id,
-                        track=target_track,
-                        resume=str(resume_path.name),
-                    )
+        title = re.escape(" ".join(job.title.split()))
+        company = re.escape(" ".join(job.company.split()))
+        heading = re.compile(rf"^You are applying for {title} at {company}$", re.IGNORECASE)
+        modal_matches_job = modal is not None and await modal.get_by_text(heading).first.is_visible()
+
+        resume_path, target_track = _track_resume_for(job, modal_text)
+        resume_verified = resume_path is None
+        if modal_matches_job and resume_path is not None and resume_path.is_file():
+            # Cutshort displays the filename stem, optionally with its upload ID.
+            filename = re.escape(resume_path.stem)
+            selected_resume = modal.get_by_text(
+                re.compile(rf"^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$", re.IGNORECASE)
+            ).first
+            try:
+                if not await selected_resume.is_visible():
+                    upload = modal.get_by_text("Upload another resume", exact=True)
+                    await upload.click(timeout=2500)
+                    await modal.locator("input[type='file']").set_input_files(str(resume_path), timeout=3000)
+                await selected_resume.wait_for(state="visible", timeout=5000)
+                resume_verified = True
+            except Exception as exc:
+                log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)
@@ -2431,14 +2171,7 @@ class CutshortPlatform(BaseJobPlatform):
                 recruiter_name = full_name
 
         actual_title = job.title
-        title_match = re.search(r"applying for\s+([^\n]+?)\s+at\s+", modal_text, re.IGNORECASE)
-        if title_match:
-            actual_title = title_match.group(1).strip()
-
         actual_company = job.company
-        company_match = re.search(r"\s+at\s+([^\n]+?)(?:\s+To\s+|$)", modal_text, re.IGNORECASE)
-        if company_match:
-            actual_company = company_match.group(1).strip()
 
         # Clean formal entity suffixes (Private Limited, Pvt Ltd, LLP, Inc, etc.)
         clean_company = re.sub(
@@ -2536,18 +2269,17 @@ class CutshortPlatform(BaseJobPlatform):
         )
         if who.experience_label:
             intro_line = (
-                f"With {who.experience_label} of hands-on experience in {key_tech_stack}, "
-                f"I specialize in building {core_specialty}{proof_clause}"
+                f"I have {who.experience_label} of experience. "
+                f"My focus is building {core_specialty}{proof_clause}"
             )
         else:
             intro_line = f"I specialize in building {core_specialty}{proof_clause}"
         availability_line = (
-            "My technical stack aligns closely with your requirements. "
-            f"Notice period: {who.notice_label}."
+            f"I’m interested in work involving {key_tech_stack}. Notice period: {who.notice_label}."
             if who.notice_label
-            else "My technical stack aligns closely with your requirements."
+            else f"I’m interested in work involving {key_tech_stack}."
         )
-        if textarea:
+        if modal_matches_job and textarea:
             pitch = (
                 f"Hi {recruiter_name},\n\n"
                 f"I noticed the {actual_title} opening at {clean_company} and wanted to reach out directly.\n\n"
@@ -2625,266 +2357,93 @@ class CutshortPlatform(BaseJobPlatform):
             await textarea.dispatch_event("change")
             await human_pause(300, 600)
 
-        send_btn = await first_visible(
-            modal_scope,
-            [
-                "button:has-text('Send')",
-                "button[type='submit']",
-                "button:has-text('Submit')",
-                "button:has-text('Apply')",
-                "button:has-text('Send application')",
-                "button:has-text('Submit application')",
-                "button:has-text('Confirm & Send')",
-            ],
-            timeout_ms=2500,
-        )
+        send_btn = None
+        if modal_matches_job and resume_verified and textarea is not None:
+            send_btn = await first_visible(modal, ["button:text-is('Send')"], timeout_ms=2500)
 
-        # Run-655 instrumentation: run-652/654 burned 10 eligible jobs with
-        # a phantom Send click — every post-reload dump showed a plain apply
-        # CTA and zero in-modal questionnaire logs, which supports the
-        # hypothesis that the pitch modal carries its screening questionnaire
-        # in the SAME modal, BEFORE Send (Send gated on answered controls).
-        # Ground the click in evidence and, if such controls exist, answer
-        # them first via an answer-only chatbot whose submit is deferred to
-        # this caller (the Send click below stays the single mutation).
-        pre_send_answered = 0
         submission_attempted = False
-        if send_btn:
+        conversation_url = None
+        if send_btn is not None:
             self.require_mutation("application.final_submit")
+            prior_conversation = await self._capture_job_conversation(job.url)
+            if prior_conversation:
+                return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+
             try:
-                _send_text = await safe_text(send_btn)
-            except Exception:
-                _send_text = ""
-            _pre_q = await first_visible(
-                modal_scope,
-                ["fieldset", "div[class*='quick-reply']", "button.chip"],
-                timeout_ms=1200,
-            )
-            _before_path = ""
-            try:
-                _before_dump = self.artifacts.dir / f"cutshort-pitch-before-send-{raw_id}.html"
-                _before_dump.write_text(await self.page.content(), encoding="utf-8")
-                _before_path = str(_before_dump)
+                before = self.artifacts.dir / f"cutshort-pitch-before-send-{raw_id}.html"
+                before.write_text(await self.page.content(), encoding="utf-8")
             except Exception:
                 pass
-            log.info(
-                "cutshort.apply.send_context",
-                job_id=job.job_id,
-                send_text=_send_text,
-                has_textarea=bool(textarea),
-                pre_send_questionnaire=bool(_pre_q),
-                before_dump=_before_path,
-            )
-            if _pre_q:
-                log.info(
-                    "cutshort.apply.pre_send_questionnaire_detected",
-                    job_id=job.job_id,
-                )
-                # The in-modal questionnaire may carry its own file upload
-                # (run 642): pre-resolve this job's track resume and hand
-                # it to the chatbot, which otherwise fails closed.
-                _pre_resume, _ = _track_resume_for(job, modal_text)
-                pre_chatbot = CutshortChatbot(
-                    self.page,
-                    self.answers,
-                    resume_path=_pre_resume if (_pre_resume and _pre_resume.exists()) else None,
-                    allow_submit=False,
-                )
-                _pre_ok, pre_send_answered, _pre_err = await pre_chatbot.run()
-                await human_pause(800, 1500)
-                log.info(
-                    "cutshort.apply.pre_send_questionnaire_result",
-                    job_id=job.job_id,
-                    success=_pre_ok,
-                    answered=pre_send_answered,
-                    error=_pre_err or "",
-                )
-                # Unanswered questions stay on the chatbot instance and are
-                # not drained here (same as the post-Send invocation); the
-                # Send click still happens — the reload gate owns the verdict.
-            try:
-                await send_btn.scroll_into_view_if_needed(timeout=1000)
-            except Exception:
-                pass
-            try:
-                await send_btn.click(timeout=3000)
-            except Exception:
-                await send_btn.evaluate("el => el.click()")
-            await human_pause(1500, 2500)
+
             submission_attempted = True
-            # Immediately after the click: probe the modal for confirmation
-            # markers and a follow-up questionnaire, then dump — this is the
-            # only chance to record the modal's reaction before it (or the
-            # page) changes; run-654 had no such evidence at all.
-            _post_confirm = await first_visible(
-                self.page,
-                [
-                    "text=Application sent",
-                    "text=successfully applied",
-                    "text=Employer will review",
-                    "text=Thanks for your response",
-                    "text=Message sent",
-                ],
-                timeout_ms=1200,
-            )
-            _post_q = await first_visible(
-                self.page,
-                ["fieldset", "div[class*='quick-reply']", "button.chip"],
-                timeout_ms=1200,
-            )
-            _after_path = ""
             try:
-                _after_dump = self.artifacts.dir / f"cutshort-pitch-after-send-{raw_id}.html"
-                _after_dump.write_text(await self.page.content(), encoding="utf-8")
-                _after_path = str(_after_dump)
-            except Exception:
-                pass
-            log.info(
-                "cutshort.apply.post_send_context",
-                job_id=job.job_id,
-                confirm_marker=bool(_post_confirm),
-                post_send_questionnaire=bool(_post_q),
-                after_dump=_after_path,
-            )
-        elif textarea:
-            # Typed pitch but no Send control — Enter may submit chat-style modals.
-            self.require_mutation("application.final_submit")
-            await textarea.press("Enter")
-            await human_pause(1500, 2500)
-            submission_attempted = True
-
-        chatbot_submitted = False
-        # Question count answered by the in-modal chatbot this turn. Live run
-        # 644-followup: the chatbot logs `answered=3` at submit but the outcome
-        # recorded q_ans=0, so genuine chatbot applications were indistinguish
-        # -able in the DB from the run-644 false-positive signature. Wired
-        # below so the outcome itself carries the evidence.
-        cb_answered = pre_send_answered
-        if submission_attempted:
-            # If an in-modal screening questionnaire/chatbot pops up immediately, answer it
-            # (run-655: window widened 1500→3000ms — a slightly slow modal
-            # render used to silence this branch entirely, as in run-654's
-            # zero chatbot logs).
-            if await first_visible(self.page, ["fieldset", "form:has(fieldset)", "div[class*='quick-reply']", "button.chip"], timeout_ms=3000):
-                log.info("cutshort.apply.in_modal_questionnaire_detected", job_id=job.job_id)
-                # The in-modal questionnaire may carry its own file upload
-                # (run 642): pre-resolve this job's track resume and hand it
-                # to the chatbot, which otherwise fails closed.
-                _cb_resume, _cb_track = _track_resume_for(job, modal_text)
-                chatbot = CutshortChatbot(
-                    self.page,
-                    self.answers,
-                    resume_path=_cb_resume if (_cb_resume and _cb_resume.exists()) else None,
-                )
-                cb_success, cb_answered, cb_error = await chatbot.run()
-                await human_pause(1000, 2000)
-                # A completed in-modal form submit (run(): return True,
-                # answered>=1, error="") is strong evidence the pitch WAS
-                # delivered — the questionnaire only exists post-submission.
-                # Run 641 was mislabeled "1 failed" because the delayed card
-                # re-render outran the 1.5s card_applied check while the
-                # chatbot result was silently discarded.
-                chatbot_submitted = bool(cb_success and cb_answered > 0 and not cb_error)
-                log.info(
-                    "cutshort.apply.chatbot_result",
-                    job_id=job.job_id,
-                    success=cb_success,
-                    answered=cb_answered,
-                    error=cb_error,
-                    confirms_submit=chatbot_submitted,
-                )
-
-        # Close modal if still open (keep the page clean for the next job)
-        close_btn = await first_visible(
-            self.page,
-            [
-                "div:has(img[src*='close.png'])",
-                "img[src*='close.png']",
-                "div[class*='close']",
-                "button[aria-label='Close']",
-                "button.close",
-                "span.close",
-            ],
-            timeout_ms=1000,
-        )
-        if close_btn:
-            try:
-                await close_btn.click(timeout=1000)
-                await human_pause(400, 800)
-            except Exception:
-                try:
-                    await close_btn.evaluate("el => el.click()")
-                except Exception:
-                    pass
-        else:
-            try:
-                await self.page.keyboard.press("Escape")
-                await human_pause(300, 500)
-            except Exception:
-                pass
-
-        # Clear any lingering backdrops
-        try:
-            await self.page.evaluate("() => { document.querySelectorAll('.modal-backdrop, [class*=\"backdrop\"]').forEach(e => e.remove()); }")
-        except Exception:
-            pass
-
-        landing_verified = False
-        if submission_attempted and job.url:
-            try:
-                target = urlsplit(job.url)
-                await self.page.goto(job.url, wait_until="domcontentloaded")
-                current = urlsplit(self.page.url)
-                if (
-                    target.hostname == current.hostname
-                    and target.path.startswith("/job/")
-                    and target.path.rstrip("/") == current.path.rstrip("/")
-                ):
-                    applied_markers = [
-                        "button:text-is('Applied')",
-                        "a:text-is('View conversation')",
-                        "button:text-is('View conversation')",
-                        "text=You have already applied",
-                    ]
-                    landing_verified = await first_visible(
-                        self.page, applied_markers, timeout_ms=7000,
-                    ) is not None
+                await send_btn.click(timeout=5000)
             except Exception as exc:
-                log.warning("cutshort.apply.landing_reload_failed", job_id=job.job_id, error=str(exc)[:120])
+                log.warning("cutshort.apply.send_click_uncertain", job_id=job.job_id, error=str(exc)[:120])
 
-        if landing_verified:
+            # Cutshort replaces the same card's actions with View conversation.
+            # The listing can disappear if reopened, so observe this page only.
+            for _ in range(12):
+                conversation_url = await self._capture_job_conversation(job.url)
+                if conversation_url:
+                    break
+                await human_pause(650, 900)
+
+            try:
+                after = self.artifacts.dir / f"cutshort-pitch-after-send-{raw_id}.html"
+                after.write_text(await self.page.content(), encoding="utf-8")
+            except Exception:
+                pass
+
+        confirmed = bool(conversation_url and await self._verify_job_conversation(conversation_url, job.url))
+        log.info(
+            "cutshort.apply.conversation_confirmation",
+            job_id=job.job_id,
+            link_seen=bool(conversation_url),
+            confirmed=confirmed,
+        )
+        if confirmed:
             outcome = ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 detail="Application confirmed",
-                questions_answered=cb_answered,
                 confirmation_type="dom_marker",
-                confirmation_evidence="Cutshort target job page shows applied state after navigation",
+                confirmation_evidence="New Cutshort View conversation links back to the exact job",
+            )
+        elif submission_attempted:
+            outcome = ApplyOutcome(
+                ApplicationStatus.FAILED,
+                reason=SkipReason.SUBMISSION_UNCONFIRMED,
+                detail="Cutshort Send attempted without a verified conversation for the exact job",
+            )
+        elif modal is not None and not modal_matches_job:
+            outcome = ApplyOutcome(
+                ApplicationStatus.FAILED,
+                detail=f"Cutshort pitch dialog did not identify {job.title} at {job.company}",
+            )
+        elif not resume_verified:
+            outcome = ApplyOutcome(
+                ApplicationStatus.FAILED,
+                detail=f"Cutshort could not verify the selected {target_track} résumé",
+            )
+        elif await self._cloudflare_wall(blocked=True):
+            outcome = ApplyOutcome(
+                ApplicationStatus.FAILED,
+                reason=SkipReason.CLOUDFLARE_CHALLENGE,
+                detail=f"Cloudflare challenge wall for {job.title} at {job.company}",
             )
         else:
-            # DUMP DOM for debugging
+            outcome = ApplyOutcome(
+                ApplicationStatus.FAILED,
+                detail=f"Cutshort pitch modal or Send button unavailable for {job.title} at {job.company}",
+            )
+
+        if not confirmed and modal is not None:
             try:
-                dump_path = self.artifacts.dir / f"cutshort-apply-failed-{raw_id}.html"
-                dump_path.write_text(await self.page.content(), encoding="utf-8")
-                log.info("cutshort.apply_failed_dump", path=str(dump_path))
+                cancel = await first_visible(modal, ["button:text-is('Cancel')"], timeout_ms=700)
+                if cancel is not None:
+                    await cancel.click(timeout=1000)
             except Exception:
                 pass
-            if await self._cloudflare_wall(blocked=True):
-                outcome = ApplyOutcome(
-                    ApplicationStatus.FAILED,
-                    reason=SkipReason.CLOUDFLARE_CHALLENGE,
-                    detail=f"Cloudflare challenge wall (no actionable modal) for {job.title} at {job.company}",
-                )
-            else:
-                stage = "send" if send_btn else ("textarea" if textarea else ("modal" if modal else "cta"))
-                try:
-                    _page_url = self.page.url[:120]
-                except Exception:
-                    _page_url = "<unknown>"
-                outcome = ApplyOutcome(
-                    ApplicationStatus.FAILED,
-                    reason=SkipReason.SUBMISSION_UNCONFIRMED if submission_attempted else None,
-                    detail=f"cutshort apply stalled at stage={stage} page_url={_page_url} (modal={bool(modal)}, textarea={bool(textarea)}, send={bool(send_btn)}) for {job.title} at {job.company}",
-                )
 
         # Always ensure browser returns cleanly to /profile/all-jobs feed for subsequent jobs
         if "/profile/all-jobs" not in self.page.url:
@@ -3003,7 +2562,7 @@ class CutshortPlatform(BaseJobPlatform):
         if success and answered > 0:
             log.info("cutshort.messages.success", thread=key[:60], answered=answered)
         elif not success:
-            log.debug("cutshort.messages.no_action_needed", thread=key[:60], reason=(error_msg or "")[:100])
+            log.warning("cutshort.messages.unconfirmed", thread=key[:60], reason=(error_msg or "")[:100])
         return list(chatbot.unanswered)
 
     async def _close_chat_overlay(self) -> None:

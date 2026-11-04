@@ -286,7 +286,7 @@ class Orchestrator:
             raise StopRun(f"run timeout of {self.config.run.run_timeout_minutes} minutes reached")
         if self.consecutive_failures >= self.config.run.max_consecutive_failures:
             raise StopRun(
-                f"{self.consecutive_failures} consecutive failures — aborting to avoid a ban"
+                f"{self.consecutive_failures} consecutive failures — stopping this platform"
             )
 
     def _check_platform_limits(self, platform_name: str) -> None:
@@ -518,6 +518,7 @@ class Orchestrator:
                             skipping=platform_specs[p_idx:],
                         )
                         self.stats.errors.append(f"run timeout reached before {p_name}")
+                        status = RunStatus.PARTIAL
                         break
 
                     # Primary goal is to complete applications: do not artificially strangle platforms with restrictive time slices.
@@ -547,7 +548,9 @@ class Orchestrator:
                         p_name,
                     )
                     if pause_reason:
-                        if self.headed:
+                        if self.dry_run and self.only_platform == p_name:
+                            log.info("platform.paused_dry_run_probe", platform=p_name, reason=pause_reason)
+                        elif self.headed:
                             log.warning("platform.paused_attempting_headed_recovery", platform=p_name, reason=pause_reason)
                         elif _should_retry_paused(
                             await self.repo.platform_pause_age_hours(self.account_key, p_name)
@@ -575,6 +578,7 @@ class Orchestrator:
                                 reason=pause_reason,
                             )
                             self.stats.errors.append(f"{p_name} skipped (paused: {pause_reason})")
+                            status = RunStatus.PARTIAL
                             continue
 
                     # Create dedicated, clean browser page for this platform to prevent session/modal bleed
@@ -642,7 +646,7 @@ class Orchestrator:
                             authenticated = False
                         self.metrics.login_s += time.perf_counter() - t_login_0
                         if not authenticated:
-                            if getattr(platform, "pause_on_login_failure", True):
+                            if not self.dry_run and getattr(platform, "pause_on_login_failure", True):
                                 await self.repo.pause_platform(
                                     self.account_key,
                                     platform.platform_name,
@@ -659,11 +663,12 @@ class Orchestrator:
                             self.stats.errors.append(
                                 f"{platform.platform_name} authentication was not confirmed — skipping platform"
                             )
+                            status = RunStatus.PARTIAL
                             continue
 
                         # Persist session cookies and unpause platform upon confirmed authentication
                         await browser.persist_session()
-                        if pause_reason:
+                        if pause_reason and not self.dry_run:
                             await self.repo.resume_platform(self.account_key, platform.platform_name)
                             log.info("platform.resumed_successfully", platform=platform.platform_name)
 
@@ -1479,6 +1484,7 @@ class Orchestrator:
         # from loop iterations: a job that raises out of `_process_job` may
         # already have been counted (or not), and only the counters know.
         accounted_before = self._accounted_jobs(platform.platform_name)
+        stopped = None
         try:
             for rjob in candidate_queue:
                 self._check_global_limits()
@@ -1600,6 +1606,8 @@ class Orchestrator:
                             log.info("job.home_walkin_notice_alert", title=job.title[:70], company=job.company)
         except _CapReached:
             pass
+        except StopRun as exc:
+            stopped = exc
         finally:
             self.metrics.total_apply_phase_s += time.perf_counter() - t_apply_loop_0
             accounted = self._accounted_jobs(platform.platform_name) - accounted_before
@@ -1612,10 +1620,14 @@ class Orchestrator:
         # this pass re-processes them deterministically instead of hoping.
         # Bounded (5 freshest, caps + pacing identical to the main loop) so
         # it can never eat the run; skipped entirely without side effects.
-        applied_this_profile += await self._retry_needs_review(
-            profile, platform, filters, page, artifacts,
-            applied_outcomes, failed_outcomes,
-        )
+        if stopped is None:
+            try:
+                applied_this_profile += await self._retry_needs_review(
+                    profile, platform, filters, page, artifacts,
+                    applied_outcomes, failed_outcomes,
+                )
+            except StopRun as exc:
+                stopped = exc
 
         # Step 7: Export Outcome Reports & Enriched Summary JSON
         duration = time.monotonic() - profile_start_time
@@ -1624,13 +1636,15 @@ class Orchestrator:
         exporter.export_summary_json(
             plan,
             applied_count=len(applied_outcomes),
-            failed_count=len(failed_outcomes),
+            failed_count=sum(outcome.status == ApplicationStatus.FAILED for _, outcome in failed_outcomes),
             profile_name=profile.name,
             dry_run=not self.policy.may_mutate,
             duration_seconds=duration,
             platform=platform.platform_name,
         )
         self.metrics.reporting_s += time.perf_counter() - t_exp_out_0
+        if stopped is not None:
+            raise stopped
         log.info("profile.done", profile=profile.name, applied=applied_this_profile)
 
     # ------------------------------------------------------------------ retry
@@ -1871,6 +1885,7 @@ class Orchestrator:
 
             if (
                 outcome.status == ApplicationStatus.FAILED
+                and outcome.reason != SkipReason.SUBMISSION_UNCONFIRMED
                 and logged_out_markers
                 and await first_visible(page, logged_out_markers, timeout_ms=2_000)
             ):
@@ -2015,6 +2030,7 @@ class Orchestrator:
                 title=job.title or "",
                 company=job.company or "",
                 outcome="failed",
+                filter_reason=outcome.reason.value if outcome.reason else "",
                 detail=(outcome.detail or "")[:200],
                 rank_score=rank_score,
             )
@@ -2106,24 +2122,6 @@ class Orchestrator:
                     title=job.title[:70],
                     detail=(outcome.detail or "")[:150],
                 )
-            for question in outcome.unanswered_questions:
-                if isinstance(question, dict):
-                    q_text = question.get("text", "")
-                    q_kind = question.get("kind", "unknown")
-                    q_opts = question.get("options", [])
-                else:
-                    q_text = getattr(question, "text", str(question))
-                    raw_kind = getattr(question, "kind", "unknown")
-                    q_kind = raw_kind.value if hasattr(raw_kind, "value") else str(raw_kind)
-                    q_opts = getattr(question, "options", [])
-                await self.repo.queue_question_for_review(
-                    profile=profile.name,
-                    question=q_text,
-                    kind=str(q_kind),
-                    options=q_opts,
-                    job_id=job.job_id,
-                    screenshot_path=outcome.screenshot_path,
-                )
         else:
             # Post-fetch skips (stale cards, company cap, repost collapse,
             # detail-stage filter fails): bucketed by platform so no outcome
@@ -2170,6 +2168,25 @@ class Orchestrator:
                     f"persistence unavailable ({self._persistence_failures} consecutive "
                     "record failures) — stopping blind run to protect dedupe state"
                 ) from exc
+
+        for question in outcome.unanswered_questions or []:
+            if isinstance(question, dict):
+                q_text = question.get("text", "")
+                q_kind = question.get("kind", "unknown")
+                q_opts = question.get("options", [])
+            else:
+                q_text = getattr(question, "text", str(question))
+                raw_kind = getattr(question, "kind", "unknown")
+                q_kind = raw_kind.value if hasattr(raw_kind, "value") else str(raw_kind)
+                q_opts = getattr(question, "options", [])
+            await self.repo.queue_question_for_review(
+                profile=profile.name,
+                question=q_text,
+                kind=str(q_kind),
+                options=q_opts,
+                job_id=job.job_id,
+                screenshot_path=outcome.screenshot_path,
+            )
 
         task = asyncio.create_task(self._dispatch_recruiter_emails(job, profile, outcome))
         self._background_tasks.add(task)

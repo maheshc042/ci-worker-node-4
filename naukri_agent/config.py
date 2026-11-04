@@ -1464,6 +1464,11 @@ class AgentConfig(_Model):
                         seen_inc.add(t)
                         combined_includes.append(t)
 
+        # Startup title variants verified against full application-engineering JDs.
+        for term in ("voice engineer", "ai deployment specialist"):
+            if term not in seen_inc:
+                combined_includes.append(term)
+
         # User-first policy: title allowlists come from the base profiles
         # (which explicitly want QA/testing roles). No per-platform QA strip
         # here — seniority is guarded by the experience gates, not the title
