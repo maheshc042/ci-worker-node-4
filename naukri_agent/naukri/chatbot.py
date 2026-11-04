@@ -723,18 +723,36 @@ class ChatbotHandler:
                     # No question and no completion banner: assume the drawer is
                     # done (Naukri closes it silently on the last answer).
                     still_open = await self.is_open(1_500)
-                    if not still_open and result.answered > 0:
-                        result.completed = True
+                    if not still_open:
+                        is_confirmed = False
+                        try:
+                            cur_url = str(getattr(self.page, "url", "") or "").lower()
+                            cur_title = ""
+                            try:
+                                t = self.page.title()
+                                cur_title = (await t if hasattr(t, "__await__") else str(t)).lower()
+                            except Exception:
+                                pass
+                            is_confirmed = (
+                                await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=800) is not None
+                                or await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=800) is not None
+                                or "applied" in cur_url
+                                or "confirmation" in cur_title
+                                or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
+                            )
+                        except Exception:
+                            is_confirmed = False
+                        if is_confirmed:
+                            result.completed = True
+                        elif result.answered > 0:
+                            result.completed = False
+                            log.info("chatbot.drawer_closed_unconfirmed", answered=result.answered)
+                        else:
+                            result.error = "drawer closed before any questions were answered"
+                            log.warning("chatbot.closed_without_answering")
                     elif still_open:
-                        # Drawer open with no detectable question: an unknown
-                        # widget, not a success. Label it loudly — the old
-                        # silent break surfaced downstream as a generic
-                        # "no submission confirmation" with no forensics.
                         result.error = "drawer open but no question detected after 3 checks (unknown widget)"
                         log.warning("chatbot.blind_exit_drawer_open")
-                    else:
-                        result.error = "drawer closed before any questions were answered"
-                        log.warning("chatbot.closed_without_answering")
                     break
                 continue
 
@@ -861,16 +879,25 @@ class ChatbotHandler:
             )
 
         if not result.completed and result.error is None:
-            is_confirmed = (
-                await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=1_500) is not None
-                or "applied" in self.page.url.lower()
-                or "confirmation" in (await self.page.title()).lower()
-                or await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0
-            )
-            # Drawer gone or confirmation page visible == Naukri accepted the application.
+            is_confirmed = False
+            try:
+                cur_url = str(getattr(self.page, "url", "") or "").lower()
+                cur_title = ""
+                try:
+                    t = self.page.title()
+                    cur_title = (await t if hasattr(t, "__await__") else str(t)).lower()
+                except Exception:
+                    pass
+                is_confirmed = (
+                    await first_visible(self.page, S.CHATBOT_COMPLETE, timeout_ms=1_000) is not None
+                    or await first_visible(self.page, S.APPLY_SUCCESS, timeout_ms=1_500) is not None
+                    or "applied" in cur_url
+                    or "confirmation" in cur_title
+                    or (hasattr(self.page, "locator") and await self.page.locator("meta[name='atdlayout'][content='jobapplied'], meta[atdlayout='jobapplied']").count() > 0)
+                )
+            except Exception:
+                is_confirmed = False
             if is_confirmed:
-                result.completed = True
-            elif result.answered > 0 and not await self.is_open(1_500):
                 result.completed = True
             else:
                 result.completed = False

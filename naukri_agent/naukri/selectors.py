@@ -257,9 +257,13 @@ JD_COMPANY_SITE_BUTTON = [
 
 JD_ALREADY_APPLIED = [
     "span#already-applied",
-    "span:has-text('Applied')",
+    "button#apply-button[disabled]:has-text('Applied')",
+    "button#apply-button:has-text('Applied')",
     "div:has-text('You have already applied')",
+    "p:has-text('You have already applied')",
     ".already-applied-text",
+    "span.already-applied",
+    "span:text-is('Applied')",
 ]
 
 JD_TITLE = ["h1.styles_jd-header-title__rZwM1", "h1[class*='jd-header-title']", "h1"]
@@ -281,29 +285,21 @@ JD_POSTED = ["span:has-text('Posted:') + span", "div.styles_jhc__stat__PgY67 spa
 
 # Success confirmation after a successful Easy Apply.
 APPLY_SUCCESS = [
-    # Modern Apply Confirmation Page (ACP) & Drawer
-    "div.acp-container",
-    "div.acp-header-container",
-    "img[alt='success-icon']",
-    "div.applied-job-content",
+    # Modern Apply Confirmation Page (ACP) modal with unambiguous positive confirmation text
     "div.acp-header-container:has-text('Applied to')",
     "div.acp-header-container:has-text('Application sent')",
     "div.acp-header-container:has-text('Successfully applied')",
     "div.acp-header-container img[src*='check_circle']",
-    # Specific confirmation banners with positive confirmation text
+    # Specific confirmation banners with unambiguous positive text
     "div.apply-message:has-text('successfully applied')",
     "div.apply-message:has-text('Application sent')",
     "span:has-text('You have successfully applied')",
     "div:has-text('You have successfully applied')",
     "div:has-text('Application sent')",
     "div:has-text('Applied successfully')",
-    "div:has-text('Applied on')",
-    "span#already-applied",
-    "div.styles_apply-message__2Sd0v:has-text('applied')",
-    # Apply button transitioned to applied state
+    # Primary Apply button transitioned to applied state
     "button#apply-button[disabled]:has-text('Applied')",
     "button#apply-button:has-text('Applied')",
-    "button[disabled]:has-text('Applied')",
 ]
 
 APPLY_ERROR_TOAST = [
@@ -433,7 +429,9 @@ CHATBOT_CLOSE = [
     ".crossIcon",
 ]
 CHATBOT_COMPLETE = [
-    "div:has-text('Your application has been')",
+    "div:has-text('Your application has been submitted')",
+    "div:has-text('Your application has been received')",
+    "div:has-text('Application submitted successfully')",
     "div:has-text('successfully applied')",
     "div.botMsg:has-text('Thank you for applying')",
     "div.botMsg:has-text('Thank you for submitting')",

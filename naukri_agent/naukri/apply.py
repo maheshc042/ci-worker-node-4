@@ -911,6 +911,26 @@ class ApplyEngine:
                     confirmation_type="confirmation_page",
                     confirmation_evidence="Apply Confirmation page or jobapplied layout observed",
                 )
+            if result.answered > 0:
+                log.info("apply.chatbot_error_verifying_reload", job_id=job.job_id, answered=result.answered)
+                verdict = await self._verify_post_submit(job)
+                if verdict == "applied":
+                    return ApplyOutcome(
+                        status=ApplicationStatus.APPLIED,
+                        detail="Naukri submission confirmation observed on verify pass",
+                        questions_answered=result.answered,
+                        attempts=attempts,
+                        confirmation_type="verify_pass",
+                        confirmation_evidence="Success marker observed after job page reload",
+                    )
+                if verdict == "already_applied":
+                    return ApplyOutcome(
+                        status=ApplicationStatus.ALREADY_APPLIED,
+                        reason=SkipReason.ALREADY_APPLIED,
+                        detail="Already applied marker observed on verify pass",
+                        questions_answered=result.answered,
+                        attempts=attempts,
+                    )
             shot = await self.artifacts.capture_failure(self.page, "chatbot-error", profile, job.job_id)
             return ApplyOutcome(status=ApplicationStatus.FAILED, detail=f"Chatbot error: {result.error}", screenshot_path=shot, questions_answered=result.answered, attempts=attempts)
 
@@ -949,8 +969,30 @@ class ApplyEngine:
                 questions_answered=result.answered,
                 attempts=attempts,
                 confirmation_type="chatbot_completed" if result.completed else "dom_marker",
-                confirmation_evidence="Screening flow completed or Naukri success marker observed",
+                confirmation_evidence="Screening flow completed and Naukri success marker observed",
             )
+
+        if result.answered > 0:
+            log.info("apply.chatbot_unconfirmed_verifying_reload", job_id=job.job_id, answered=result.answered)
+            verdict = await self._verify_post_submit(job)
+            if verdict == "applied":
+                return ApplyOutcome(
+                    status=ApplicationStatus.APPLIED,
+                    detail="Naukri submission confirmation observed on verify pass",
+                    questions_answered=result.answered,
+                    attempts=attempts,
+                    confirmation_type="verify_pass",
+                    confirmation_evidence="Success marker observed after job page reload",
+                )
+            if verdict == "already_applied":
+                return ApplyOutcome(
+                    status=ApplicationStatus.ALREADY_APPLIED,
+                    reason=SkipReason.ALREADY_APPLIED,
+                    detail="Already applied marker observed on verify pass",
+                    questions_answered=result.answered,
+                    attempts=attempts,
+                )
+
         return None
 
     async def _verify_post_submit(self, job: Job) -> str:
@@ -979,6 +1021,14 @@ class ApplyEngine:
         try:
             if await first_visible(self.page, S.JD_ALREADY_APPLIED, timeout_ms=2_000) is not None:
                 return "already_applied"
+        except Exception:
+            pass
+        try:
+            apply_btn = await first_visible(self.page, ["button#apply-button", *S.JD_APPLY_BUTTON], timeout_ms=2_000)
+            if apply_btn is not None and await apply_btn.is_visible():
+                btn_text = ((await apply_btn.inner_text()) or "").strip().lower()
+                if "apply" in btn_text and "applied" not in btn_text:
+                    return "unknown"
         except Exception:
             pass
         return "unknown"
