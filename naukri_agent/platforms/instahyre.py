@@ -4,10 +4,12 @@ Instahyre Platform Implementation (Pagination & Modal-Swiper Engine).
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time as _time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -23,6 +25,7 @@ from ..config import AgentConfig, JobProfile, NaukriAccount, get_settings
 from ..core.models import ApplicationStatus, ApplyOutcome, FilterDecision, Job, SkipReason
 from ..core.run_policy import RunPolicy
 from ..logging_setup import get_logger
+from ..naukri.parser import extract_jd_experience
 from .base import BaseJobPlatform
 
 log = get_logger(__name__)
@@ -905,7 +908,6 @@ class InstahyrePlatform(BaseJobPlatform):
         profile_name: str,
         pre_submit_check: Callable[[Job], FilterDecision] | None = None,
     ) -> ApplyOutcome:
-        self.require_mutation("application.apply_flow")
         log.info("instahyre.apply.start", job_id=job.job_id)
         t0 = _time.perf_counter()
         jt = None
@@ -963,16 +965,13 @@ class InstahyrePlatform(BaseJobPlatform):
                         log.warning("instahyre.apply.page_switch_unconfirmed", from_page=current_page_num, to_page=target_page)
 
             async def _find_card_on_current_view():
-                company = " ".join(job.company.lower().split())
-                title = " ".join(job.title.lower().split())
-                if not company or not title:
-                    return None
-                matches = []
-                for row in await self.page.locator("div.employer-row").all():
-                    row_text = " ".join((await safe_text(row)).lower().split())
-                    if company in row_text and title in row_text:
-                        matches.append(row)
-                return matches[0] if len(matches) == 1 else None
+                expected = " ".join(f"{job.company} - {job.title}".split())
+                name = self.page.locator("div.employer-job-name div.company-name").filter(
+                    has_text=re.compile(rf"^\s*{re.escape(expected)}\s*$", re.IGNORECASE)
+                )
+                titled = self.page.locator(f"div.employer-job-name[title={json.dumps(expected, ensure_ascii=False)}]")
+                rows = self.page.locator("div.employer-row").filter(has=name.or_(titled))
+                return rows if await rows.count() == 1 else None
 
             card = await _find_card_on_current_view()
 
@@ -1011,125 +1010,29 @@ class InstahyrePlatform(BaseJobPlatform):
                     detail=f"Job card for {job.company} - {job.title} no longer on feed",
                 )
 
+            applied_markers = ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"]
+            if await first_visible(card, applied_markers, timeout_ms=600) is not None:
+                return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+
+            opener = await first_visible(
+                card, ["a#employer-profile-opportunity[ng-click='openApplyModal(opp)']"],
+                timeout_ms=2500,
+            )
+            if opener is None:
+                return ApplyOutcome(ApplicationStatus.FAILED, detail="Instahyre opportunity opener could not be verified")
             try:
-                # Click the opportunity card / view button to trigger openApplyModal(opp)
-                await card.scroll_into_view_if_needed()
-                await human_pause(300, 600)
-
-                clicked = False
-                trigger = card.locator("a#employer-profile-opportunity, button#interested-btn, span#interested-btn, .button-interested, div.employer-job-name").first
-                if await trigger.count() > 0 and await trigger.is_visible():
-                    try:
-                        await trigger.click()
-                        clicked = True
-                    except Exception:
-                        await trigger.evaluate("node => node.click()")
-                        clicked = True
-
-                if not clicked:
-                    try:
-                        await card.click()
-                    except Exception:
-                        await card.evaluate("node => node.click()")
-                await human_pause(1500, 2500)
+                await opener.click(timeout=4000)
             except Exception as exc:
-                _record_timing()
-                return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Failed to click job card: {exc!s}")
+                return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Instahyre opportunity did not open: {exc!s}")
 
             modal = await first_visible(
                 self.page,
-                [
-                    "div#employer-profile-modal",
-                    "div.application-modal-block",
-                    "div.modal.fade.in",
-                    "div.modal.in",
-                    "div.modal.show",
-                    "div.modal-dialog",
-                    "div.modal-content",
-                    "div.bar-actions",
-                    "div[class*='opportunity-modal']",
-                ],
-                timeout_ms=5000,
+                [".candidate-apply-modal > .application-modal-block", "#employer-profile-modal"],
+                timeout_ms=8000,
             )
-            if not modal:
-                # Fallback 1: direct evaluate click on the link carrying ng-click="openApplyModal(opp)"
-                try:
-                    direct_link = card.locator("a#employer-profile-opportunity").first
-                    if await direct_link.count() > 0:
-                        await direct_link.evaluate("node => node.click()")
-                        await human_pause(1500, 2500)
-                        modal = await first_visible(
-                            self.page,
-                            [
-                                "div#employer-profile-modal",
-                                "div.application-modal-block",
-                                "div.modal.fade.in",
-                                "div.modal.in",
-                                "div.modal.show",
-                                "div.modal-content",
-                                "div.bar-actions",
-                            ],
-                            timeout_ms=4000,
-                        )
-                except Exception:
-                    pass
-
-            if not modal:
-                # Fallback 2: direct AngularJS evaluate invocation on employerProfileModalCtrl scope
-                try:
-                    opened_via_angular = await card.evaluate("""(el) => {
-                        if (!window.angular) return false;
-                        const cardScope = window.angular.element(el).scope();
-                        const opp = cardScope ? (cardScope.opp || (cardScope.$parent && cardScope.$parent.opp)) : null;
-                        const modalCtrl = document.querySelector('[ng-controller="employerProfileModalCtrl"]');
-                        const modalScope = modalCtrl ? window.angular.element(modalCtrl).scope() : null;
-                        if (modalScope && opp && typeof modalScope.openApplyModal === 'function') {
-                            modalScope.openApplyModal(opp);
-                            if (modalScope.bulkParams) {
-                                modalScope.bulkParams.showApplyModal = true;
-                            }
-                            modalScope.$evalAsync();
-                            return true;
-                        }
-                        return false;
-                    }""")
-                    if opened_via_angular:
-                        await human_pause(1500, 2500)
-                        modal = await first_visible(
-                            self.page,
-                            [
-                                "div#employer-profile-modal",
-                                "div.application-modal-block",
-                                "div.modal.fade.in",
-                                "div.modal.in",
-                                "div.modal.show",
-                                "div.modal-content",
-                                "div.bar-actions",
-                                "div[class*='opportunity-modal']",
-                            ],
-                            timeout_ms=5000,
-                        )
-                except Exception as exc:
-                    log.debug("instahyre.apply.angular_open_failed", error=str(exc))
-
-            if not modal:
+            if modal is None:
                 _record_timing()
                 return ApplyOutcome(ApplicationStatus.FAILED, detail="Modal did not open after clicking card")
-
-            # Wait for AngularJS candidateOpportunityCtrl to render the action bar
-            bar_actions = await first_visible(
-                self.page,
-                [
-                    "div.bar-actions",
-                    "div.row.bar-actions",
-                ],
-                timeout_ms=5000,
-            )
-            if bar_actions:
-                log.info("instahyre.apply.bar_actions_found", job_id=job.job_id)
-            else:
-                log.warning("instahyre.apply.bar_actions_missing", job_id=job.job_id)
-
 
         # Dump opened modal HTML for exact inspection
         try:
@@ -1140,77 +1043,44 @@ class InstahyrePlatform(BaseJobPlatform):
         except Exception as exc:
             log.debug("instahyre.modal_dump_failed", error=str(exc))
 
-        # 1.5 Scrape Full Description from Modal for AI Analysis
-        try:
-            jd_loc = self.page.locator("div.opportunity-description, div.job-description, .description").first
-            if await jd_loc.count() > 0:
-                full_desc = (await safe_text(jd_loc)).strip()
-                if full_desc:
-                    job.description = full_desc
-                    log.info("instahyre.apply.description_scraped", job_id=job.job_id)
-        except Exception as exc:
-            log.debug("instahyre.apply.description_scrape_failed", error=str(exc))
+        description = await first_visible(
+            modal, ["#job-description .job-description", "div.opportunity-description", "div.job-description"],
+            timeout_ms=4500,
+        )
+        full_desc = await safe_text(description)
+        if not full_desc or pre_submit_check is None:
+            await self._ensure_modal_closed()
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="Instahyre detail eligibility could not be verified")
 
+        job.description = full_desc
+        minimum, maximum = extract_jd_experience(full_desc)
+        if minimum is not None:
+            job.min_experience, job.max_experience = minimum, maximum
+            job.experience_imputed = False
+        decision = pre_submit_check(job)
+        if not decision.passed:
+            await self._ensure_modal_closed()
+            _record_timing()
+            return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
 
-        # 2. Evaluate Pre-Submit Check inside Modal
-        if pre_submit_check:
-            decision = pre_submit_check(job)
-            if not decision.passed:
-                log.info("instahyre.apply.declining", job_id=job.job_id, reason=decision.reason)
-                decline_btn = await first_visible(
-                    self.page,
-                    [
-                        "button.decline",
-                        "button.btn-default.decline",
-                        "div.bar-actions button.decline",
-                        "button#not-interested-btn",
-                        "button.button-not-interested",
-                        "button[ng-click*='pass' i]",
-                        "button[ng-click*='decline' i]",
-                        "button[ng-click*='not' i]",
-                        "div.pass button",
-                        "button:has-text('Not interested')",
-                        "button:has-text('Not Interested')",
-                        "a:has-text('Not Interested')",
-                        "button:has-text('Skip')",
-                        "button:has-text('Decline')",
-                        "button.btn-danger",
-                    ],
-                    timeout_ms=3000,
-                )
-                if decline_btn:
-                    try:
-                        await decline_btn.click()
-                        await human_pause(800, 1500)
-                    except Exception:
-                        pass
-                _record_timing()
-                return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
-
-        # 3. Fast Apply Action inside Modal (No description scraping delay)
-        # Check for External Apply ("Apply on company site") first
-        external_btn = await first_visible(
-            self.page,
-            [
-                "button:has-text('Apply on company site')",
-                "div.apply-cancel-bar button",
-                "#apply-external-modal button",
-            ],
+        external = await first_visible(
+            modal, ["a:text-is('Apply on company site')", "button:text-is('Apply on company site')"],
             timeout_ms=1000,
         )
-        if external_btn:
-            log.info("instahyre.apply.external_site_detected", job_id=job.job_id)
-            _record_timing()
-            return ApplyOutcome(
-                ApplicationStatus.EXTERNAL,
-                reason=SkipReason.EXTERNAL_APPLY,
-                external_url=job.url,
-                detail="Instahyre external apply requires company website application",
-            )
+        if external is not None:
+            href = (await external.get_attribute("href") or "").strip()
+            target = urlsplit(href)
+            await self._ensure_modal_closed()
+            if target.scheme in {"http", "https"} and target.hostname and not (
+                target.hostname == "instahyre.com" or target.hostname.endswith(".instahyre.com")
+            ):
+                return ApplyOutcome(ApplicationStatus.EXTERNAL, reason=SkipReason.EXTERNAL_APPLY, external_url=href)
+            return ApplyOutcome(ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.STUCK_FLOW,
+                                detail="Instahyre company-site destination could not be verified")
 
         apply_btn = await first_visible(
             modal,
-            ["div.apply[ng-click*='submitChoice']", "button:text-is('Apply')"],
+            ["div.apply[ng-click='submitChoice(opp, true)'] button:text-is('Apply')", "div.bar-actions button:text-is('Apply')"],
             timeout_ms=4000,
         )
 
@@ -1241,8 +1111,14 @@ class InstahyrePlatform(BaseJobPlatform):
 
 
 
-        # Ensure the modal action bar (Not Interested & Apply buttons) is scrolled into view
-        bar = self.page.locator("div.bar-actions, div.row.bar-actions").first
+        if not self.policy.may_mutate:
+            await self._ensure_modal_closed()
+            return ApplyOutcome(ApplicationStatus.SKIPPED, reason=SkipReason.DRY_RUN,
+                                detail="Instahyre native Apply verified; no submission attempted")
+        self.require_mutation("application.final_submit")
+
+        # Ensure the modal action bar is scrolled into view.
+        bar = modal.locator("div.bar-actions, div.row.bar-actions").first
         if await bar.count() > 0:
             try:
                 await bar.scroll_into_view_if_needed()
@@ -1250,51 +1126,26 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception:
                 pass
 
-        success_panel = (
-            ".candidate-apply-all-modal .modal-info-panel:has(img[src$='application-sent.svg'])"
-        )
-        success_panel_before = await first_visible(self.page, [success_panel], timeout_ms=400)
         try:
             await apply_btn.scroll_into_view_if_needed()
             await apply_btn.click(timeout=4000)
-            await human_pause(1000, 2000)
         except Exception as exc:
-            _record_timing()
-            return ApplyOutcome(
-                ApplicationStatus.FAILED,
-                reason=SkipReason.SUBMISSION_UNCONFIRMED,
-                detail=f"Instahyre Apply click could not be verified: {exc!s}",
-            )
+            log.warning("instahyre.apply.click_uncertain", job_id=job.job_id, error=str(exc)[:120])
 
-        confirmation = None
-        if card is not None:
-            confirmation = await first_visible(
-                card,
-                ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"],
-                timeout_ms=5000,
-            )
-
-        evidence = "Instahyre target card shows Applied"
-        if confirmation is None and success_panel_before is None and job.company:
-            panel = await first_visible(self.page, [success_panel], timeout_ms=2000)
-            if panel is not None:
-                panel_text = " ".join((await safe_text(panel)).lower().split())
-                company = " ".join(job.company.lower().split())
-                if re.search(rf"\bapplication sent to {re.escape(company)}\s*\.", panel_text):
-                    confirmation = panel
-                    evidence = "Instahyre displayed a new application-sent panel for the target employer"
-
+        target_card = await _find_card_on_current_view()
+        confirmation = (
+            await first_visible(target_card, applied_markers, timeout_ms=8000)
+            if target_card is not None else None
+        )
         await self._ensure_modal_closed()
         await self._dismiss_modals()
-
+        _record_timing()
         if confirmation is not None:
-            _record_timing()
             return ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 confirmation_type="dom_marker",
-                confirmation_evidence=evidence,
+                confirmation_evidence="Instahyre target card shows Applied",
             )
-        _record_timing()
         return ApplyOutcome(
             ApplicationStatus.FAILED,
             reason=SkipReason.SUBMISSION_UNCONFIRMED,

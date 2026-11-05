@@ -2537,6 +2537,12 @@ class TestLinkedInBlockedStep(unittest.IsolatedAsyncioTestCase):
         modal = self._modal_with_buttons(["Save and exit"])
         self.assertIsNone(await LinkedInPlatform._fallback_action_button(modal))
 
+    async def test_fallback_advance_rejects_submission_controls(self):
+        from naukri_agent.platforms.linkedin import LinkedInPlatform
+
+        modal = self._modal_with_buttons(["Submit", "Submit application", "Send", "Apply"])
+        self.assertIsNone(await LinkedInPlatform._fallback_action_button(modal))
+
     async def test_modal_button_labels_collects_visible(self):
         from naukri_agent.platforms.linkedin import LinkedInPlatform
 
@@ -3544,12 +3550,40 @@ class TestLinkedInVerifySubmit(unittest.IsolatedAsyncioTestCase):
             ("[role='dialog'] :text-is('Application sent')",
              "[role='dialog'] :text-is('Your application was sent')",
              "[data-test-modal] :text-is('Application sent')",
-             "[data-test-modal] :text-is('Your application was sent')"): marker,
+             "[data-test-modal] :text-is('Your application was sent')",
+             "dialog[open] :text-is('Application sent')",
+             "dialog[open] :text-is('Your application was sent')"): marker,
         })
         self.assertTrue(m)
 
     async def test_closed_modal_without_confirmation_fails(self):
         self.assertFalse(await self._verify({}))
+
+    async def test_disabled_submit_does_not_pass_validation(self):
+        modal = MagicMock()
+        modal.evaluate = AsyncMock()
+        submit = MagicMock()
+        submit.is_enabled = AsyncMock(return_value=False)
+
+        self.assertFalse(await self._plat()._submission_ready(modal, submit))
+        modal.evaluate.assert_not_awaited()
+
+    def test_guessed_skill_tenure_goes_to_review(self):
+        from naukri_agent.core.answers import ResolvedAnswer
+        from naukri_agent.core.models import ScreeningQuestion
+
+        platform = self._plat()
+        platform._screening_review = []
+        platform.answers = MagicMock()
+        question = ScreeningQuestion("How many years of experience with Elixir?", "text")
+        platform.answers.resolve.return_value = ResolvedAnswer(
+            "1", "experience:unlisted_default:elixir", "experience-map"
+        )
+        self.assertIsNone(platform._resolve_screening(question))
+        self.assertEqual(platform._screening_review, [{"text": question.text, "kind": "text", "options": []}])
+
+        platform.answers.resolve.return_value = ResolvedAnswer("2", "experience:elixir", "experience-map")
+        self.assertEqual(platform._resolve_screening(question).value, "2")
 
     async def test_open_modal_no_markers_fails(self):
         from unittest.mock import AsyncMock, MagicMock, patch

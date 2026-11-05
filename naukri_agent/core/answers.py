@@ -1067,10 +1067,15 @@ class AnswerEngine:
             threshold = float(amount)
             operator = None
         total = self.experience.total_years
+        inferred_tenure = False
         if re.search(r"\b(?:in|with|using|on|as)\s+\w", text[m.end():]):
             skill_tenure = self._resolve_experience(text, ScreeningQuestion(text, "text"))
             if skill_tenure is None:
                 return None
+            inferred_tenure = (
+                skill_tenure.matched_pattern.startswith("experience:unlisted_default")
+                or skill_tenure.matched_pattern in {"experience:default", "experience:total_fallback"}
+            )
             total = float(skill_tenure.value)
         if total is None:
             return None
@@ -1079,7 +1084,10 @@ class AnswerEngine:
         exclusive = " ".join((operator or "").split()) in {"more than", "over", "above", "greater than"}
         meets_threshold = total > threshold if exclusive else total >= threshold
         want = "Yes" if meets_threshold else "No"
-        fitted = self._fit_to_options(want, question, f"tenure-compare:{threshold:g}", "tenure-map")
+        pattern = f"tenure-compare:{threshold:g}"
+        if inferred_tenure:
+            pattern = f"tenure-compare:inferred:{threshold:g}"
+        fitted = self._fit_to_options(want, question, pattern, "tenure-map")
         if fitted is not None:
             log.info("answers.tenure_comparison", question=question.text[:120],
                      threshold=threshold, total=total, value=want)

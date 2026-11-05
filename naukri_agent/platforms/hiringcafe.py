@@ -28,7 +28,7 @@ import json
 import re
 import time
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlsplit
 
 from playwright.async_api import Page
 
@@ -42,6 +42,7 @@ from ..core.models import (
 )
 from ..core.run_policy import RunPolicy
 from ..logging_setup import get_logger
+from ..naukri.parser import extract_jd_experience
 from .base import BaseJobPlatform, PlatformWalledError
 
 log = get_logger(__name__)
@@ -219,31 +220,41 @@ class HiringCafePlatform(BaseJobPlatform):
     def _select_apply_url(candidates: list[dict[str, str]]) -> str | None:
         """Pick the company ATS link out of a detail page's external anchors (pure).
 
-        Skips screening forms (Sidekick 422-dead-letters them) and the site's
-        own/social links. Prefers apply-flavoured anchors, else the first
-        surviving external link. Returns None when nothing qualifies — the
-        caller skips the job instead of enqueueing junk.
+        Prefer an explicit job action. An unlabeled fallback must point to
+        a posting on a recognized ATS.
         """
         import re
 
-        dead_substrings = (
-            "hiring.cafe", "hiringcafe.com", "forms.gle", "docs.google.com/forms",
+        excluded_hosts = (
+            "hiring.cafe", "hiringcafe.com", "forms.gle", "docs.google.com",
             "typeform.com", "facebook.com", "linkedin.com", "reddit.com",
             "twitter.com", "x.com", "googleusercontent.com",
         )
-        apply_re = re.compile(r"apply|job posting|apply now|careers|view job", re.IGNORECASE)
+        ats_hosts = (
+            "greenhouse.io", "lever.co", "myworkdayjobs.com", "ashbyhq.com",
+            "bamboohr.com", "smartrecruiters.com", "workable.com", "icims.com",
+        )
+        apply_re = re.compile(r"(?:apply(?: now| here| for (?:this )?job| on company site)?|(?:view )?job posting|view job)", re.IGNORECASE)
         fallback: str | None = None
         for cand in candidates:
             href = (cand.get("href") or "").strip()
-            if not href.lower().startswith("http"):
+            try:
+                url = urlsplit(href)
+                host = url.hostname or ""
+            except ValueError:
                 continue
-            lowered = href.lower()
-            if any(dead in lowered for dead in dead_substrings):
+            if url.scheme not in {"http", "https"} or not host or url.username is not None:
                 continue
-            if fallback is None:
-                fallback = href
-            if apply_re.search(cand.get("text") or ""):
+            if any(host == domain or host.endswith(f".{domain}") for domain in excluded_hosts):
+                continue
+            if not url.path.strip("/") and not url.query:
+                continue
+            if apply_re.fullmatch(" ".join((cand.get("text") or "").split())):
                 return href
+            if fallback is None and len(url.path.strip("/").split("/")) >= 2 and any(
+                host == domain or host.endswith(f".{domain}") for domain in ats_hosts
+            ):
+                fallback = href
         return fallback
 
     @staticmethod
@@ -487,7 +498,7 @@ class HiringCafePlatform(BaseJobPlatform):
             if (cands.length >= 80) break;
         }
         return {
-            title: ((h1 ? h1.innerText : '') || '').trim().slice(0, 200) || (document.title || '').slice(0, 200),
+            title: ((h1 ? h1.innerText : '') || '').trim().slice(0, 200),
             company: ((org ? org.innerText : '') || '').trim().slice(0, 200),
             cands,
             body: ((document.body ? document.body.innerText : '') || '').slice(0, 12000),
@@ -615,8 +626,12 @@ class HiringCafePlatform(BaseJobPlatform):
         company = (data or {}).get("company") or "Company"
         job_id = f"hc-{hashlib.sha1(apply_url.encode()).hexdigest()[:20]}"
         body = (data or {}).get("body") or ""
+        if not body.strip():
+            log.info("hiringcafe.detail_missing_body", url=detail_url[:80])
+            return None
         description = (card_text + "\n\n" + body)[:12_000] if card_text else body
         posted = self._posted_days_from_text(card_text)
+        minimum, maximum = extract_jd_experience(body)
         return Job(
             job_id=job_id,
             title=title,
@@ -624,6 +639,8 @@ class HiringCafePlatform(BaseJobPlatform):
             url=apply_url,
             location="",
             description=description,
+            min_experience=minimum,
+            max_experience=maximum,
             is_external=True,
             source_keyword=term,
             platform="hiringcafe",
@@ -717,14 +734,17 @@ class HiringCafePlatform(BaseJobPlatform):
         Returns EXTERNAL so the orchestrator routes the job to the Sidekick
         outbox via the universal external-job hook.
         """
-        if pre_submit_check is not None:
-            decision = pre_submit_check(job)
-            if not decision.passed:
-                return ApplyOutcome(
-                    status=ApplicationStatus.SKIPPED,
-                    reason=decision.reason or SkipReason.FILTER_DESCRIPTION,
-                    detail=decision.detail,
-                )
+        if pre_submit_check is None or not job.description.strip():
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="HiringCafe detail eligibility could not be verified")
+        decision = pre_submit_check(job)
+        if not decision.passed:
+            return ApplyOutcome(
+                status=ApplicationStatus.SKIPPED,
+                reason=decision.reason or SkipReason.FILTER_DESCRIPTION,
+                detail=decision.detail,
+            )
+        if self._select_apply_url([{"href": job.url, "text": "Apply"}]) is None:
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="HiringCafe company-site destination could not be verified")
         return ApplyOutcome(
             status=ApplicationStatus.EXTERNAL,
             reason=SkipReason.EXTERNAL_APPLY,

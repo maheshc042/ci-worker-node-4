@@ -41,6 +41,17 @@ class TestSearchUrl(unittest.TestCase):
 
 
 class TestSelectApplyUrl(unittest.TestCase):
+    def test_does_not_fall_back_to_unrelated_company_link(self):
+        self.assertIsNone(HC._select_apply_url([
+            {"href": "https://example.com/about", "text": "About us"},
+            {"href": "https://example.com/privacy", "text": "Privacy"},
+        ]))
+
+    def test_rejects_links_with_embedded_credentials(self):
+        self.assertIsNone(HC._select_apply_url([
+            {"href": "https://greenhouse.io@elsewhere.example/jobs/1", "text": "Apply"},
+        ]))
+
     def test_prefers_apply_anchor(self):
         cands = [
             {"href": "https://hiringcafe.com/job/x", "text": "Job Posting"},

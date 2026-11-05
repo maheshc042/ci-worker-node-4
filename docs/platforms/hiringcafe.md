@@ -1,8 +1,84 @@
-# HiringCafe
+# HiringCafe Platform Playbook
 
-1. Open the public search feed and check that it is usable. If repeated challenges block discovery, capture the diagnostic state and stop the platform.
-2. Search with the configured terms, freshness, experience and page limits. Prefilter obvious title mismatches before visiting detail pages. Skip expired or linkless listings.
-3. Resolve the company’s ATS link from the job detail. Deduplicate the resolved jobs and run the configured detail filter.
-4. Return the eligible ATS link as an external handoff. When Sidekick integration is enabled, the orchestrator can place it in the external outbox. An outbox entry or delivery acknowledgment records a handoff. The downstream applicant or service owns proof of any eventual ATS submission.
+Comprehensive architecture and operational specification for the HiringCafe adapter. This document strictly mirrors the runtime logic in [`naukri_agent/platforms/hiringcafe.py`](../../naukri_agent/platforms/hiringcafe.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`SIDEKICK_PICKUP.md`](../../SIDEKICK_PICKUP.md).
 
-**Verify** an eligible ATS link, a stale or linkless listing, a detail rejection and the outbox status when enabled. See the [HiringCafe adapter](../../naukri_agent/platforms/hiringcafe.py) and [Sidekick pickup guide](../../SIDEKICK_PICKUP.md).
+---
+
+## 1. Overview & Handoff Role
+- **Model**: HiringCafe serves as a pure **discovery and external handoff adapter**. It does not perform in-platform form automation; instead, it extracts clean, direct-to-ATS application links.
+- **Sidekick Integration**: Eligible ATS links are forwarded as `ApplicationStatus.EXTERNAL` with `external_url = ats_url` and written to the Sidekick outbox for downstream automated or assisted application.
+
+---
+
+## 2. Ingestion & Server-Side Rendered (SSR) Feed ([`fetch_jobs`](../../naukri_agent/platforms/hiringcafe.py))
+
+### 1. SSR Navigation vs API Blockade
+- Cloudflare aggressively 403s automated calls to `/api/search-jobs`. The adapter navigates directly to the SSR listing URL:
+  ```text
+  https://hiring.cafe/classic?searchState={...}&page=N
+  ```
+- Search parameters are dynamically encoded into JSON `searchState`:
+  - `searchQuery`: Role keywords derived from `profile.title_keywords`.
+  - `dateFetchedPastNDays`: Configured freshness window (e.g. 3 days).
+  - `roleYoeRange`: `[0, max_exp]`.
+  - `departments`: Engineering, Software Development, IT, Data, QA.
+  - `workplaceTypes`: Remote, Hybrid, Onsite.
+
+### 2. Perimeter Clearance & Turnstile Cooldown ([`_settle_challenge`](../../naukri_agent/platforms/hiringcafe.py))
+- Detects Cloudflare interstitial challenges (`just a moment`, `verifying you are human`).
+- **Cooldown-Guarded Checkbox Click**: Enforces a minimum 10-second interval (`_last_cf_click`) before clicking Turnstile checkboxes. Mid-flight clicks or premature reloads trigger solve-reload challenge loops.
+- **Clearance Verification**: Both gates must pass: clean page title/content (`_has_clearance`) AND visible job cards in the DOM (`_probe_cards`).
+- **Poisoned Cookie Purge**: Drops `hiringcafe.com` and `hiring.cafe` domain cookies if challenged repeatedly, reloading against a clean cookie jar without disturbing other platform sessions.
+- **Headed vs Headless**:
+  - Headed: Grants 120 seconds for manual checkbox completion (`_await_manual_solve`).
+  - Headless: Logs a diagnostic screenshot (`hiringcafe-challenge.png`) and exits cleanly without hanging.
+
+### 3. Card Scraping & Substantive Container Ascent
+- **Substantive Text Recovery**: The anchor text (`a[href*='/job/']`) on HiringCafe is often micro-copy (*"Job Posting | View all"*, ~20 chars). The scraper climbs up to 6 parent levels until finding substantive text ($>120$ characters) to ensure downstream filters receive rich descriptions (run 561 fix).
+- **Fast Card Pre-Filter (`_card_prefilter_pass`)**: Checks card text against `title_must_include_any` before opening detail pages, preventing costly navigations for obvious out-of-scope roles.
+
+---
+
+## 3. Detail Resolution & ATS Link Extraction ([`_resolve_detail`](../../naukri_agent/platforms/hiringcafe.py))
+
+### 1. Fast Expired-Listing Probe (`_is_expired_body`)
+- Probes the first 2,000 characters of the detail page body for expired markers:
+  ```regex
+  \bexpired\b|no longer accepting|position\s+filled|opening\s+closed|no longer available
+  ```
+- Bypasses Cloudflare challenge handshakes for dead postings, transforming a 30-second stall into a 3-second check.
+- **Rotten-Feed Breaker**: Halts term ingestion after 25 consecutive dead listings (`dead_streak >= 25`) to prevent wasting quota on stale feeds.
+
+### 2. Authoritative ATS Link Resolution ([`_select_apply_url`](../../naukri_agent/platforms/hiringcafe.py))
+Inspects candidate anchors on the detail page:
+- **Action Regex**: Prioritizes anchors matching `apply now`, `apply on company site`, `view job posting`.
+- **Recognized ATS Fallback**: Matches deep links on recognized ATS domains:
+  - `greenhouse.io`, `lever.co`, `myworkdayjobs.com`, `ashbyhq.com`, `bamboohr.com`, `smartrecruiters.com`, `workable.com`, `icims.com`.
+- **Excluded Domains**: Discards internal domains (`hiringcafe.com`), Google Forms, Typeform, and social networks (`linkedin.com`, `reddit.com`, `twitter.com`).
+
+---
+
+## 4. Screening & Pre-Submit Filter Pipeline ([`apply_to_job`](../../naukri_agent/platforms/hiringcafe.py))
+1. **Metadata Validation**: Must have non-empty `title`, substantive `body`, and valid `apply_url`. Missing fields are dropped immediately.
+2. **Detail Eligibility Check ([`pre_submit_check`](../../naukri_agent/platforms/hiringcafe.py))**:
+   - Enforces the same strict candidate experience bounds and forbidden phrase filters as native platforms.
+   - If rejected, skips cleanly with `decision.reason` without queueing into Sidekick.
+3. **External Handoff**:
+   - Returns:
+     ```python
+     ApplyOutcome(
+         status=ApplicationStatus.EXTERNAL,
+         reason=SkipReason.EXTERNAL_APPLY,
+         detail="HiringCafe direct company ATS link; forwarded to Sidekick",
+         external_url=job.url,
+     )
+     ```
+   - The orchestrator writes the verified role metadata into the Sidekick queue.
+
+---
+
+## 5. Invariants & Anti-Patterns (Do NOT Break)
+1. **DO NOT bypass `pre_submit_check`**: External jobs must satisfy the exact same quality and tech filters as native jobs before entering the outbox.
+2. **DO NOT accept linkless or titleless listings**: Corrupt listings must be rejected at the boundary.
+3. **DO NOT mark HiringCafe jobs as `APPLIED`**: HiringCafe is an external discovery gateway; only the downstream applicant or ATS submitter can record final delivery.
+4. **DO NOT hammer Turnstile checkboxes without cooldowns**: Repeated clicks reset active validation tokens and produce permanent challenge walls.

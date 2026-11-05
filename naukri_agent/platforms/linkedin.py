@@ -43,6 +43,7 @@ from ..core.models import (
 )
 from ..core.run_policy import RunPolicy
 from ..logging_setup import get_logger
+from ..naukri.parser import extract_jd_experience
 from .base import BaseJobPlatform
 
 log = get_logger(__name__)
@@ -252,6 +253,7 @@ class LinkedInPlatform(BaseJobPlatform):
         cfg_days = getattr(getattr(self.config, "linkedin", None), "days", None)
         self.days = cfg_days if cfg_days is not None else days
         self._submission_attempts: set[str] = set()
+        self._screening_review: list[dict] = []
 
     @property
     def platform_name(self) -> str:
@@ -507,8 +509,7 @@ class LinkedInPlatform(BaseJobPlatform):
         return modal
 
     _FALLBACK_ADVANCE_LABELS = (
-        "continue", "submit", "done", "finish", "send", "confirm",
-        "apply", "save", "ok", "next", "review",
+        "continue", "next", "review",
     )
     _FALLBACK_EXCLUDE_LABELS = (
         "dismiss", "close", "back", "cancel", "exit", "later",
@@ -948,7 +949,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     job_id=job_id,
                     title=title,
                     company=company or "Confidential",
-                    url=card_url or self.page.url,
+                    url=f"https://www.linkedin.com/jobs/view/{raw_id}/" if raw_id.isdecimal() else card_url,
                     location=location,
                     min_experience=min_exp,
                     max_experience=max_exp,
@@ -1285,6 +1286,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 detail="LinkedIn submission was already attempted in this run",
             )
         log.info("linkedin.apply.start", job_id=job.job_id, title=job.title, company=job.company)
+        self._screening_review.clear()
         t0 = _time.perf_counter()
         jt = None
         if self._metrics is not None:
@@ -1329,16 +1331,11 @@ class LinkedInPlatform(BaseJobPlatform):
         job.form_links = links
         job.recruiter_emails = emails
 
-        if job.min_experience is None and job.description:
-            match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to|\+)\s*(\d+(?:\.\d+)?)?\s*(?:yrs|years|yr)", job.description, re.IGNORECASE)
-            if match:
-                job.min_experience = float(match.group(1))
-                # JD-stated numbers supersede the card heuristic.
-                job.experience_imputed = False
-                if match.group(2):
-                    job.max_experience = float(match.group(2))
-                elif "+" in match.group(0):
-                    job.max_experience = job.min_experience + 5.0
+        minimum, maximum = extract_jd_experience(job.description)
+        if minimum is not None:
+            job.min_experience = minimum
+            job.max_experience = maximum
+            job.experience_imputed = False
 
         # Universal family gates on JD-enriched data. The orchestrator ran
         # these on card data (Phase 1), but the description + JD experience
@@ -1406,33 +1403,29 @@ class LinkedInPlatform(BaseJobPlatform):
             _record_timing()
             return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=SkipReason.LOW_MATCH_SCORE, detail=reason)
 
-        if pre_submit_check:
-            decision = pre_submit_check(job)
-            if not decision.passed:
-                _record_timing()
-                return ApplyOutcome(
-                    status=ApplicationStatus.SKIPPED,
-                    reason=decision.reason or SkipReason.FILTER_REJECTED,
-                    detail=decision.detail,
-                )
+        if pre_submit_check is None:
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn detail eligibility check unavailable")
+        decision = pre_submit_check(job)
+        if not decision.passed:
+            _record_timing()
+            return ApplyOutcome(
+                status=ApplicationStatus.SKIPPED,
+                reason=decision.reason or SkipReason.FILTER_REJECTED,
+                detail=decision.detail,
+            )
 
         # Check Easy Apply button inside details pane or full page
         apply_btn = await first_visible(
             self.page,
             [
-                "button:has-text('Easy Apply')",
-                "button[aria-label*='Easy Apply' i]",
-                "div.jobs-apply-button--top-card button",
-                "button.jobs-apply-button",
-                "button[aria-label*='Easy Apply to' i]",
-                ".jobs-details button:has-text('Easy Apply')",
-                ".scaffold-layout__detail button:has-text('Easy Apply')",
+                "main button:text-is('Easy Apply'), main button[aria-label='Easy Apply' i], "
+                "main button[aria-label^='Easy Apply to ' i]",
             ],
-            timeout_ms=3500,
+            timeout_ms=12000,
         )
 
         if not apply_btn:
-            if await first_visible(self.page, ["button:has-text('Applied')", "span:has-text('Applied')", "span:has-text('Application submitted')", "div:has-text('Application submitted')"], timeout_ms=800):
+            if await first_visible(self.page, ["main button:text-is('Applied'), main span:text-is('Application submitted')"], timeout_ms=800):
                 _record_timing()
                 return ApplyOutcome(status=ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
             # Company-site job: resolve the employer's actual ATS link by
@@ -1443,7 +1436,9 @@ class LinkedInPlatform(BaseJobPlatform):
             log.info("linkedin.apply.external_resolved", job_id=job.job_id,
                      resolved=bool(ats_url))
             _record_timing()
-            return ApplyOutcome(status=ApplicationStatus.SKIPPED, reason=SkipReason.EXTERNAL_APPLY, detail="No Easy Apply button; company-site apply only", external_url=ats_url)
+            if ats_url:
+                return ApplyOutcome(ApplicationStatus.EXTERNAL, reason=SkipReason.EXTERNAL_APPLY, detail="Verified company-site application link", external_url=ats_url)
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn did not expose a verifiable application route")
 
         log.info("linkedin.apply.clicking_button", job_id=job.job_id)
         await apply_btn.scroll_into_view_if_needed()
@@ -1524,17 +1519,34 @@ class LinkedInPlatform(BaseJobPlatform):
 
             # 2. Fill inputs strictly inside the modal container
             await self._fill_step_inputs(modal, job, profile_name=profile_name)
+            if self._screening_review:
+                shot = await self.artifacts.capture_failure(
+                    self.page, "linkedin-screening-review", profile_name, job.job_id
+                ) if self.artifacts else None
+                await self._dismiss_modal()
+                _record_timing()
+                return ApplyOutcome(
+                    ApplicationStatus.NEEDS_REVIEW,
+                    reason=SkipReason.UNANSWERED_QUESTION,
+                    detail="LinkedIn screening needs a verified answer",
+                    screenshot_path=shot,
+                    unanswered_questions=list(self._screening_review),
+                )
 
             # Check Submit button immediately (before stuck checks or advancing)
-            submit_loc = modal.locator("button:text-is('Submit application'), button[aria-label='Submit application' i]").first
+            submit_loc = modal.get_by_role("button", name=re.compile(r"^Submit application$", re.IGNORECASE)).first
             if await submit_loc.is_visible():
                 if not await self._submission_ready(modal, submit_loc):
                     blocked = await self._extract_blocked_questions(modal, await safe_text(modal))
+                    shot = await self.artifacts.capture_failure(
+                        self.page, "linkedin-final-review-blocked", profile_name, job.job_id
+                    ) if self.artifacts else None
                     await self._dismiss_modal()
                     return ApplyOutcome(
                         ApplicationStatus.NEEDS_REVIEW,
                         reason=SkipReason.UNANSWERED_QUESTION if blocked else SkipReason.STUCK_FLOW,
                         detail="LinkedIn final review has an unresolved or invalid control",
+                        screenshot_path=shot,
                         unanswered_questions=blocked,
                     )
                 if self.policy.dry_run:
@@ -1739,9 +1751,15 @@ class LinkedInPlatform(BaseJobPlatform):
     def _resolve_screening(self, question: ScreeningQuestion) -> ResolvedAnswer | None:
         answer = self.answers.resolve(question)
         if answer and (
-            answer.matched_pattern.startswith("experience:unlisted_default")
-            or answer.matched_pattern in {"experience:default", "experience:total_fallback"}
+            answer.matched_pattern.startswith(("experience:unlisted_default", "tenure-compare:inferred:"))
+            or answer.matched_pattern in {
+                "experience:default", "experience:total_fallback",
+                "intent:willingness_affirmative", "intent:willingness_location_fallback",
+            }
         ):
+            item = {"text": question.text, "kind": question.kind, "options": list(question.options or [])}
+            if item not in self._screening_review:
+                self._screening_review.append(item)
             return None
         return answer
 
@@ -1932,6 +1950,11 @@ class LinkedInPlatform(BaseJobPlatform):
                 legend_el = rg.locator("legend").first
                 if await legend_el.count() > 0:
                     q_text = (await safe_text(legend_el)).strip()
+                native_radios = await rg.locator("input[type='radio']").all()
+                if not q_text and native_radios:
+                    labels = [(await radio.get_attribute("aria-label") or "").strip() for radio in native_radios]
+                    if labels[0] and all(label == labels[0] for label in labels):
+                        q_text = labels[0]
 
                 first_opt = rg.locator("div[role='radio']").first
                 if not q_text and await first_opt.count() > 0:
@@ -1942,8 +1965,25 @@ class LinkedInPlatform(BaseJobPlatform):
                     if await head_el.count() > 0:
                         q_text = (await safe_text(head_el)).strip()
 
-                options = await rg.locator("div[role='radio'], label:has(input[type='radio']), input[type='radio']").all()
-                opt_texts = [(await safe_text(opt)).strip() for opt in options if (await safe_text(opt)).strip()]
+                options = native_radios or await rg.locator("[role='radio']").all()
+                if native_radios:
+                    option_labels = [
+                        await option.evaluate("""el => {
+                            const labels = Array.from(el.labels || []);
+                            const text = labels.map(label => label.innerText.trim()).filter(Boolean).join(' ');
+                            if (text) return text;
+                            // The current form puts an empty label next to the input
+                            // and the option text in the next block of the same row.
+                            const wrapper = el.parentElement;
+                            if (!labels.some(label => label.parentElement === wrapper)) return '';
+                            if (wrapper.parentElement.querySelectorAll('input[type="radio"]').length !== 1) return '';
+                            return wrapper.nextElementSibling?.querySelector('p')?.innerText.trim() || '';
+                        }""")
+                        for option in options
+                    ]
+                else:
+                    option_labels = [(await safe_text(option)).strip() for option in options]
+                opt_texts = [label for label in option_labels if label]
 
                 resolved = self._resolve_screening(ScreeningQuestion(text=q_text, kind="radio", options=opt_texts)) if q_text else None
                 target_val = resolved.value if resolved else ""
@@ -1959,27 +1999,20 @@ class LinkedInPlatform(BaseJobPlatform):
                 if not target_val:
                     continue
 
-                for opt in options:
-                    otext = (await safe_text(opt)).strip()
-                    aria_lbl = (await opt.get_attribute("aria-label") or "").strip()
-                    opt_combo = f"{otext} {aria_lbl}".lower()
-                    is_affirmative_opt = any(y in opt_combo for y in ["yes", "agree", "okay", "ok", "accept", "willing", "available", "confirm"])
-                    is_negative_opt = any(n in opt_combo for n in ["no", "decline", "not", "disagree", "unwilling"])
-
-                    if target_val == "Yes" and (target_val.lower() in opt_combo or (is_affirmative_opt and not is_negative_opt)) or target_val and target_val.lower() in opt_combo:
-                        try:
-                            await opt.scroll_into_view_if_needed(timeout=1000)
-                            await opt.click(force=True, timeout=1500)
-                        except Exception:
-                            pass
-                        inp = opt.locator("input[type='radio']").first
-                        if await inp.count() > 0:
-                            await inp.evaluate("""el => {
-                                el.checked = true;
-                                el.dispatchEvent(new Event('change', {bubbles: true}));
-                                el.dispatchEvent(new Event('input', {bubbles: true}));
-                                el.click();
-                            }""")
+                for opt, label in zip(options, option_labels):
+                    if " ".join(label.casefold().split()) == " ".join(target_val.casefold().split()):
+                        if native_radios:
+                            try:
+                                await opt.check(timeout=1500)
+                            except Exception:
+                                radio_id = await opt.get_attribute("id")
+                                label_control = opt.locator("xpath=following-sibling::label[1]")
+                                if radio_id and await label_control.count() and await label_control.get_attribute("for") == radio_id:
+                                    await label_control.click(timeout=1500)
+                            if not await opt.is_checked():
+                                log.warning("linkedin.apply.radio_selection_unverified")
+                        else:
+                            await opt.click(timeout=1500)
                         await human_pause(200, 400)
                         break
 
@@ -2339,6 +2372,8 @@ class LinkedInPlatform(BaseJobPlatform):
                     "[role='dialog'] :text-is('Your application was sent')",
                     "[data-test-modal] :text-is('Application sent')",
                     "[data-test-modal] :text-is('Your application was sent')",
+                    "dialog[open] :text-is('Application sent')",
+                    "dialog[open] :text-is('Your application was sent')",
                 ],
                 timeout_ms=5000,
             )
@@ -2346,8 +2381,8 @@ class LinkedInPlatform(BaseJobPlatform):
                 await click_if_present(self.page, ["[role='dialog'] button:text-is('Done')"])
                 return True
             job_id = job.job_id.removeprefix("linkedin-")
-            current_url = self.page.url
-            if re.search(rf"/jobs/view/{re.escape(job_id)}(?:[/?#]|$)", current_url):
+            current = urllib.parse.urlsplit(self.page.url)
+            if current.hostname == "www.linkedin.com" and current.path.rstrip("/") == f"/jobs/view/{job_id}":
                 return await first_visible(
                     self.page,
                     ["main button:text-is('Applied')", "main span:text-is('Application submitted')"],
