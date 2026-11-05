@@ -6678,15 +6678,15 @@ class TestTenureAnswerUnits(unittest.TestCase):
             total_years=3, default_years=1, skills={"python": 3, "cobol": 0},
         ))
         cases = [
-            ("How many years have you worked with Temporal?", [], "1"),
-            ("How many months of experience with Temporal?", [], "12"),
+            ("How many years have you worked with Temporal?", [], None),
+            ("How many months of experience with Temporal?", [], None),
             ("How many months of experience with Python?", [], "36"),
-            ("How many years of experience with Temporal?", ["1 month", "1 year"], "1 year"),
-            ("How many years of experience with Temporal?", ["Less than 1 year", "1 to 2 years"], "1 to 2 years"),
-            ("Do you have at least 1 year of experience with Temporal?", ["Yes", "No"], "Yes"),
-            ("Do you have more than 1 year of experience with Temporal?", ["Yes", "No"], "No"),
-            ("Do you have at least 12 months of experience with Temporal?", ["Yes", "No"], "Yes"),
-            ("Do you have 1 year of experience with Temporal?", ["Yes", "No"], "Yes"),
+            ("How many years of experience with Temporal?", ["1 month", "1 year"], None),
+            ("How many years of experience with Temporal?", ["Less than 1 year", "1 to 2 years"], None),
+            ("Do you have at least 1 year of experience with Temporal?", ["Yes", "No"], None),
+            ("Do you have more than 1 year of experience with Temporal?", ["Yes", "No"], None),
+            ("Do you have at least 12 months of experience with Temporal?", ["Yes", "No"], None),
+            ("Do you have 1 year of experience with Temporal?", ["Yes", "No"], None),
             ("How much experience do you have in months with Python?", [], "36"),
             ("Do you have more than 2 years of experience?", ["Yes", "No"], "Yes"),
             ("Do you have at least 1 year of experience with Cobol?", ["Yes", "No"], "No"),
@@ -6695,8 +6695,11 @@ class TestTenureAnswerUnits(unittest.TestCase):
             with self.subTest(text=text, options=options):
                 kind = "radio" if options else "text"
                 answer = engine.resolve(ScreeningQuestion(text, kind, options))
-                self.assertIsNotNone(answer)
-                self.assertEqual(answer.value, expected)
+                if expected is None:
+                    self.assertIsNone(answer)
+                else:
+                    self.assertIsNotNone(answer)
+                    self.assertEqual(answer.value, expected)
 
     def test_cutshort_offer_ranges_use_configured_target(self):
         from naukri_agent.core.answers import AnswerEngine

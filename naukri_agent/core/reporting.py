@@ -42,6 +42,10 @@ OUTCOME_JOBS_CSV_HEADER = [
     "detail",
     "reason",
     "attempts",
+    "confirmation_type",
+    "confirmation_evidence",
+    "screenshot_path",
+    "external_url",
 ]
 
 
@@ -239,6 +243,10 @@ class ReportExporter:
                     outcome.detail or "",
                     outcome.reason.value if outcome.reason else "",
                     outcome.attempts,
+                    outcome.confirmation_type or "",
+                    outcome.confirmation_evidence or "",
+                    str(outcome.screenshot_path or ""),
+                    outcome.external_url or "",
                 ])
 
     def _write_human_markdown_report(
@@ -265,7 +273,7 @@ class ReportExporter:
             "| Category | Count | Status | Notes |",
             "|:---|:---:|:---:|:---|",
             f"| **Direct Applied** | **{len(applied)}** | ✅ Success | Completed directly via 1-click or screening chatbot |",
-            f"| **External Enqueued** | **{len(external)}** | 🌐 Handed Off | Career site links enqueued to Sidekick external queue |",
+            f"| **External Routes** | **{len(external)}** | 🌐 Company-site route | Check outbox records separately for queueing and delivery |",
             f"| **Skipped** | **{len(skipped)}** | ⏭️ Intentional | Repost collapsed, daily cap, stale redirect, or JD experience mismatch |",
             f"| **Failures / Review** | **{len(failed)}** | {'🚨 Review' if failed else '✨ Clean'} | True errors, timeouts, or unanswered mandatory questions |",
             f"| **Total Processed** | **{len(applied) + len(external) + len(skipped) + len(failed)}** | | |",

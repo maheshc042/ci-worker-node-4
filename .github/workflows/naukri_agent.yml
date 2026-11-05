@@ -189,6 +189,7 @@ jobs:
           path: |
             logs/
             artifacts/
+            !artifacts/linkedin_chrome_profile/**
             analysis/
           if-no-files-found: ignore
           retention-days: 7

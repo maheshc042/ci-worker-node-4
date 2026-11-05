@@ -44,7 +44,7 @@ Every discovered listing is evaluated across two distinct filter gates before an
 ### Gate B: JD-Level Filter ([`FilterEngine.evaluate_detail`](../../naukri_agent/core/filters.py) & `pre_submit_check`)
 - Opens the exact job listing URL.
 - Reads the full job description text.
-- Rejects listings containing negative phrases (e.g., rotational shifts, bonds, mandatory female diversity, non-negotiable tech stacks not possessed by the candidate).
+- Rejects listings containing configured negative phrases, after normalizing whitespace. This is a phrase filter, not a complete parser of every mandatory skill, qualification or skill-specific tenure requirement.
 - Rejects foreign external ATS redirects if `require_easy_apply=True` (or routes to `EXTERNAL` for Sidekick processing).
 
 ---
@@ -73,7 +73,7 @@ Every discovered listing is evaluated across two distinct filter gates before an
    - Calls `_verify_post_submit(job)` (`page.goto(job.url)`).
 2. **Reload Evaluation**:
    - **Primary Button State**: If the primary button still reads `"Apply"` (active, unapplied), verification returns `"unknown"`.
-   - **Applied Marker**: If the primary button displays `"Applied"` or page shows `/apply/confirmation`, verification returns `"applied"` or `"already_applied"`.
+   - **Applied Marker**: Require exact applied state on the reloaded listing, including the observed `span#already-applied` with exact `Applied` text. A confirmation title or URL alone is insufficient.
 3. **Outcome Resolution**:
    - If `verdict == "applied"` OR (`verdict == "already_applied"` and `started_unapplied == True`):
      - Marks `status = APPLIED`, `confirmation_type = "verify_pass"`.
@@ -87,13 +87,15 @@ Every discovered listing is evaluated across two distinct filter gates before an
 
 ## 6. Invariants & Anti-Patterns (Do NOT Break)
 1. **DO NOT rely on `meta[name='atdlayout']` or title substring `"confirmation"`**: Naukri SPA pages include these tags even before an application is submitted.
-2. **DO NOT skip `_verify_post_submit(job)`**: Keep the reload verification path. Review its remaining title/URL fallback against the receipt policy below.
+2. **DO NOT skip `_verify_post_submit(job)`**: Keep the reload verification path. A title or URL alone must not establish a receipt.
 3. **DO NOT treat answering screening questions as proof of application**: Answers can be rejected by the server after the drawer closes.
 4. **DO NOT guess tenure or skill questions**: Send unlisted questions to `question_review` so the human can train the knowledge base.
 
 
 ## Evidence and implementation gaps
 
-The required policy excludes title-only and generic page metadata as proof. The current `_verify_post_submit` still accepts an Apply Confirmation title or confirmation URL after checking the primary button, and uses the shared success-marker list. Documenting that branch does not approve it as sufficient evidence. Review it separately before claiming zero false positives.
+The runs 702–703 audit removed the title/URL-only confirmation branch and image-only success marker, and tightened applied selectors to exact text. Read-only run 704 reopened all 13 reported application URLs and saved persisted `span#already-applied` receipts. This verifies current application state; it does not replay the original submission or prove job fit.
 
-The shared answer engine still includes inferred tenure and generic willingness paths. The Naukri caller needs a policy audit before the guide can claim that every unknown skill reaches review. No fresh Naukri submission was performed during this documentation review.
+The shared answer engine now holds unknown quantitative skill tenure for review, prevents contact-number collisions, and respects specific configured skill tenure over generic testing answers. Boolean skill adjacency remains a separate policy. Top Technical Skills can use the profile's configured core skills. Self-ratings without an approved value/scale and unlisted WebdriverIO tenure remain review items.
+
+The [detailed audit](../../analysis/run702_703_audit.md) covers 324 planner/outcome records. Current descriptions for the 13 applications show nine explicit requirement/role conflicts, three supported stack routes and one unverified CDAC qualification. Narrow secondary-profile description exclusions address the observed conflicts, while preserving Java-or-Python alternatives. Arbitrary qualification and named-skill JD tenure requirements are not comprehensively enforced. Archived rejected rows lack full original descriptions, so rejection recall cannot be certified. No new applications or review-queue resolutions were performed during this audit.

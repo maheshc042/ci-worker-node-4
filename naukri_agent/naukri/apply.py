@@ -997,23 +997,11 @@ class ApplyEngine:
             if apply_btn is not None and hasattr(apply_btn, "is_visible") and await apply_btn.is_visible():
                 btn_text = ((await apply_btn.inner_text()) or "").strip().lower()
                 is_disabled = await apply_btn.is_disabled() if hasattr(apply_btn, "is_disabled") else False
-                if "applied" in btn_text:
+                if btn_text == "applied":
                     return "applied" if not is_disabled else "already_applied"
                 if "apply" in btn_text:
                     log.info("apply.verify_active_apply_button_found", job_id=job.job_id, btn_text=btn_text)
                     return "unknown"
-        except Exception:
-            pass
-
-        # 2. Native confirmation redirect
-        try:
-            cur_url = (self.page.url or "").lower()
-            if "/apply/confirmation" in cur_url:
-                return "applied"
-            t = self.page.title()
-            title = ((await t if hasattr(t, "__await__") else str(t)) or "").lower()
-            if "apply confirmation" in title:
-                return "applied"
         except Exception:
             pass
 

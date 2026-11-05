@@ -223,7 +223,7 @@ CARD_RATING = [
 ]
 CARD_ALREADY_APPLIED = [
     "span.applied-status",
-    "span:has-text('Applied')",
+    "span:text-is('Applied')",
     "div.already-applied",
 ]
 
@@ -256,11 +256,11 @@ JD_COMPANY_SITE_BUTTON = [
 ]
 
 JD_ALREADY_APPLIED = [
-    "span#already-applied",
-    "button#apply-button[disabled]:has-text('Applied')",
-    "button#apply-button:has-text('Applied')",
-    "div:has-text('You have already applied')",
-    "p:has-text('You have already applied')",
+    "span#already-applied:text-is('Applied')",
+    "button#apply-button[disabled]:text-is('Applied')",
+    "button#apply-button:text-is('Applied')",
+    "div:text-is('You have already applied')",
+    "p:text-is('You have already applied')",
     ".already-applied-text",
     "span.already-applied",
     "span:text-is('Applied')",
@@ -289,15 +289,14 @@ APPLY_SUCCESS = [
     "div.acp-header-container:has-text('Applied to')",
     "div.acp-header-container:has-text('Application sent')",
     "div.acp-header-container:has-text('Successfully applied')",
-    "div.acp-header-container img[src*='check_circle']",
     # Specific confirmation banners with unambiguous positive text
     "div.apply-message:has-text('successfully applied')",
     "div.apply-message:has-text('Application sent')",
     "div.styles_apply-message:has-text('successfully applied')",
     "div.styles_apply-message:has-text('Application sent')",
     # Primary Apply button transitioned to applied state
-    "button#apply-button[disabled]:has-text('Applied')",
-    "button#apply-button:has-text('Applied')", 
+    "button#apply-button[disabled]:text-is('Applied')",
+    "button#apply-button:text-is('Applied')",
 ]
 
 APPLY_ERROR_TOAST = [

@@ -1294,14 +1294,14 @@ class Repository:
                 )
                 opts_str = " | ".join(str(o) for o in options) if options else "Text Input"
                 alert_body = (
-                    f"❓ <b>Unanswered Question [#`{review_id}`]</b>\n"
-                    f"<b>Profile:</b> {profile}\n"
-                    f"<b>Question:</b> \"{q_norm}\"\n"
-                    f"<b>Type:</b> {kind}\n"
-                    f"<b>Options:</b> {opts_str}\n\n"
-                    f"👉 <i>Reply directly to this message with your answer to train your AI!</i>"
+                    f"Unanswered Question [#{review_id}]\n"
+                    f"Profile: {profile}\n"
+                    f"Question: \"{q_norm}\"\n"
+                    f"Type: {kind}\n"
+                    f"Options: {opts_str}\n\n"
+                    "Reply directly to this message with your answer."
                 )
-                await notifier.send(f"❓ Question Review Required [#{review_id}]", alert_body, is_error=False)
+                await notifier.send(f"Question Review Required [#{review_id}]", alert_body, level="review")
             except Exception as exc:
                 log.warning("telegram_review_alert_failed", error=str(exc)[:150])
 

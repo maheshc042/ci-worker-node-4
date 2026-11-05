@@ -47,7 +47,7 @@ Manual workflow runs default to live mode. Enabling the dry-run checkbox checks 
 
 The [answer engine](../../naukri_agent/core/answers.py) includes special intent handlers before and after configured KB matching. Its actual ordering is more detailed than a simple KB-first hierarchy.
 
-**Required policy** is to use verified facts and send unknown tenure to review. **Current gap** is that the shared engine still contains unlisted/default tenure and generic willingness fallbacks. LinkedIn rejects the identified inferred-answer patterns through its adapter guard. Equivalent enforcement has not been demonstrated for every other caller. A configured zero for a known skill is different from inventing zero for an unlisted skill.
+Quantitative tenure questions require configured facts; unlisted skill tenure goes to review. Numeric contact details cannot answer tenure questions, and a generic testing answer cannot override a named skill's configured zero. A configured zero for a known skill is different from inventing zero for an unlisted skill. Boolean skill adjacency and generic willingness handlers remain separate policies; they do not establish years of experience.
 
 The Cutshort Messages sweep examines fresh Pending and inbox threads. Its current code does not restrict every thread to an eligible job applied by this agent. Read that platform's limitations before enabling the sweep.
 
@@ -67,7 +67,7 @@ The Cutshort Messages sweep examines fresh Pending and inbox threads. Its curren
 | LinkedIn | Run 688 completed discovery. Run 695 held a custom question. Run 698 reached final Submit under dry run | A fresh live submission receipt is unverified |
 | Instahyre | Run 699 completed discovery. Run 701 reached native Apply under dry run. Saved-page replay scoped the receipt to the job | A fresh live submission receipt is unverified |
 | HiringCafe | Run 700 stopped at clearance. Local handoff checks passed | Live discovery and downstream delivery remain unverified |
-| Naukri | Implementation and existing regression tests reviewed here | The verifier still contains title/URL and broad-marker branches that require a separate correctness review |
+| Naukri | Runs 702–703 audited; read-only run 704 found persisted Applied markers for all 13 reported applications | Current descriptions reveal selection conflicts; qualification and skill-specific tenure checks remain incomplete. See the [audit](../../analysis/run702_703_audit.md) |
 | Wellfound | Implementation and existing regression tests reviewed here | Hard-coded modal tenure and fallback pitch claims need a separate correctness review |
 
 ## Contributor boundaries

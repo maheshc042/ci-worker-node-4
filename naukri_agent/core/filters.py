@@ -602,7 +602,7 @@ class FilterEngine:
     def evaluate_detail(self, job: Job) -> FilterDecision:
         """Re-runs description rules against the full JD text."""
         rules = self.rules
-        description = job.description.lower()
+        description = " ".join(job.description.lower().split())
         if not description:
             return FilterDecision(True)
 

@@ -57,17 +57,14 @@ class TestSkipOnlyOptions(unittest.TestCase):
         self.assertEqual(res.value, "2-3 years")
 
     def test_none_of_the_above_is_not_skip(self):
-        """'None of the above' asserts tenure facts — never auto-picked: the
-        unlisted-skill 1y default fits the real range instead."""
+        """Unknown tenure needs review even when a low numeric band is offered."""
         q = ScreeningQuestion(
             text="How many years of experience do you have in Cobol?",
             kind="radio",
             options=["0-1 years", "None of the above"],
         )
         res = _engine().resolve(q)
-        self.assertIsNotNone(res)
-        assert res is not None
-        self.assertEqual(res.value, "0-1 years")
+        self.assertIsNone(res)
 
 
 class TestTenureFramings(unittest.TestCase):

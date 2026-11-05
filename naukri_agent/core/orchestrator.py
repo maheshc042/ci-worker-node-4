@@ -351,9 +351,15 @@ class Orchestrator:
         await self.repo.seed_answer_kb(self.config.answers, profile=None)
         await self.repo.seed_answer_kb(profile.answers, profile=profile.name)
         kb = await self.repo.load_answer_kb(profile.name)
+        profile_answers = dict(profile.answers)
+        if profile.core_skills and not any(
+            pattern.strip().casefold() == "top technical skills"
+            for pattern in [*profile_answers, *(pattern for pattern, _ in kb)]
+        ):
+            profile_answers["top technical skills"] = ", ".join(profile.core_skills[:10])
         return AnswerEngine(
             kb=kb,
-            profile_answers=profile.answers,
+            profile_answers=profile_answers,
             strict=self.config.run.strict_answers,
             # Skill -> years map: answers the open-ended "how many years of X?"
             # family that no finite question table can cover.
@@ -859,10 +865,10 @@ class Orchestrator:
             # =========================================================
             # PHASE 3: LinkedIn Cold-Email Campaign (optional)
             # Owns its browser profile and enforces its own per-day
-            # email cap, so calling it from any account's run is safe:
-            # later runs the same day exit before launching a browser.
+            # email cap. Keep this campaign on primary so a secondary
+            # Naukri run cannot launch unrelated LinkedIn activity.
             # =========================================================
-            if not self.only_platform and self.config.platforms.linkedin and self.settings.matched_outreach_enabled:
+            if self.account_key == "primary" and not self.only_platform and self.config.platforms.linkedin and self.settings.matched_outreach_enabled:
                 campaign_budget_s = self.config.run.run_timeout_minutes * 60 - self.elapsed_s
                 if campaign_budget_s < 300:
                     log.info(

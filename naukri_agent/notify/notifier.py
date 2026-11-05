@@ -31,6 +31,7 @@ TELEGRAM_LIMIT = 4_000
 
 
 _LEVEL_PREFIXES = {
+    "review": "❓ REVIEW",
     "failed": "🚨 FAILED",
     "partial": "⚠️ PARTIAL",
     "success": "🚀 SUCCESS",
@@ -215,7 +216,7 @@ def format_run_summary(
         f"  • ✅ APPLIED        : {stats.applied}",
         f"  • 🔄 Already Applied: {stats.already_applied}",
         f"  • 🔗 External Links : {stats.external}",
-        f"  • 📤 Forwarded to Sidekick: {getattr(stats, 'forwarded', 0)}",
+        f"  • 📤 Sidekick handoffs (queued/dispatched): {getattr(stats, 'forwarded', 0)}",
         f"  • ⚠️ Needs Review   : {stats.needs_review}",
         f"  • ❌ Failed         : {stats.failed}",
     ]

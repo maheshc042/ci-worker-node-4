@@ -351,6 +351,7 @@ answers:
   current location: "Bengaluru"
   preferred location: "Bengaluru"
   are you willing to work from office: "Yes"
+  open for 5 days in office work mode: "Yes"
   hybrid mode: "Yes"
   face to face interview: "Yes"
   ready to relocate for a face to face interview: "Yes"
@@ -488,7 +489,7 @@ answers:
 # that no finite answer table can cover: the engine detects the intent, sees
 # which of these skills the question names, and combines them with
 # `multi_skill_strategy` ("HTML, CSS, JavaScript" -> max = the stack as a whole).
-# Anything not listed falls back to `default_years`.
+# Unlisted numeric tenure goes to review. default_years remains a legacy configuration field.
 # ---------------------------------------------------------------------------
 experience:
   total_years: 3
@@ -538,7 +539,7 @@ experience:
     dot net: 0
     # Java ecosystem stays 0: the resume claims no Java/Spring, and the
     # explicit answers above already say 0. A nonzero map here would let
-    # unlisted-variant questions ("years in Hibernate?") answer 1 against
+    # unlisted-variant questions ("years in Hibernate?") conflict with
     # the resume — never inflate tenure recruiters cross-check.
     java: 0
     spring: 0
@@ -547,7 +548,7 @@ experience:
     hibernate: 0
     # AI / Python track: 2 years of application work. Model-training tooling
     # (PyTorch/TensorFlow/Hugging Face/MLOps) is 0 because the resume does not
-    # support it. Anything outside this list falls back to default_years (1).
+    # support it. Unlisted numeric tenure requires review.
     ai: 2
     artificial intelligence: 2
     agentic ai: 2
@@ -621,8 +622,8 @@ experience:
     google gemini: 2
     # --- Technologies the resume does NOT support: explicit 0 ------------
     # A true 0 protects the candidate when a recruiter cross-checks the
-    # resume. These are per-key zeros, NOT a blanket change to default_years;
-    # adjacent tools stay unlisted and keep the calibrated 1y default.
+    # resume. These per-key zeros remain configured facts.
+    # Numeric tenure for unlisted tools goes to review.
     kubernetes: 0
     k8s: 0
     terraform: 0
@@ -906,6 +907,15 @@ profiles:
       title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, technical support, support engineer, product support, application support, desktop support, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, power bi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, robotics, robotic, solutions engineer, iit, iiit, nit, cgpa, manual testing, manual test]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
+        # Explicit mandatory requirements observed in runs 702/703.
+        # Keep optional Java exposure and Java/Python alternatives eligible.
+        "excellent proficiency in qa automation using restassured",
+        "minimum of 3 years of experience in web automation testing using selenium",
+        "strong experience with java and aws", "strong java skills",
+        "strong hands-on experience in selenium",
+        "strong in kubernetes", "mandatory knowledge of kubernetes",
+        "backend: c#, .net core", "strong programming skills in java",
+        "cloud infrastructure & virtualization engineer",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
       ]
       allowed_locations: []

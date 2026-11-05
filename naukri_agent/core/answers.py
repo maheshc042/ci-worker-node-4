@@ -45,13 +45,6 @@ _EXPERIENCE_INTENT = re.compile(
     re.IGNORECASE,
 )
 
-# Fallback answers (default/unlisted/total years) are tenure claims: only
-# allowed when the question carries the experience NOUN. Without one, an
-# unknown skill ("3 years with Cobol?", "experienced in Cobol?") must fall
-# through to review — never inherit a default. Noun-boundary on purpose:
-# the adjective "experienced" must not open the fallback door.
-_EXP_WORD = re.compile(r"\b(?:experience|knowledge|expertise|tenure|total|overall)\b", re.IGNORECASE)
-
 _TOTAL_EXPERIENCE_INTENT = re.compile(
     r"\b(?:total|overall|cumulative|aggregate)\s+(?:work\s+|professional\s+)?"
     r"(?:experience|exp)\b",
@@ -472,6 +465,16 @@ class AnswerEngine:
                 self._record_hit(entry)
                 return fitted
 
+        quantitative_tenure = _EXPERIENCE_INTENT.search(text) and (
+            _NUMBER.search(text)
+            or re.search(r"\bhow\s+(?:many|much|long)\b|\bnumber\s+of\b", text)
+        )
+        if quantitative_tenure:
+            tenure = self._resolve_experience(text, ScreeningQuestion(text, "text", []))
+            if tenure is None and self._resolve_tenure_comparison(text, question) is None:
+                log.info("answers.unlisted_tenure_review", question=question.text[:120])
+                return None
+
         # Stage 1.5: Dynamic Interview Availability Scheduling
         availability = self._resolve_availability(text, question)
         if availability is not None:
@@ -785,8 +788,16 @@ class AnswerEngine:
         _non_tenure_pat = re.compile(
             r"experienc|years?|yrs?|knowledge|expertise|tenure", re.IGNORECASE
         )
+        named_zero_skills = [
+            _normalise(skill) for skill, years in (self.experience.skills or {}).items()
+            if float(years) == 0 and _contains_word(text, _normalise(skill))
+        ]
 
         for entry in self.entries:
+            if tenure_q and not _non_tenure_pat.search(entry.pattern):
+                continue
+            if tenure_q and any(not _contains_word(entry.pattern, skill) for skill in named_zero_skills):
+                continue
             if entry.regex is not None:
                 if not entry.regex.search(text):
                     continue
@@ -798,18 +809,12 @@ class AnswerEngine:
                 # (run 569 #79: "<30 lakhs?" answered No via NIT).
                 if len(entry.pattern) <= 4 and not _contains_word(text, entry.pattern):
                     continue
-                if tenure_q and not _non_tenure_pat.search(entry.pattern):
-                    if not _NUMBER.search(entry.answer or ""):
-                        continue
                 stage, matched = 2, len(entry.tokens)
             elif (
                 entry.tokens
                 and entry.index not in self._polarity_only
                 and entry.tokens <= question_tokens
             ):
-                if tenure_q and not _non_tenure_pat.search(entry.pattern):
-                    if not _NUMBER.search(entry.answer or ""):
-                        continue
                 stage, matched = 1, len(entry.tokens)
             else:
                 continue
@@ -1202,6 +1207,12 @@ class AnswerEngine:
                 matched.append((phrase, float(years)))
 
         if matched:
+            specific = [
+                pair for pair in matched
+                if pair[0] not in {"automation", "testing", "qa", "software", "engineering", "development"}
+            ]
+            if specific:
+                matched = specific
             matched.sort(key=lambda pair: len(pair[0]), reverse=True)
             longest = matched[0][0]
             values = [years for phrase, years in matched if phrase == longest or phrase not in longest]
@@ -1217,51 +1228,15 @@ class AnswerEngine:
             log.info("answers.experience_map", skills=[phrase for phrase, _ in matched][:6], strategy=strategy, value=value)
             return fit_years(value, f"experience:{longest}")
 
-        # Named-ROLE tenure ("... as a Site Reliability Engineer?") with no
-        # map hit: recruiters verify titles against the resume, so a default
-        # here is fabrication, not generosity. Review — while "in <skill>"
-        # keeps the unlisted-1y default below. Skill hits already returned.
-        if re.search(
-            r"\bas\s+(?:an?\s+|the\s+)?[a-z][a-z0-9\s/&+#.\-]{1,40}?"
-            r"(?:developer|engineer|analyst|architect|scientist|manager|"
-            r"lead|consultant|specialist|tester|administrator|designer|"
-            r"devops|sre|qa)s?\s*\??$",
+        # A matching job title cannot establish unlisted skill or role tenure.
+        # Only a generic total-experience question can use the configured total.
+        if re.fullmatch(
+            r"(?:how (?:many|much) (?:years?|yrs?|months?) (?:of )?)?"
+            r"(?:work |professional |overall |total )?(?:experience|exp)"
+            r"(?: do you have)?[ ?]*",
             text,
-        ):
-            log.info("answers.role_tenure_review", question=question.text[:120])
-            return None
-
-        # For unlisted skills on matched jobs, default to 1 year so automated
-        # ATS screening doesn't drop an otherwise-strong candidate.
-        m = re.search(
-            r"(?:experience|knowledge|expertise)\s+(?:in|with|of|on|using)\s+([a-z][a-z0-9+#.\- ]{0,30})\s*\??$",
-            text,
-        ) or re.search(
-            r"(?:in|with|of)\s+([a-z][a-z0-9+#.\- ]{1,30})\s*\??$",
-            text,
-        )
-        if m and (_EXP_WORD.search(text) or re.search(
-            r"\bhow\s+(?:many|much)\s+(?:years?|yrs?|months?)\b.*\bworked\b", text
-        )):
-            maps: set[str] = set()
-            for s in (config.skills or {}):
-                maps |= _tokenise(s)
-            if not (_tokenise(m.group(1)) & maps):
-                unlisted_skill = m.group(1).strip()[:30]
-                log.info(
-                    "answers.unlisted_skill_default_1y",
-                    question=question.text[:120],
-                    skill=unlisted_skill,
-                )
-                return fit_years(1, f"experience:unlisted_default:{unlisted_skill}")
-
-        if config.default_years is not None and _EXP_WORD.search(text):
-            return fit_years(config.default_years, "experience:default")
-
-        if config.total_years is not None and _EXP_WORD.search(text):
-            return fit_years(config.total_years, "experience:total_fallback")
-
-        # Unknown required facts block the application; never invent experience.
+        ) and config.total_years is not None:
+            return fit_years(config.total_years, "experience:total")
         return None
 
     def _configured_ctc(self, which: str) -> float | None:
