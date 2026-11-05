@@ -1,12 +1,12 @@
 # HiringCafe Platform Playbook
 
-Comprehensive architecture and operational specification for the HiringCafe adapter. This document strictly mirrors the runtime logic in [`naukri_agent/platforms/hiringcafe.py`](../../naukri_agent/platforms/hiringcafe.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`SIDEKICK_PICKUP.md`](../../SIDEKICK_PICKUP.md).
+Workflow and implementation reference for the HiringCafe adapter. This guide describes the current workflow and flags verification limits in the implementation in [`naukri_agent/platforms/hiringcafe.py`](../../naukri_agent/platforms/hiringcafe.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`SIDEKICK_PICKUP.md`](../../SIDEKICK_PICKUP.md).
 
 ---
 
 ## 1. Overview & Handoff Role
 - **Model**: HiringCafe serves as a pure **discovery and external handoff adapter**. It does not perform in-platform form automation; instead, it extracts clean, direct-to-ATS application links.
-- **Sidekick Integration**: Eligible ATS links are forwarded as `ApplicationStatus.EXTERNAL` with `external_url = ats_url` and written to the Sidekick outbox for downstream automated or assisted application.
+- **Sidekick Integration**: Eligible ATS links are forwarded as `ApplicationStatus.EXTERNAL` with `external_url = ats_url` and offered to the orchestrator for conditional Sidekick dispatch. Side effects and integration must be enabled, and dispatch validation must pass.
 
 ---
 
@@ -30,8 +30,8 @@ Comprehensive architecture and operational specification for the HiringCafe adap
 - **Clearance Verification**: Both gates must pass: clean page title/content (`_has_clearance`) AND visible job cards in the DOM (`_probe_cards`).
 - **Poisoned Cookie Purge**: Drops `hiringcafe.com` and `hiring.cafe` domain cookies if challenged repeatedly, reloading against a clean cookie jar without disturbing other platform sessions.
 - **Headed vs Headless**:
-  - Headed: Grants 120 seconds for manual checkbox completion (`_await_manual_solve`).
-  - Headless: Logs a diagnostic screenshot (`hiringcafe-challenge.png`) and exits cleanly without hanging.
+  - Headed: Initial clearance can wait roughly 120 seconds for manual completion. The separate `_await_manual_solve` helper polls for a call-specific bounded interval.
+  - Headless: Logs a diagnostic screenshot (`hiringcafe-challenge.png`) and returns an access failure after bounded recovery attempts. Run 700 ended partial at this gate.
 
 ### 3. Card Scraping & Substantive Container Ascent
 - **Substantive Text Recovery**: The anchor text (`a[href*='/job/']`) on HiringCafe is often micro-copy (*"Job Posting | View all"*, ~20 chars). The scraper climbs up to 6 parent levels until finding substantive text ($>120$ characters) to ensure downstream filters receive rich descriptions (run 561 fix).
@@ -59,7 +59,7 @@ Inspects candidate anchors on the detail page:
 ---
 
 ## 4. Screening & Pre-Submit Filter Pipeline ([`apply_to_job`](../../naukri_agent/platforms/hiringcafe.py))
-1. **Metadata Validation**: Must have non-empty `title`, substantive `body`, and valid `apply_url`. Missing fields are dropped immediately.
+1. **Metadata Validation**: Must have non-empty `title`, non-empty `body`, and valid `apply_url`. Missing fields are dropped immediately.
 2. **Detail Eligibility Check ([`pre_submit_check`](../../naukri_agent/platforms/hiringcafe.py))**:
    - Enforces the same strict candidate experience bounds and forbidden phrase filters as native platforms.
    - If rejected, skips cleanly with `decision.reason` without queueing into Sidekick.
@@ -73,7 +73,7 @@ Inspects candidate anchors on the detail page:
          external_url=job.url,
      )
      ```
-   - The orchestrator writes the verified role metadata into the Sidekick queue.
+   - The orchestrator can enqueue the role when mutations and Sidekick integration are enabled. Returning EXTERNAL does not itself establish queueing, delivery or ATS submission.
 
 ---
 
@@ -82,3 +82,11 @@ Inspects candidate anchors on the detail page:
 2. **DO NOT accept linkless or titleless listings**: Corrupt listings must be rejected at the boundary.
 3. **DO NOT mark HiringCafe jobs as `APPLIED`**: HiringCafe is an external discovery gateway; only the downstream applicant or ATS submitter can record final delivery.
 4. **DO NOT hammer Turnstile checkboxes without cooldowns**: Repeated clicks reset active validation tokens and produce permanent challenge walls.
+
+## Evidence and implementation limits
+
+Headless dry run 700 stopped at the Cloudflare clearance gate. Local checks verified the missing-check failure, detail rejection, accepted ATS route and invalid-board-link rejection. Live discovery and downstream delivery remain unverified.
+
+The current code attempts bounded Turnstile checkbox interactions. A guide's statement about cooldowns does not establish that this is compatible with the intended manual-challenge policy. Review the policy before extending that behavior. An unavailable feed must not be reported as zero eligible jobs.
+
+The parser requires non-empty heading and body, extracts tenure bounds and validates link candidates. It still combines card text with a page-body slice, uses a placeholder for an unknown employer, and substitutes the configured maximum age when a timestamp is missing. These are metadata limitations. Explicit action links can use arbitrary company domains, so recognizing an Apply label does not independently establish employer ownership of a destination.

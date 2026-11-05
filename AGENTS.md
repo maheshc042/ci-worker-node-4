@@ -14,18 +14,21 @@ Before making any code changes or refactoring existing platform adapters:
 ## 2. Core Invariants (DO NOT BREAK)
 
 ### A. The Zero False-Positive Mandate
-- **Rule**: An application must NEVER be declared `APPLIED` unless verified by the server-rendered DOM state after submission.
+- **Rule**: Record `APPLIED` only after the platform-specific receipt or persisted target-job state has been verified following submission. Browser-rendered DOM evidence alone does not establish whether a page was server-rendered.
 - **Forbidden Heuristics**:
   - ❌ **DO NOT** assume modal closure or disappearing dialogs mean submission succeeded.
-  - ❌ **DO NOT** assume clicking "Apply" or "Send" succeeded without post-click reload verification.
+  - ❌ **DO NOT** assume clicking "Apply" or "Send" succeeded. Follow the platform-specific receipt rule below.
   - ❌ **DO NOT** use client-side SPA layout meta tags (e.g. `meta[name='atdlayout'][content='jobapplied']`) or page title substrings like `"confirmation"`.
   - ❌ **DO NOT** use loose substring selectors like `button:has-text('Applied')` or `div[class*='applied']`. Always use strict exact text matching: `button:text-is('Applied')`.
 - **Required Verification**:
   - Naukri: Mandatorily invoke `_verify_post_submit(job)` (`page.goto(job.url)`). If the active Apply button is still present, return `status = FAILED`, `reason = SkipReason.SUBMISSION_UNCONFIRMED`.
-  - Cutshort: Mandatorily navigate to `job.url` (`/job/<id>`) and match `button:text-is('Applied')` or `a:text-is('View conversation')`.
-  - Instahyre: Verify `card.locator("button:text-is('Applied')")` on the feed card.
-  - LinkedIn: Require explicit `[role='dialog'] :text-is('Application sent')` or target job view status.
-  - Wellfound: Reload listing URL and verify persisted `button:text-is('Applied')`.
+  - Cutshort: Capture the new View conversation link for the exact job, open that thread read-only, and verify its View full job description link points back to the job. Reopening the applied listing is unreliable.
+  - Instahyre: Require the exact target feed card's Applied button or exact applied badge. Employer-level popups and carousel movement are insufficient.
+  - LinkedIn: Require an explicit sent receipt in a supported dialog or applied state on the exact target job view.
+  - Wellfound: Reload the exact listing and verify its persisted applied evidence using `_APPLIED_JOB_MARKERS`.
+  - HiringCafe: Record an external route after the detail gate. Verify outbox delivery and eventual ATS submission separately.
+
+The playbooks distinguish these requirements from implementation gaps. A documented requirement or passing unit test is not evidence that every caller currently enforces it.
 
 ### B. Screening & Answer Integrity
 - **Rule**: Never fabricate or guess screening answers.
@@ -49,4 +52,4 @@ Before making any code changes or refactoring existing platform adapters:
     ```bash
     .venv\Scripts\python -m pytest tests/
     ```
-  - Ensure all 469+ unit and regression tests pass with 0 errors before presenting your work.
+  - Run all currently discovered unit and regression tests, report the actual counts, and disclose any failures or unavailable checks before presenting completion.

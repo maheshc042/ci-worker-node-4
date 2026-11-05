@@ -5,8 +5,8 @@ Any agent modifying adapter code in `naukri_agent/platforms/` or `naukri_agent/n
 1. **Read the Platform Playbooks**:
    Before modifying an adapter, read [`docs/platforms/README.md`](../../docs/platforms/README.md) and the adapter's playbook (`naukri.md`, `cutshort.md`, `instahyre.md`, `linkedin.md`, `wellfound.md`, `hiringcafe.md`).
 
-2. **Server-Side Verification is Compulsory**:
-   - Every platform adapter must verify that an application landed using server-rendered state (e.g. reloading the job page or checking exact target elements).
+2. **Platform-Specific Verification is Compulsory**:
+   - Verify the receipt or persisted target state specified in the platform playbook. A DOM check does not establish server rendering. Naukri and Wellfound reopen listings, Cutshort verifies the exact job's new conversation, and Instahyre checks the target card.
    - An unconfirmed click or closed modal MUST return `status = FAILED`, `reason = SkipReason.SUBMISSION_UNCONFIRMED`. Never return `APPLIED` without empirical evidence.
 
 3. **Selector Strictness**:

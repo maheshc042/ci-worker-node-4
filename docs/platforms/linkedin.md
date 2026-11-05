@@ -1,6 +1,6 @@
 # LinkedIn Platform Playbook
 
-Comprehensive architecture and operational specification for the LinkedIn Easy Apply adapter. This document strictly mirrors the runtime logic in [`naukri_agent/platforms/linkedin.py`](../../naukri_agent/platforms/linkedin.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`answers.py`](../../naukri_agent/core/answers.py).
+Workflow and implementation reference for the LinkedIn Easy Apply adapter. This guide describes the current workflow and flags verification limits in the implementation in [`naukri_agent/platforms/linkedin.py`](../../naukri_agent/platforms/linkedin.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`answers.py`](../../naukri_agent/core/answers.py).
 
 ---
 
@@ -14,7 +14,7 @@ Comprehensive architecture and operational specification for the LinkedIn Easy A
   - **Headless Mode**: Immediately logs a warning and exits gracefully without hanging the run.
   - **Headed Mode**: Pauses and allows up to 120 seconds for the user to complete interactive human verification.
   - **Never** attempts automated CAPTCHA or PIN challenge solving.
-- **Daily Budget**: Strictly adheres to configured apply limits (typically 35 applies per day) to maintain account trust scores.
+- **Daily Budget**: Strictly adheres to configured apply limits (per-profile or per-run platform limits plus the configured account daily cap). A search target or platform limit is not an independent daily budget.
 
 ---
 
@@ -34,7 +34,7 @@ Search queries are generated per profile track using boolean clauses with hard t
 ### 2. URL Parameters & Pagination
 Constructs the search URL via `_get_search_url`:
 - `f_AL=true`: Easy Apply filter only.
-- `f_TPR=r{tpr_seconds}`: Recency filter (default 3 days = 259,200s; falls back to 7 days if $<10$ jobs found).
+- `f_TPR=r{tpr_seconds}`: Recency filter (model default 3 days = 259,200s; current configured `linkedin.days` is 1; falls back to 7 days if $<10$ jobs found).
 - `f_E=2%2C3`: Filters strictly for Entry Level (`2`) and Associate (`3`).
 - `sortBy=DD`: Orders listings chronologically by date posted.
 - **Pagination**: Iterates through up to 6 pages per pass using in-page buttons (`button[aria-label='Page {N}']`) or URL offsets (`&start=0, 25, 50, ...`).
@@ -44,7 +44,7 @@ Constructs the search URL via `_get_search_url`:
 - **Title Normalization**: Strips noise badges (*"with verification"*, *"Be an early applicant"*) and deduplicates doubled title strings (e.g. *"Software Engineer Software Engineer"*).
 - **Fast Card-Level Filtering**:
   - `easy_apply`: Checks footer text. If "Easy Apply" is missing, marks `easy_apply = False` to discard company-site jobs in 0s instead of burning 20s at apply time.
-  - `applicant_count`: Extracted directly from card text (*"57 applicants"*, *"Over 100 applicants"* $\rightarrow$ 101, *"Be an early applicant"* $\rightarrow$ 5).
+  - `applicant_count`: Parsed or imputed from card text (*"57 applicants"*, *"Over 100 applicants"* $\rightarrow$ 101, *"Be an early applicant"* $\rightarrow$ 5).
   - `posted_days_ago`: Parses relative timestamps (*"just now"*, *"today"*, *"yesterday"*, *"3 days ago"*).
   - `is_walkin`: Tags drive/walk-in ads (*"walk-in"*, *"f2f"*, *"face to face"*).
   - Experience extraction: Extracts explicit years or infers bounds for senior (5–10y) and fresher (0y).
@@ -59,12 +59,12 @@ Constructs the search URL via `_get_search_url`:
 - Rejects non-technical roles and blocked company names.
 
 ### 2. Deep Suitability & Scoring Engine ([`evaluate_job_suitability`](../../naukri_agent/platforms/linkedin.py))
-Scores listings on a 100-point rubric (minimum threshold: $\ge 60/100$):
+Uses an adapter-specific suitability score with a threshold of 60. The implementation labels it out of 100 but does not clamp its additions to 100.
 - **Base Score**: 75.
-- **Title Blocklist**: Blocks out-of-scope technologies (Java, Spring Boot, .NET, C#, PHP, SAP, Salesforce, Mainframe) and non-dev roles (Sales, BPO, BA, SEO, Tech Support). *"Lead"* is deliberately permitted for experienced candidate matching.
+- **Title Blocklist**: Uses the adapter's explicit whole-word blocklist for technologies and job families. Do not infer additional exclusions from broad labels such as support. *"Lead"* is deliberately permitted for experienced candidate matching.
 - **Target Role Alignment**: Matches against 30 target roles (+20 points).
 - **Unpaid / Spam Skipping**: Immediately rejects unpaid, fellowship, volunteer, or survey scam postings (`pollfish`, etc.).
-- **Seniority Shield**: Skips listings requiring 6+, 7+, 8+, 10+, 15+ years of experience.
+- **Seniority Shield**: A high-tenure pattern combined with a senior title can reject the listing. The shared detail gate separately evaluates extracted experience.
 - **Geographic Gate**: Rejects foreign on-site positions (US, UK, Germany, Canada, Australia) while approving India-based or remote roles (+5 points).
 - **Stack Overlap Gate**: Evaluates whole-word regex matches (`_word_hit`) across 40+ engineering tokens. If zero stack overlap is detected, the job is disqualified immediately (`"No candidate-stack overlap in title/JD"`).
 
@@ -116,7 +116,7 @@ Iterates through modal steps, executing strict element resolution inside `modal`
   - **Phone Inputs**: Fills `applicant_phone` with digit validation and sequential typing fallback. Never submits hardcoded fake numbers.
   - **Email Inputs**: Fills `applicant_email`.
   - **Location Comboboxes**: Types configured city and clicks typeahead suggestion.
-  - **Numeric Inputs**: Validates whole integers (0–99). Adjusts salary multipliers (LPA to annual INR) based on input `min` attributes.
+  - **Numeric Inputs**: Existing-value handling and resolved numeric formatting are separate. Resolved values can retain decimals. Salary units can be scaled to annual INR or thousands from field text and bounds. This is not a general 0–99 constraint.
   - **Date Inputs**: Converts configured dates to ISO `YYYY-MM-DD` or custom Indian formats (`dd-mm-yyyy`). Never fabricates today's date if unconfigured.
   - **Exam Percentiles / Marks**: Leaves unconfigured grades blank to avoid fraud; escalates to review.
   - **Field-Length Guard (`_fit_field_length`)**: Automatically truncates answers to input's `maxlength` attribute, preventing *"Invalid input"* validation stalls.
@@ -126,7 +126,7 @@ Iterates through modal steps, executing strict element resolution inside `modal`
 If any answer relied on generic tenure inferences (`experience:unlisted_default`, `willingness_affirmative`, etc.):
 - Captures screenshot of the form.
 - Safely closes modal.
-- Returns `status = NEEDS_REVIEW`, `reason = SkipReason.UNANSWERED_QUESTION`, and alerts via Telegram.
+- Returns `NEEDS_REVIEW / UNANSWERED_QUESTION` with question items for orchestrator persistence. Notifications depend on the run settings.
 
 ### 4. Stuck Step Recovery
 If the step signature (`inputs:{count}::{form_text}`) remains unchanged for 3 consecutive attempts:
@@ -153,7 +153,7 @@ Before clicking submit, runs DOM validity script across all controls:
 
 ### 2. Single Submit Action
 - Records mutation `submit_application` and adds job ID to `_submission_attempts`.
-- Clicks `button:has-text('Submit application')` once.
+- Resolves the active dialog's exact accessible Submit application button name and clicks once.
 
 ### 3. Compulsory Verification ([`_verify_submit`](../../naukri_agent/platforms/linkedin.py))
 > [!IMPORTANT]
@@ -166,7 +166,7 @@ Before clicking submit, runs DOM validity script across all controls:
      - `[data-test-modal] :text-is('Application sent')`
      - `[data-test-modal] :text-is('Your application was sent')`
      - `dialog[open] :text-is('Application sent')`
-   - Clicks `[role='dialog'] button:text-is('Done')` to dismiss receipt cleanly.
+   - Attempts the supported Done control after observing the receipt. Failure to dismiss it is separate from application confirmation.
 2. **Dedicated Job Page Status**:
    - Inspects `/jobs/view/{job_id}`:
      - `main button:text-is('Applied')`
@@ -180,6 +180,12 @@ Before clicking submit, runs DOM validity script across all controls:
 ## 6. Invariants & Anti-Patterns (Do NOT Break)
 1. **DO NOT assume modal closing means applied**: `test_closed_modal_without_confirmation_fails` guarantees that an unconfirmed dismissal fails closed.
 2. **DO NOT click through unverified form errors**: If LinkedIn highlights a required field in red, capture diagnostics and escalate to review.
-3. **DO NOT guess numeric question fields**: Fabricating answers triggers recruiter spam reports and damages candidate trust score.
+3. **DO NOT guess numeric question fields**: Use verified facts and preserve unresolved questions for review.
 4. **DO NOT use broad unified queries**: Execute sequential, track-specific queries per profile to preserve search relevance.
 5. **DO NOT apply without Easy Apply verification**: If the button says "Apply on company site", route to `EXTERNAL` with the resolved ATS link.
+
+## Verification evidence and limits
+
+Run 688 collected 125 Full Stack and QA listings and 77 AI and Python listings. The planner selected 33 and 22 respectively. Run 695 resolved mapped React and JavaScript tenure and held a testing-project preference for review. Run 698 reached the enabled final Submit application button with submission disabled.
+
+No fresh LinkedIn submission receipt was verified in those probes. The résumé-selection path attempts configured selection or upload, but the final readiness check alone does not prove that the intended file was retained across every dialog variant. Existing values and unknown metadata also need separate interpretation. A title pass does not establish named-skill tenure.

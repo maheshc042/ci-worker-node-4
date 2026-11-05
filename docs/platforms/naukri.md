@@ -1,14 +1,14 @@
 # Naukri Platform Playbook
 
-Comprehensive architecture and operational specification for the Naukri apply adapter. This document mirrors the runtime logic in [`naukri_platform.py`](../../naukri_agent/platforms/naukri_platform.py), [`apply.py`](../../naukri_agent/naukri/apply.py), [`chatbot.py`](../../naukri_agent/naukri/chatbot.py), and [`filters.py`](../../naukri_agent/core/filters.py).
+Workflow and implementation reference for the Naukri apply adapter. This guide describes the workflow and flags verification limits in the implementation in [`naukri_platform.py`](../../naukri_agent/platforms/naukri_platform.py), [`apply.py`](../../naukri_agent/naukri/apply.py), [`chatbot.py`](../../naukri_agent/naukri/chatbot.py), and [`filters.py`](../../naukri_agent/core/filters.py).
 
 ---
 
 ## 1. Authentication & Session Management
 - **Flow**: Managed via [`naukri_agent/naukri/auth.py`](../../naukri_agent/naukri/auth.py).
-- **Session Persistence**: Cookies and local storage are saved encrypted in PostgreSQL (`account_cookies`).
+- **Session Persistence**: The browser manager persists account-specific session state through the repository. Check the configured storage and encryption settings before describing their guarantees.
 - **Account Separation**: Dual-account support (`primary` and `secondary`). Active resumes and daily application caps are tracked independently.
-- **Challenge Gate**: If Naukri demands OTP or Cloudflare/perimeter challenges, the platform marks the run as paused/needs review. **Never** attempt to bypass or solve challenges automatically.
+- **Challenge Gate**: If Naukri demands OTP or Cloudflare/perimeter challenges, authentication stops and the orchestrator handles the failure. This does not automatically create a question-review item. **Never** attempt to bypass or solve challenges automatically.
 
 ---
 
@@ -18,8 +18,8 @@ Comprehensive architecture and operational specification for the Naukri apply ad
   - `job_id`: Extracted from card URL (e.g., `reco-<numeric_id>`).
   - `title`, `company`, `location`, `min_experience`, `max_experience`, `salary_text`, `posted_days_ago`, `tags`, `is_walkin`.
 - **Deduplication Pre-Filter**:
-  - `repo.known_job_ids()`: Checks database for existing terminal outcomes (`applied`, `already_applied`, `external`, `needs_review`) within `dedupe_window_days` (default 30 days).
-  - Failed applications are kept in the dedupe window for `failed_retry_cooldown_hours` (default 12 hours) to avoid hammering broken listings on the same day.
+  - `repo.known_job_ids()`: Checks database for existing terminal outcomes (`applied`, `already_applied`, `external`, `needs_review`) within `dedupe_window_days` (model default 90 days, configurable).
+  - Ordinary failures use `failed_retry_cooldown_hours` (model default 12 hours). Unconfirmed submissions remain known for the full dedupe window. Resolved review jobs can re-enter under the attempt budget.
   - `_company_rejection()`: Enforces daily per-company application limits and collapses same-run duplicate reposts.
 
 ---
@@ -37,7 +37,7 @@ Every discovered listing is evaluated across two distinct filter gates before an
    - Seniority Imputation: Titles with Senior, Lead, Staff, Principal, Architect impute seniority bounds even when raw numeric years are missing.
 4. **Compensation**: Rejects jobs whose maximum salary is strictly below `min_salary_lpa`.
 5. **Freshness**: Rejects jobs posted more than `max_posted_days` ago (default 3 days).
-6. **Walk-in Drives**: Rejects walk-in interviews outside the candidate's home location (Bengaluru).
+6. **Walk-in Drives**: Uses configured walk-in policy and home-location filtering. The application engine can separately skip a walk-in page with no native online route.
 7. **Company Blacklist**: Rejects companies listed in `blocked_companies`.
 8. **Location**: Rejects locations in `blocked_locations` or outside `allowed_locations`.
 
@@ -87,6 +87,13 @@ Every discovered listing is evaluated across two distinct filter gates before an
 
 ## 6. Invariants & Anti-Patterns (Do NOT Break)
 1. **DO NOT rely on `meta[name='atdlayout']` or title substring `"confirmation"`**: Naukri SPA pages include these tags even before an application is submitted.
-2. **DO NOT skip `_verify_post_submit(job)`**: Server reload is the only source of truth.
+2. **DO NOT skip `_verify_post_submit(job)`**: Keep the reload verification path. Review its remaining title/URL fallback against the receipt policy below.
 3. **DO NOT treat answering screening questions as proof of application**: Answers can be rejected by the server after the drawer closes.
 4. **DO NOT guess tenure or skill questions**: Send unlisted questions to `question_review` so the human can train the knowledge base.
+
+
+## Evidence and implementation gaps
+
+The required policy excludes title-only and generic page metadata as proof. The current `_verify_post_submit` still accepts an Apply Confirmation title or confirmation URL after checking the primary button, and uses the shared success-marker list. Documenting that branch does not approve it as sufficient evidence. Review it separately before claiming zero false positives.
+
+The shared answer engine still includes inferred tenure and generic willingness paths. The Naukri caller needs a policy audit before the guide can claim that every unknown skill reaches review. No fresh Naukri submission was performed during this documentation review.

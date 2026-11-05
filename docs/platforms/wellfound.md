@@ -1,13 +1,13 @@
 # Wellfound Platform Playbook
 
-Comprehensive architecture and operational specification for the Wellfound (AngelList Talent) apply adapter. This document mirrors the runtime logic in [`naukri_agent/platforms/wellfound.py`](../../naukri_agent/platforms/wellfound.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`gemini_writer.py`](../../naukri_agent/core/gemini_writer.py).
+Workflow and implementation reference for the Wellfound (AngelList Talent) apply adapter. This guide describes the workflow and flags verification limits in the implementation in [`naukri_agent/platforms/wellfound.py`](../../naukri_agent/platforms/wellfound.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`gemini_writer.py`](../../naukri_agent/core/gemini_writer.py).
 
 ---
 
 ## 1. Authentication & Session Management
 - **Target URL**: `https://wellfound.com/jobs`
 - **Session Verification**: Inspects candidate profile elements, navigation links, and absence of login/sign-up banners.
-- **Challenge Gate**: If Wellfound prompts for account registration (*"Sign up to apply"*, *"Log in with your account to apply"*) or presents a perimeter check, the platform pauses immediately.
+- **Challenge Gate**: If Wellfound prompts for account registration (*"Sign up to apply"*, *"Log in with your account to apply"*) or presents a perimeter check, authentication can fail and the orchestrator handles the failure. A registration prompt encountered inside Apply returns a job failure rather than necessarily pausing the platform.
 
 ---
 
@@ -36,7 +36,7 @@ Every job card selected for application is evaluated through two comprehensive f
 - Rejects blacklisted company profiles and unallowed locations.
 
 ### Gate B: Detail Listing Screen ([`_read_description`](../../naukri_agent/platforms/wellfound.py))
-- Navigates to `job.url` and verifies URL structure via `_wellfound_job_page` (`wellfound.com/jobs/...` or `/l/...`).
+- Navigates to `job.url` and verifies the target job with `_wellfound_job_page`. Supported URL variants are defined in that helper.
 - **Pre-Existing Check**: Checks `_APPLIED_JOB_MARKERS` immediately upon page load. If present, returns `ALREADY_APPLIED`.
 - **Full Description Extraction**: Scrapes the entire job description text via `_DESCRIPTION_SELECTORS` (`data-test='JobDescription'`, etc.).
 - **Freshness Re-Check**: Parses posted date from detail header. If older than `MAX_POSTED_DAYS` (7 days), skips as `FILTER_FRESHNESS`.
@@ -54,12 +54,12 @@ Every job card selected for application is evaluated through two comprehensive f
 - **External ATS Handoff**: If clicking navigates away from `wellfound.com`, routes immediately to `EXTERNAL`.
 
 ### 2. Modal-Level In-Flight Gates
-- **Experience Requirement Gate**: Scrapes dialog text for `experience: X+ years`. If `req_exp > 3.5`, closes modal cleanly and skips with `FILTER_EXPERIENCE` (*"Requires X+ YOE (candidate has 2.5 YOE)"*).
+- **Experience Requirement Gate**: Scrapes dialog text for `experience: X+ years`. The current code skips when `req_exp > 3.5` and includes a hard-coded 2.5-year candidate claim in the reason. Those literals are implementation debt, not authoritative candidate facts.
 - **Location-Gating**: Detects *"not accepting applications from your location"* and skips with `BLOCKED_LOCATION`.
 - **Relocation Prompt**: Clicks *"I can relocate"* if Wellfound prompts for candidate relocation willingness.
 
 ### 3. Dual-Strategy Pitch Generation
-Wellfound application modals feature a mandatory pitch note: *"What interests you about working for this company?"*.
+The supported Wellfound application path looks for a pitch note such as *"What interests you about working for this company?"*.
 - **Strategy 1: AI Customization (Gemini)**:
   - Invokes `gemini.generate_wellfound_pitch(role_name, job_description, company_name)`.
   - **Stub Rejection**: If Gemini generates a brief stub (< 150 characters), it is discarded to prevent unprofessional one-liners.
@@ -67,14 +67,14 @@ Wellfound application modals feature a mandatory pitch note: *"What interests yo
   - Uses `candidate.wellfound_pitch` from [`config.yaml`](../../config/config.yaml).
   - Formats a clean startup pitch highlighting:
     - Specialization in scalable backends and production GenAI pipelines.
-    - Candidate experience level (`who.experience_label`), home location (`Bengaluru`), and immediate notice period (`0 days`).
+    - Candidate snapshot values where available. Read the current profile rather than assuming a fixed location or notice period.
     - Contact links (GitHub and LinkedIn).
 - **React Input Dispatch**: Injects pitch via `textarea.fill(pitch)` and dispatches synthetic `input` and `change` events so React state synchronizes cleanly.
 - **Pitch Retention Audit**: Verifies `await textarea.input_value()`. If the text was wiped by a React re-render, fails closed.
 
 ### 4. Form Submission
 - Resolves submit button within the active form container: `button:text-matches('^(Send application|Submit application|Apply)$', 'i')`.
-- Clicks submit with human-paced delay.
+- Clicks the form's submit control once, then verifies the listing. A missing control or pitch-retention failure stops the job.
 
 ---
 
@@ -97,7 +97,18 @@ Wellfound application modals feature a mandatory pitch note: *"What interests yo
 ---
 
 ## 6. Invariants & Anti-Patterns (Do NOT Break)
-1. **DO NOT rely on modal disappearance**: Modals close on click-aways and network errors. Server reload verification is mandatory.
+1. **DO NOT rely on modal disappearance**: Modals close on click-aways and network errors. The current adapter verifies the exact listing after navigation.
 2. **DO NOT use loose selectors like `button:has-text('Applied')`**: These match peripheral tags, sidebars, or recommended jobs. Use `_APPLIED_JOB_MARKERS`.
 3. **DO NOT submit one-liner pitch stubs**: Maintain high founder appeal; pitches must be structured, technical, and complete.
 4. **DO NOT hang on disabled Apply buttons**: Fail fast to `NEEDS_REVIEW` so profile location or screening blockers can be resolved.
+
+
+## Evidence and implementation limits
+
+No fresh Wellfound submission was performed during this documentation review. Existing tests and the current adapter were inspected.
+
+- The profile detail check and the hard-coded modal experience ceiling are separate gates. They should be consolidated around verified configured facts in a later code change.
+- The relocation control is clicked when shown. This behavior still needs a verified preference gate.
+- Without a configured pitch, the deterministic fallback contains specific achievement claims. Those claims require candidate validation before being treated as approved content.
+- This adapter has a pitch workflow, not a general questionnaire solver. Unsupported custom questions need review handling rather than an assumption that the pitch is the only field.
+- Its detail gate remains optional at the adapter API. The normal orchestrator supplies it. Callers must honor the mandatory handoff policy.
