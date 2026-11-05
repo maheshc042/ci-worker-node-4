@@ -10,7 +10,7 @@ on:
     # Allow manual runs to choose which account to run (defaults to primary)
     inputs:
       account:
-        description: 'Account to run (primary, secondary, or all-accounts)'
+        description: 'Naukri account (other platform logins run under primary)'
         required: true
         default: 'primary'
         type: choice
@@ -19,12 +19,12 @@ on:
           - secondary
           - all-accounts
       dry_run:
-        description: 'Check login and job selection without sending applications'
+        description: 'Test mode only — check login and job selection without applying'
         required: true
-        default: true
+        default: false
         type: boolean
       platform:
-        description: 'Platform to check'
+        description: 'Platform to run (secondary supports naukri or all-enabled only)'
         default: 'all-enabled'
         type: choice
         options:
@@ -48,6 +48,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      - name: Validate account and platform selection
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          SELECTED_ACCOUNT: ${{ inputs.account }}
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          if [ "$SELECTED_ACCOUNT" != "primary" ] && [ "$SELECTED_PLATFORM" != "all-enabled" ] && [ "$SELECTED_PLATFORM" != "naukri" ]; then
+            echo "::error::For a specific non-Naukri platform, select primary. Secondary is a separate Naukri login."
+            exit 2
+          fi
+
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -134,7 +145,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          echo "Testing checkout $(git rev-parse HEAD)"
+          echo "Running checkout $(git rev-parse HEAD)"
           # If triggered manually, use the input provided by the user
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             args=()

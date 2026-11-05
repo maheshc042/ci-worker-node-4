@@ -13,6 +13,14 @@ Read this guide and the relevant playbook before changing discovery, answers, ap
 | [Instahyre](instahyre.md) | Filtered Opportunities feed and opportunity modal | Applied button or exact applied badge on the target feed card |
 | [HiringCafe](hiringcafe.md) | Public listing discovery and company-site handoff | A validated destination and passing detail check establish an external route |
 
+## Accounts, profiles and run mode
+
+The workflow's account selector refers to the two Naukri logins. Primary runs enabled platforms using each platform's own configured login. Secondary runs Naukri. All-accounts runs primary and secondary sequentially. A specific non-Naukri platform must be selected under primary.
+
+A job profile contains role filters, skills and résumé choices. It does not create another website account. LinkedIn searches profiles sequentially. Instahyre, Cutshort, Wellfound and HiringCafe normally use a combined profile and can use an explicit profile selection through the CLI. Separate secondary logins for those platforms are not implemented.
+
+Manual workflow runs default to live mode. Enabling the dry-run checkbox checks login, discovery and job planning. Scheduled runs omit the dry-run flag. The global side-effect setting can still block mutations. Before diagnosing a run, check its logged dry-run value and policy.
+
 ## Shared decision sequence
 
 1. Confirm the account session or public-feed access. Respect platform pauses and challenge handling. A blocked session is an access failure, not an empty job market.

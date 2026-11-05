@@ -39,7 +39,7 @@ from typing import Any
 from ..browser.artifacts import ArtifactStore
 from ..browser.manager import BrowserManager
 from ..browser.resilience import FatalAgentError, first_visible
-from ..config import PROJECT_ROOT, AgentConfig, ConfigError, JobProfile, NaukriAccount, Settings
+from ..config import PROJECT_ROOT, AgentConfig, ConfigError, JobProfile, NaukriAccount, Settings, validate_account_platform
 from ..core.answers import AnswerEngine
 from ..core.application_planner import ApplicationPlanner
 from ..core.filters import FilterEngine, impute_seniority
@@ -238,6 +238,7 @@ class Orchestrator:
         # Accounts are never mixed inside a run: the resume lives on the account,
         # and the daily cap is a per-account budget.
         self.account_key = (account or settings.default_account or "primary").strip().lower()
+        validate_account_platform(self.account_key, self.only_platform)
         self.account: NaukriAccount | None = None
 
         self.stats = RunStats()

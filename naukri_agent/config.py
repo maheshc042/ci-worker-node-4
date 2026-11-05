@@ -61,6 +61,15 @@ class ConfigError(RuntimeError):
     """Raised for any unusable configuration; the CLI turns it into exit code 2."""
 
 
+def validate_account_platform(account: str, platform: str | None) -> None:
+    """Keep single-login platforms out of a secondary Naukri session."""
+    if account != "primary" and platform is not None and platform != "naukri":
+        raise ConfigError(
+            f"{platform} uses its configured login under primary. "
+            "Secondary is a separate Naukri account. Select primary for this platform."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------

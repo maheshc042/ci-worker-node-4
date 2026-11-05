@@ -32,7 +32,7 @@ from rich.table import Table
 
 from .browser.artifacts import ArtifactStore
 from .browser.manager import BrowserManager
-from .config import ACCOUNT_KEYS, AgentConfig, ConfigError, Settings, get_settings, load_config
+from .config import ACCOUNT_KEYS, AgentConfig, ConfigError, Settings, get_settings, load_config, validate_account_platform
 from .core.orchestrator import Orchestrator
 from .core.run_policy import RunPolicy
 from .db.migrations import run_migrations
@@ -123,7 +123,7 @@ def migrate(
 @app.command()
 def run(
     account: str | None = typer.Option(
-        None, "--account", "-a", help=f"Which login to use: {' | '.join(ACCOUNT_KEYS)}"
+        None, "--account", "-a", help=f"Naukri account: {' | '.join(ACCOUNT_KEYS)}. Other platform logins use primary."
     ),
     all_accounts: bool = typer.Option(
         False, "--all-accounts", help="Run every configured account, one after another"
@@ -135,7 +135,7 @@ def run(
         None, "--platform", "-plat", help="Only run this platform: linkedin, naukri, cutshort, instahyre, wellfound, hiringcafe"
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Do everything except submitting an application"
+        False, "--dry-run", help="Check login, collect jobs, and rank selections without entering the application loop"
     ),
     headed: bool | None = typer.Option(
         None, "--headed/--headless", help="Override headless mode in browser"
@@ -149,8 +149,10 @@ def run(
         if headed is not None:
             settings.headless = not headed
             config.browser.headless = not headed
-        await run_migrations()
         targets = _resolve_accounts(account, all_accounts, settings)
+        for key in targets:
+            validate_account_platform(key, platform.lower().strip() if platform else None)
+        await run_migrations()
         failures = 0
         skipped = 0
         try:
@@ -307,17 +309,18 @@ def login(
     async def _main() -> None:
         settings, config = _bootstrap(config_path)
         target = settings.validate_for_run(account)
+        validate_account_platform(target.key, None if platform.lower() == "all" else platform.lower())
         await run_migrations()
         repo = await Repository.create()
         browser_config = config.browser.model_copy(update={"headless": not headed})
         artifacts = ArtifactStore(settings.artifacts_dir, "login")
         from .browser.resilience import first_visible, human_pause, human_type
 
-        selected_platforms = (
-            ["naukri", "cutshort", "wellfound", "linkedin", "instahyre"]
-            if platform.lower() == "all"
-            else [platform.lower()]
-        )
+        selected_platforms = [platform.lower()]
+        if platform.lower() == "all":
+            selected_platforms = ["naukri"]
+            if target.key == "primary":
+                selected_platforms.extend(["cutshort", "wellfound", "linkedin", "instahyre"])
 
         try:
             async with BrowserManager(
