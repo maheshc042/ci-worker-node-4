@@ -1869,19 +1869,23 @@ class Orchestrator:
             # Phase 2 runs INSIDE apply_to_job(): the platform loads the job page,
             # enriches description, then calls pre_submit_check before clicking Apply.
             # A per-job cap bounds hung navigations (one job once ate 6 minutes).
+            # Wellfound queues delivery behind a five-minute Undo window.
+            # Keep room for that observed state to settle without resubmitting.
+            job_cap_s = 420.0 if platform_name == "wellfound" else 300.0
             try:
                 outcome = await asyncio.wait_for(
                     platform.apply_to_job(
                         job, profile.name, pre_submit_check=filters.evaluate_detail
                     ),
-                    timeout=300.0,
+                    timeout=job_cap_s,
                 )
             except TimeoutError:
                 shot = await artifacts.capture_failure(page, "job-time-cap", profile.name, job.job_id)
-                log.warning("job.time_cap_exceeded", job_id=job.job_id, cap_s=300)
+                log.warning("job.time_cap_exceeded", job_id=job.job_id, cap_s=job_cap_s)
                 outcome = ApplyOutcome(
                     status=ApplicationStatus.FAILED,
-                    detail="job time cap exceeded (300s)",
+                    reason=SkipReason.SUBMISSION_UNCONFIRMED if platform_name == "wellfound" else None,
+                    detail=f"job time cap exceeded ({job_cap_s:g}s)",
                     screenshot_path=shot,
                 )
 

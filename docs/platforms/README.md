@@ -68,7 +68,7 @@ The Cutshort Messages sweep examines fresh Pending and inbox threads. Its curren
 | Instahyre | Run 699 completed discovery. Run 701 reached native Apply under dry run. Saved-page replay scoped the receipt to the job | A fresh live submission receipt is unverified |
 | HiringCafe | Run 700 stopped at clearance. Local handoff checks passed | Live discovery and downstream delivery remain unverified |
 | Naukri | Runs 702–703 audited; read-only run 704 found persisted Applied markers for all 13 reported applications | Current descriptions reveal selection conflicts; qualification and skill-specific tenure checks remain incomplete. See the [audit](../../analysis/run702_703_audit.md) |
-| Wellfound | Implementation and existing regression tests reviewed here | Hard-coded modal tenure and fallback pitch claims need a separate correctness review |
+| Wellfound | Run 706's four reported failures now show settled Applied receipts; archived pages reveal the five-minute Undo window. See the [audit](../../analysis/run706_wellfound_audit.md) | Pending-send handling has local replay coverage; hard-coded modal tenure, relocation preference and fallback pitch claims remain separate gaps |
 
 ## Contributor boundaries
 

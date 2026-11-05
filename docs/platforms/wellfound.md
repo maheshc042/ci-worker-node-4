@@ -92,7 +92,15 @@ The supported Wellfound application path looks for a pitch note such as *"What i
      - `main :text-matches('^You applied (on|.{0,20}ago)', 'i')`
 3. **Outcome Resolution**:
    - **Confirmed**: Returns `status = APPLIED`, `confirmation_type = "dom_marker"`, `confirmation_evidence = "Wellfound target listing shows Applied after reopening"`.
-   - **Unconfirmed**: Captures failure screenshot `wellfound-submit-unconfirmed`, returns `status = FAILED`, `reason = SkipReason.SUBMISSION_UNCONFIRMED`, `detail = "No success confirmation received"`.
+   - **Unconfirmed**: Captures failure screenshot `wellfound-submit-unconfirmed`, returns `status = FAILED`, `reason = SkipReason.SUBMISSION_UNCONFIRMED`, and distinguishes an unresolved queued send from a missing persisted receipt.
+
+### Queued-send window (run 706)
+
+Wellfound can show `button[data-test='JobApplicationUndoButton']` with `Undo · 4:50` after submission and a listing reload. Its tooltip explicitly says cancellation is possible before sending. This is a persisted pending send, not a final Applied receipt and not proof that submission failed.
+
+`_application_state(job)` validates the exact listing URL and reads controls within `[data-test='JobDetail']`. A queued application is never submitted again. `_verify_application(job)` reloads in bounded intervals for up to 330 seconds while Undo remains, then requires settled Applied evidence. An active Apply control, lost target, or unresolved countdown cannot establish success. The orchestrator allows Wellfound 420 seconds per job to cover form work and the five-minute window; other platforms retain 300 seconds. The overall run budget still applies. A timeout remains submission-unconfirmed to prevent an ordinary failure retry from sending again.
+
+Read-only inspection of run 706's four target URLs found all four settled Applied receipts. Local replay checked all four archived pending pages, all four current pages, and four pending-to-settled reload transitions. No new application was sent during this audit and historical run outcomes were not rewritten. See the [run 706 audit](../../analysis/run706_wellfound_audit.md).
 
 ---
 
@@ -105,7 +113,10 @@ The supported Wellfound application path looks for a pitch note such as *"What i
 
 ## Evidence and implementation limits
 
-No fresh Wellfound submission was performed during this documentation review. Existing tests and the current adapter were inspected.
+No fresh Wellfound submission was performed during this audit. Current receipts and saved-page replay establish the observed failure mechanism, not comprehensive future reliability.
+
+- Run 706 exposed a mandatory model-training/MLOps ownership role passing a broad AI title/skill match. The unified profile now excludes the observed mandatory phrases and no longer lists MLOps as a core candidate skill. Optional MLOps exposure remains eligible. These narrow rules are not a general mandatory-skill parser.
+- Low absolute rupee compensation without a pay period now returns NEEDS_REVIEW before applying, rather than passing through the generic sub-1-LPA phantom-salary bypass. Do not infer monthly versus annual pay. This is a compensation blocker, not a candidate screening question for the answer-training queue.
 
 - The profile detail check and the hard-coded modal experience ceiling are separate gates. They should be consolidated around verified configured facts in a later code change.
 - The relocation control is clicked when shown. This behavior still needs a verified preference gate.

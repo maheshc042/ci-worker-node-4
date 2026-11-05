@@ -1530,7 +1530,7 @@ class AgentConfig(_Model):
 
         c_skills = [
             "python", "node", "react", "typescript", "fastapi", "nextjs", "aws",
-            "generative ai", "agentic ai", "llm", "rag", "mlops", "langgraph", "django", "mern", "frontend", "backend", "full stack"
+            "generative ai", "agentic ai", "llm", "rag", "langgraph", "django", "mern", "frontend", "backend", "full stack"
         ]
         s_skills = [
             "api", "rest", "graphql", "postgresql", "mongodb", "redis", "docker",
@@ -1545,6 +1545,9 @@ class AgentConfig(_Model):
             title_must_exclude_any=sorted(forbidden_tech_and_seniority),
             description_must_exclude_any=[
                 "bpo", "commission only", "unpaid", "registration fee", "security deposit",
+                # Mandatory model-training ownership in run 706's FractionAI JD;
+                # optional MLOps exposure must not block application-AI roles.
+                "own the full mlops lifecycle", "deep expertise in data science workflows",
                 "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
             ],
             experience=ExperienceRange(min_years=0, max_years=3.5),

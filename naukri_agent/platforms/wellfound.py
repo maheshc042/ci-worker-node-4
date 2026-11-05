@@ -70,6 +70,16 @@ def _has_pay_signal(text: str) -> bool:
     low = (text or "").lower()
     return any(sig in low for sig in _PAY_SIGNALS)
 
+
+def _ambiguous_pay_period(job: Job) -> bool:
+    """Low absolute rupee figures need cadence, not the phantom-salary bypass."""
+    upper = job.max_salary_lpa if job.max_salary_lpa is not None else job.min_salary_lpa
+    return bool(
+        job.salary_text and upper is not None and 0 < upper < 1
+        and re.search(r"₹|\binr\b|\brs\.?\b", job.salary_text, re.I)
+        and not re.search(r"month|year|annum|annual|lakh|lac|lpa|\d\s*l\b|p\.?\s*a\.?", job.salary_text, re.I)
+    )
+
 # (label, pattern): labels surface in skip reasons, patterns do the matching.
 # User-first policy: this prefilter mirrors the base profiles, exactly like
 # the plan-stage FilterRules do. QA/testing, data-analyst, fresher and
@@ -143,6 +153,8 @@ _APPLIED_JOB_MARKERS = [
     "button:not(nav button):text-is('Applied')",
     "main :text-matches('^You applied (on|.{0,20}ago)', 'i')",
 ]
+_UNDO_APPLICATION = "button[data-test='JobApplicationUndoButton']"
+_UNDO_COUNTDOWN = re.compile(r"^Undo\s*[·•]\s*(\d{1,2}):([0-5]\d)$")
 _DESCRIPTION_SELECTORS = [
     "[data-test='JobDescription']",
     "div[class*='styles_description__']",
@@ -769,6 +781,47 @@ class WellfoundPlatform(BaseJobPlatform):
             job.experience_imputed = False
         return True
 
+    async def _application_state(self, job: Job) -> tuple[str, int | None]:
+        """Read the target listing's controls, excluding navigation/related jobs."""
+        if not _wellfound_job_page(self.page.url, job.job_id):
+            return "unknown", None
+        detail = await first_visible(self.page, ["[data-test='JobDetail']"], timeout_ms=7000)
+        if detail is None:
+            return "unknown", None
+        undo = await first_visible(detail, [_UNDO_APPLICATION], timeout_ms=300)
+        if undo is not None:
+            match = _UNDO_COUNTDOWN.fullmatch(" ".join((await undo.inner_text()).split()))
+            # Persisted Undo is a queued send, never a final receipt.
+            remaining = int(match[1]) * 60 + int(match[2]) if match else None
+            return "pending", remaining
+        active = await first_visible(detail, [
+            "button:text-matches('^Apply( now| on Wellfound)?$', 'i')",
+            "a:text-matches('^Apply( now| externally)?$', 'i')",
+        ], timeout_ms=300)
+        if active is not None:
+            return "unknown", None
+        receipt = await first_visible(detail, _APPLIED_JOB_MARKERS, timeout_ms=1000)
+        return ("applied", None) if receipt is not None else ("unknown", None)
+
+    async def _verify_application(self, job: Job, *, wait_pending: bool = True) -> str:
+        """Reload until an observed queued send settles, within a bounded budget.
+
+        Never click Undo or Submit here. A cancellation, lost session or an
+        unchanged pending state at the deadline cannot produce APPLIED.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 330
+        while True:
+            await self.page.goto(job.url, wait_until="domcontentloaded", timeout=25000)
+            state, remaining = await self._application_state(job)
+            if state != "pending" or not wait_pending:
+                return state
+            budget = deadline - loop.time()
+            if budget <= 0:
+                return "pending"
+            log.info("wellfound.apply.queued_send_wait", job_id=job.job_id, remaining_s=remaining)
+            await asyncio.sleep(min(30, max(2, (remaining or 0) + 2), budget))
+
     async def apply_to_job(
         self,
         job: Job,
@@ -804,8 +857,20 @@ class WellfoundPlatform(BaseJobPlatform):
         if not _wellfound_job_page(self.page.url, job.job_id):
             return ApplyOutcome(ApplicationStatus.FAILED, detail="Wellfound did not open the target listing")
 
-        if await first_visible(self.page, _APPLIED_JOB_MARKERS, timeout_ms=2000) is not None:
-            return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+        state, _ = await self._application_state(job)
+        if state == "pending":
+            state = await self._verify_application(job)
+            if state != "applied":
+                return ApplyOutcome(
+                    ApplicationStatus.FAILED, reason=SkipReason.SUBMISSION_UNCONFIRMED,
+                    detail="Existing Wellfound queued application has not settled; no resubmission attempted",
+                )
+        if state == "applied":
+            return ApplyOutcome(
+                ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED,
+                confirmation_type="dom_marker",
+                confirmation_evidence="Wellfound target listing already shows Applied",
+            )
 
         if not await self._read_description(job):
             shot = await self.artifacts.capture_failure(self.page, "wellfound-description-missing", profile_name, job.job_id)
@@ -815,6 +880,14 @@ class WellfoundPlatform(BaseJobPlatform):
                 screenshot_path=shot,
             )
         job.form_links, job.recruiter_emails = extract_description_metadata(job.description)
+
+        if _ambiguous_pay_period(job):
+            shot = await self.artifacts.capture_failure(self.page, "wellfound-pay-period-review", profile_name, job.job_id)
+            return ApplyOutcome(
+                ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.FILTER_SALARY,
+                detail=f"Pay period is unspecified for {job.salary_text}; confirm compensation before applying",
+                screenshot_path=shot,
+            )
 
         # Freshness re-check on the detail page (cards often omit dates).
         # Past the 1-week window the post is dead — skip, don't burn an apply.
@@ -1086,11 +1159,8 @@ class WellfoundPlatform(BaseJobPlatform):
             await human_pause(1500, 3000)
 
             # Reopen the exact listing and verify the persisted application state.
-            await self.page.goto(job.url, wait_until="domcontentloaded", timeout=25000)
-            if (
-                _wellfound_job_page(self.page.url, job.job_id)
-                and await first_visible(self.page, _APPLIED_JOB_MARKERS, timeout_ms=7000) is not None
-            ):
+            state = await self._verify_application(job)
+            if state == "applied":
                 if jt is not None and self._metrics is not None:
                     jt.total_s = _time.perf_counter() - t0
                     try:
@@ -1116,7 +1186,8 @@ class WellfoundPlatform(BaseJobPlatform):
         return ApplyOutcome(
             ApplicationStatus.FAILED,
             reason=SkipReason.SUBMISSION_UNCONFIRMED,
-            detail="No success confirmation received",
+            detail=("Wellfound queued application is still pending after the verification budget; do not resubmit"
+                    if state == "pending" else "No persisted Wellfound application confirmation after reopening the target listing"),
             screenshot_path=shot,
         )
 
