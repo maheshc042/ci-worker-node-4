@@ -40,6 +40,27 @@ class TestLinkedInAttachmentAndFacts(unittest.TestCase):
         self.assertIsNone(platform._resolve_screening(ScreeningQuestion('Years of WebdriverIO experience?', 'text')))
         self.assertEqual(len(platform._screening_review), 1)
 
+    def test_confirmed_freelance_rate_only_answers_the_intended_job(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="primary")[0]
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.answers = AnswerEngine([], job_screening_answers=profile.job_screening_answers)
+        platform._screening_review = []
+        question = ScreeningQuestion("Are you comfortable with an hourly compensation of $8 USD?",
+                                     "radio", ["Yes", "No"])
+        self.assertEqual(platform._resolve_screening(question, job_id="linkedin-4483862172").value, "Yes")
+        self.assertIsNone(platform._resolve_screening(question, job_id="linkedin-999"))
+
+    def test_stale_location_fragment_cannot_answer_another_listing(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="primary")[0]
+        engine = AnswerEngine([("chennai/coimbatore", "Yes")],
+                              job_screening_answers=profile.job_screening_answers)
+        text = "(Chennai/Coimbatore)* Yes No This field is required Back Next 0 notifications"
+        question = ScreeningQuestion(text, "radio", ["Yes", "No"])
+        self.assertEqual(engine.resolve(question, job_id="linkedin-4484934350").value, "Yes")
+        self.assertIsNone(engine.resolve(question, job_id="linkedin-999"))
+
     def test_required_domain_years_cannot_use_total_years(self):
         config = AgentConfig.load()
         self.assertIsNotNone(campaign_profile_mismatch('Requires 3 years of experience in generative AI.', config))
@@ -60,11 +81,29 @@ class TestLinkedInAttachmentAndFacts(unittest.TestCase):
         self.assertIsNotNone(campaign_profile_mismatch('Hiring Java Developer. Python exposure is a bonus.', config))
 
     def test_us_scoped_remote_is_distinct_from_worldwide_remote(self):
+        self.assertIsNotNone(campaign_profile_mismatch('Hiring Gen AI Engineer\nUS Remote\nLong term', AgentConfig.load()))
+        self.assertTrue(is_abroad_onsite('Location: U.S. (Remote)'))
+        self.assertTrue(is_abroad_onsite('Remote - US'))
+        self.assertFalse(is_abroad_onsite('Join us remotely from anywhere in India.'))
         self.assertTrue(is_abroad_onsite('Hiring an AI engineer for a remote position in US.'))
         self.assertTrue(is_abroad_onsite('United States (Remote)'))
         self.assertFalse(is_abroad_onsite('Remote India or worldwide remote.'))
         self.assertTrue(is_abroad_onsite('Job Location: Toronto, ON (required 3 days per week)'))
         self.assertTrue(is_abroad_onsite('Toronto, ON (Hybrid)'))
+
+    def test_immediate_start_uses_verified_notice_without_generic_consent(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform._screening_review = []
+        platform.answers = AnswerEngine([], profile_answers={"notice period": "0 days"})
+        for text in ("Can you join immediately or within 1 month?",
+                     "We must fill this position urgently. Can you start immediately?"):
+            result = platform._resolve_screening(ScreeningQuestion(text, "radio", ["Yes", "No"]))
+            self.assertEqual(result.value, "Yes")
+            self.assertEqual(result.matched_pattern, "notice:immediate_start")
+        other_terms = "Can you start immediately and work overnight?"
+        self.assertIsNone(platform._resolve_screening(ScreeningQuestion(other_terms, "radio", ["Yes", "No"])))
+        platform.answers = AnswerEngine([], profile_answers={"notice period": "60 days"})
+        self.assertIsNone(platform._resolve_screening(ScreeningQuestion("Can you start immediately?", "radio", ["Yes", "No"])))
 
     def test_recruiter_seniority_does_not_become_job_seniority(self):
         headline = 'Senior Talent Acquisition Specialist'

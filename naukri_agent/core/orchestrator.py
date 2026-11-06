@@ -367,6 +367,7 @@ class Orchestrator:
             # Current-location answers come from `candidate.location`, never
             # from a city literal baked into the answer engine.
             home_location=self.config.candidate.location,
+            job_screening_answers=profile.job_screening_answers,
         )
 
     def _home_city_markers(self) -> tuple[str, ...]:

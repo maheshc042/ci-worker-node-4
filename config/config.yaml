@@ -166,6 +166,7 @@ answers:
   "are you currently based at the location this position has been advertised for?": "Yes"
   "are you currently based at the location this position has been advertised for": "Yes"
   "what is your primary creative or content expertise": "Technical writing, prompt engineering, and GenAI content workflows"
+  're:^rate yourself in basic data structure\??$': "3 — comfortable with core data structures and using them in everyday coding."
   "how many years of hands-on experience do you have in generative ai/llm development?": "2"
   "how many years of experience do you have in generative ai/llm": "2"
   "please select the city you are currently residing or willing to relocate to": "Bengaluru"
@@ -509,6 +510,12 @@ experience:
   default_years: 1
   multi_skill_strategy: max
   skills:
+    revops: 0
+    asp.net core: 0
+    test case generation: 3
+    webdriverio: 3
+    webdriver io: 3
+    appium: 2
     html: 3
     css: 3
     javascript: 3
@@ -895,6 +902,11 @@ profiles:
     experience_years: 3
     use_recommended: true
     naukri_experience_search_terms: [full stack developer, software test automation]
+    job_screening_answers:
+      reco-051126014304:
+        "Would need a work permit to work in location of application?": "No"
+      reco-051126012288:
+        "what is your currenct Location?": "Skip this question"
     platform_limits:
       naukri: 35
       linkedin: 35
@@ -987,6 +999,16 @@ profiles:
       "do you have hands-on experience developing backend apis using python, fastapi or node.js?": "Yes"
       "have you worked with ai technologies such as llms, rag, mcp or multi-agent orchestration?": "Yes"
       "what are your salary expectations?": "7"
+      're:^how many years of development experience do you have\??$': "3"
+      're:^do you have any experience in fintech domain\??$': "Yes"
+      're:^how much do you rate yourself in your dsa skills\??$': "3"
+      're:^has the majority of your experience been in automation\??$': "Yes"
+      're:^please rate your coding skills out of 5\.?$': "4"
+      're:^how many years of experience do you have working on large-scale consumer-facing applications\? b2c\. \(if any\)$': "3"
+      're:^rate your english speaking skills out of 5\.(?: a screening call would be conducted, so mention only what''s true\.)?$': "4"
+      're:^have you worked in fintech, banking, payments, financial services, or saas product environments\??$': "Yes"
+      're:^how many years of non-internship work experience do you have\? \(only whole numbers allowed\)$': "3"
+      're:^this is a test engineering role\. the interview and daily job require writing javascript or react code to build test automation frameworks and scripts\. are you comfortable with a testing project\s*\??$': "Yes"
 
   # =========================================================================
   # ACCOUNT 1 (primary) — AI / Python Engineer.
@@ -1000,6 +1022,23 @@ profiles:
     experience_years: 2
     use_recommended: true
     naukri_experience_search_terms: [python developer, generative ai engineer]
+    job_screening_answers:
+      reco-051126038635:
+        "This position follows U.S. hours (8:30PM-5:30AM IST). Does this align with your working style?": "Yes, those hours align with my working style."
+      reco-051126037899:
+        "Are you available to work 20- 40 hrs/week for an engagement of 1 week, with 4 hours of overlap with PST and compenstaion of $9/hr?": "Yes"
+      linkedin-4483862172:
+        "Apply to IndiTech Consulting 3/4 pages Additional Questions Are you comfortable providing remote support as part of this freelance engagement?": "Yes"
+        "Are you comfortable providing remote support as part of this freelance engagement?": "Yes"
+        "Are you comfortable with an hourly compensation of $8 USD?": "Yes"
+        "How many production IVR modernization or migration projects have you completed involving DTMF-to-Voice AI migration while preserving existing business logic and call routing?": "3"
+        "* Invalid input 0/20 0 of 20 characters How many years of hands-on experience do you have designing and developing solutions using Amazon Connect?": "3"
+        "How many years of hands-on experience do you have designing and developing solutions using Amazon Connect?": "3"
+        "How many years of hands-on experience do you have with Amazon Lex V2, AWS Lambda, and Amazon Connect integration?": "3"
+      linkedin-4484934350:
+        "(Chennai/Coimbatore)* Yes No This field is required Back Next 0 notifications": "Yes"
+      reco-031126000483:
+        "Which AI agent system have you personally built and deployed?": "Working AI agent with API and tool integrations"
     platform_limits:
       naukri: 35
       linkedin: 35
@@ -1072,6 +1111,8 @@ profiles:
       total experience: "3"
       relevant experience: "2"
       experience in ai: "2"
+      're:^how many years of experience do you have in applied ai\??$': "2"
+      're:^(?:4\.\s*)?do you have 4 years of experience in ai\s*\??$': "No"
       experience in artificial intelligence: "2"
       experience in machine learning: "0"
       experience in python: "2"
@@ -1083,6 +1124,7 @@ profiles:
       hands-on experience in generative ai/llm development: "2"
       experience in generative ai/llm: "2"
       experience in llm development: "2"
+      're:^have you worked hands-on with llms such as chatgpt, claude or gemini\?$': "Yes"
       generative ai/llm development: "2"
       proficiency in python, typescript: "Proficient in Python and TypeScript with 3 years of experience building APIs, backend services, and web applications."
       proficiency in python: "Proficient in Python with hands-on experience in FastAPI, Django, and AI applications."
@@ -1191,10 +1233,7 @@ profiles:
       # Run 631 #398-#402: user-confirmed answers (2026-10-30). C#: none — same
       # `experience_years: 2` AI story does NOT extend to C#. Conversational AI
       # and Voice AI are the same AI/LLM stack the profile already claims, so
-      # they share the 2 AI years. #402 is LinkedIn's garbled radio label
-      # "(Chennai/Coimbatore)* Yes No ... Back Next"; keyed on the clean label
-      # part so it matches via substring. All locations = Yes: interview
-      # volume first, relocation discussed with HR later.
+      # they share the 2 AI years. #402 is scoped to the iNextLabs listing above.
       "how many years of experience on c#": "0"
       "how many years of work experience do you have with conversational ai": "2"
       "how many years of experience do you currently have in voice ai applications": "2"

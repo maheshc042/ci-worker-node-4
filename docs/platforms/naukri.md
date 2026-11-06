@@ -60,6 +60,7 @@ Every discovered listing is evaluated across two distinct filter gates before an
    - **1-Click Apply**: Direct submission without screening questions.
    - **Late-Drawer Recovery**: If the chatbot drawer hydrates after a delay, it is intercepted before any page reload.
    - **Screening Chatbot (`ChatbotHandler`)**:
+     - Job-specific decisions in `job_screening_answers` match only the exact listing ID, question, and displayed choice. Keep work-permit, shift, and contract decisions scoped to the listing.
      - Resolves questions through [`AnswerEngine`](../../naukri_agent/core/answers.py) (strict option matching, tenure comparisons, salary confirmations, location checks).
      - If candidate lacks eligibility (e.g., hard tenure shortfall) -> returns `SKIPPED` (`unfit`).
      - If an unconfigured question is encountered -> captures screenshot and returns `NEEDS_REVIEW`.

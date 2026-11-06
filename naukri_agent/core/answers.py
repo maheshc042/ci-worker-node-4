@@ -343,13 +343,20 @@ class AnswerEngine:
         strict: bool = True,
         experience: ExperienceAnswers | None = None,
         home_location: str = "",
+        job_screening_answers: dict[str, dict[str, str]] | None = None,
     ) -> None:
+        self.job_screening_answers = {
+            job_id: {_normalise(question): answer for question, answer in answers.items()}
+            for job_id, answers in (job_screening_answers or {}).items()
+        }
         raw: list[tuple[str, str, str]] = [
             (_normalise(pattern), answer, "profile")
             for pattern, answer in (profile_answers or {}).items()
         ]
         raw.sort(key=lambda triple: len(triple[0]), reverse=True)
-        raw += [(_normalise(pattern), answer, "kb") for pattern, answer in kb]
+        # This legacy seed captured a location fragment rather than a complete question.
+        raw += [(_normalise(pattern), answer, "kb") for pattern, answer in kb
+                if _normalise(pattern) != "chennai/coimbatore"]
 
         # Profile precedence (config.yaml: "Profile-level answers win over
         # these"): drop kb rows shadowed by a profile row — same intent in
@@ -418,9 +425,19 @@ class AnswerEngine:
         self.hits: dict[tuple[str, str], int] = {}
         self.fuzzy_threshold: float = 0.80
 
-    def resolve(self, question: ScreeningQuestion) -> ResolvedAnswer | None:
+    def resolve(self, question: ScreeningQuestion, *, job_id: str = "") -> ResolvedAnswer | None:
         text = _normalise(question.text)
         if not text:
+            return None
+
+        scoped_answer = self.job_screening_answers.get(job_id, {}).get(text)
+        if scoped_answer is not None:
+            if question.options:
+                selected = next((option for option in question.options
+                                 if _normalise(option) == _normalise(scoped_answer)), None)
+                return ResolvedAnswer(selected, "profile:job_answer", "profile") if selected else None
+            if question.kind in {"text", "unknown"}:
+                return ResolvedAnswer(scoped_answer, "profile:job_answer", "profile")
             return None
 
         # Stage -1: external assessment gate (review #28/#30 RCA, 2026-09-29).
@@ -464,6 +481,14 @@ class AnswerEngine:
                     fitted.confidence = 0.8
                 self._record_hit(entry)
                 return fitted
+
+        if question.kind in {"radio", "select"} and re.fullmatch(
+            r"(?:we must fill this position urgently\.\s+)?can you (?:join|start) immediately"
+            r"(?: or within (?:1|one) month)?\??", text,
+        ):
+            notice = next((item for item in self.entries if item.pattern == "notice period"), None)
+            if notice and re.fullmatch(r"0\s*(?:days?)?", _normalise(notice.answer)):
+                return self._fit_to_options("Yes", question, "notice:immediate_start", notice.source)
 
         quantitative_tenure = _EXPERIENCE_INTENT.search(text) and (
             _NUMBER.search(text)

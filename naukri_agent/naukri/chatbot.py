@@ -82,11 +82,14 @@ class ChatbotHandler:
         answers: AnswerEngine,
         policy: RunPolicy,
         max_questions: int = 15,
+        *,
+        job_id: str = "",
     ) -> None:
         self.page = page
         self.answers = answers
         self.policy = policy
         self.max_questions = max_questions
+        self.job_id = job_id
 
     async def is_open(self, timeout_ms: int = 5_000) -> bool:
         return await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms) is not None
@@ -775,7 +778,7 @@ class ChatbotHandler:
                 question=question.text[:180],
             )
 
-            resolved = self.answers.resolve(question)
+            resolved = self.answers.resolve(question, job_id=self.job_id) if self.job_id else self.answers.resolve(question)
             if resolved is None:
                 skip_detail = assessment_skip_detail(question.text)
                 if skip_detail is not None:

@@ -708,6 +708,7 @@ class JobProfile(_Model):
     resume_file: str | None = None
     filters: FilterRules = Field(default_factory=FilterRules)
     answers: dict[str, str] = Field(default_factory=dict)
+    job_screening_answers: dict[str, dict[str, str]] = Field(default_factory=dict)
     experience: ExperienceConfig | None = None
 
     # Optional ranking overrides

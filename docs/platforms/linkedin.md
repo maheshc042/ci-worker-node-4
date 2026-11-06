@@ -117,6 +117,8 @@ Iterates through modal steps, executing strict element resolution inside `modal`
 - **Text, Numeric & Combobox Inputs**:
   - Full name and unambiguous two-part first/last names come from the configured candidate name. An optional middle name can remain empty. Ambiguous identity fields still require review.
   - Reconciles existing screening values and preselected radio answers against approved facts; a platform default is not candidate evidence. Each track receives its own answer engine.
+  - A standalone immediate-start question can use a configured zero-day notice period. Shift, contract, work authorization and other consent questions still require their own verified answers.
+  - Listing-specific answers in `job_screening_answers` require an exact job ID, question, and displayed choice. Use this scope for an accepted freelance rate or a location decision tied to one listing.
   - Discovers detached question labels by traversing nearest preceding sibling headers.
   - **Phone Inputs**: Fills `applicant_phone` with digit validation and sequential typing fallback. Never submits hardcoded fake numbers.
   - **Email Inputs**: Fills `applicant_email`.

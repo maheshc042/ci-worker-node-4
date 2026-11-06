@@ -764,6 +764,7 @@ class ApplyEngine:
             self.answers,
             self.policy,
             max_questions=self.max_questions,
+            job_id=job.job_id,
         )
         if event_type == "chatbot" or await self._fast_check(S.CHATBOT_DRAWER):
             t_qans_0 = time.perf_counter()
@@ -837,6 +838,7 @@ class ApplyEngine:
                 self.answers,
                 self.policy,
                 max_questions=self.max_questions,
+                job_id=job.job_id,
             )
             late_result = await late_chatbot.run()
             jt.q_answer_s += time.perf_counter() - t_late_0

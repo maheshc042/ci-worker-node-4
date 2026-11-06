@@ -12,6 +12,17 @@ from naukri_agent.naukri.search import JobSearcher
 
 
 class TestArchivedAnswerRegressions(unittest.TestCase):
+    def test_job_scoped_permit_answer_cannot_transfer_to_another_listing(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="secondary")[0]
+        engine = AnswerEngine([], job_screening_answers=profile.job_screening_answers)
+        text = "Would need a work permit to work in location of application?"
+        q = ScreeningQuestion(text, "radio", ["Yes", "No"])
+        self.assertEqual(engine.resolve(q, job_id="reco-051126014304").value, "No")
+        self.assertIsNone(engine.resolve(q, job_id="reco-other"))
+        changed = ScreeningQuestion(text, "radio", ["Yes", "No, I already hold a permit"])
+        self.assertIsNone(engine.resolve(changed, job_id="reco-051126014304"))
+
     def test_question_alert_has_review_status(self):
         self.assertEqual(header_prefix("review"), "❓ REVIEW")
 

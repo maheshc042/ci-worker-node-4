@@ -1195,7 +1195,7 @@ class Repository:
               FROM question_review
              WHERE resolved = TRUE
                AND answer IS NOT NULL
-               AND COALESCE(resolved_by, 'human') NOT IN ('auto-fuzzy', 'auto-cascade')
+               AND COALESCE(resolved_by, 'human') NOT IN ('auto-fuzzy', 'auto-cascade', 'configured-profile')
             """
         )
         best_ratio = 0.0
@@ -1265,14 +1265,24 @@ class Repository:
             )
             return  # Do NOT create a pending review row
 
-        # --- Normal path: insert as unresolved pending review ----------------
+        # A prior configuration-derived closure is stale if this question needs review again.
         row = await self.pool.fetchrow(
             """
             INSERT INTO question_review
                 (job_id, profile, question, question_kind, options, screenshot_path)
             VALUES ($1,$2,$3,$4,$5::jsonb,$6)
             ON CONFLICT (profile, question) DO UPDATE
-               SET times_seen = question_review.times_seen + 1,
+               SET times_seen = CASE WHEN question_review.resolved_by = 'configured-profile'
+                                     THEN 1 ELSE question_review.times_seen + 1 END,
+                   job_id = CASE WHEN question_review.resolved_by = 'configured-profile'
+                                 THEN EXCLUDED.job_id ELSE question_review.job_id END,
+                   resolved = CASE WHEN question_review.resolved_by = 'configured-profile'
+                                   THEN FALSE ELSE question_review.resolved END,
+                   answer = CASE WHEN question_review.resolved_by = 'configured-profile'
+                                 THEN NULL ELSE question_review.answer END,
+                   auto_resolved = CASE WHEN question_review.resolved_by = 'configured-profile'
+                                        THEN FALSE ELSE question_review.auto_resolved END,
+                   resolved_by = NULLIF(question_review.resolved_by, 'configured-profile'),
                    updated_at = now(),
                    options = EXCLUDED.options,
                    screenshot_path = COALESCE(EXCLUDED.screenshot_path,

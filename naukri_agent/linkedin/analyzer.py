@@ -109,6 +109,8 @@ SPAM_OR_UNPAID_REJECT_REGEX = re.compile(
 ABROAD_ONSITE_REJECT_REGEX = re.compile(
     r"("
     r"\bremote(?:\s+(?:position|role|job))?\s+in\s+(?:the\s+)?(?:us|usa|united\s+states)\b|"
+    r"(?-i:\bU\.?S\.?(?:A\.?)?)(?!\w)\s*(?:[-:(]\s*)?remote\b|"
+    r"\bremote\s*[-:(]\s*(?-i:\bU\.?S\.?(?:A\.?)?)(?!\w)|"
     r"\b(?:united\s+states|usa)\s*[-:(]\s*remote\b|"
     r"\b(?:toronto|vancouver|montreal|ottawa|london|berlin|sydney|singapore|dubai)\b[^\n]{0,60}\b(?:hybrid|on[ -]?site|required\s+\d\s+days)\b|"
     r"\b(?:us\s+citizen|us\s+citizens|green\s+card|h1-?b|security\s+clearance|"

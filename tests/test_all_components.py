@@ -6606,8 +6606,8 @@ class TestRun631AiPythonQuestions(unittest.TestCase):
     iNextLabs LinkedIn flow (linkedin-4484934350), whose stored texts carry the
     "Apply to iNextLabs 3/5 pages" prefix (and #402 is LPW's garbled radio
     label). Grounding: C# = 0 (the profile's 2 AI years do not extend to C#);
-    Conversational AI and Voice AI share those same 2 AI years; every location
-    willingness is Yes. A repeat run must resolve all from config."""
+    Conversational AI and Voice AI share those same 2 AI years. The garbled
+    location control is scoped to iNextLabs."""
 
     # (review id, question text, kind, options, expected answer)
     CASES: ClassVar = [
@@ -6633,6 +6633,7 @@ class TestRun631AiPythonQuestions(unittest.TestCase):
             profile_answers=dict(prof.answers),
             strict=True,
             experience=cfg.experience_for(prof),
+            job_screening_answers=prof.job_screening_answers,
         )
 
     def test_run631_questions_resolve_from_config(self):
@@ -6642,7 +6643,8 @@ class TestRun631AiPythonQuestions(unittest.TestCase):
         for rid, text, kind, options, expected in self.CASES:
             with self.subTest(review=rid):
                 r = eng.resolve(
-                    ScreeningQuestion(text=text, kind=kind, options=list(options))
+                    ScreeningQuestion(text=text, kind=kind, options=list(options)),
+                    job_id="linkedin-4484934350" if rid == 402 else "",
                 )
                 self.assertIsNotNone(r, f"#{rid} unresolved")
                 self.assertEqual(r.value, expected, f"#{rid}")

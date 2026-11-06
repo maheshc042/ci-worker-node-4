@@ -1772,8 +1772,8 @@ class LinkedInPlatform(BaseJobPlatform):
                     return None
         return None
 
-    def _resolve_screening(self, question: ScreeningQuestion) -> ResolvedAnswer | None:
-        answer = self.answers.resolve(question)
+    def _resolve_screening(self, question: ScreeningQuestion, *, job_id: str = "") -> ResolvedAnswer | None:
+        answer = self.answers.resolve(question, job_id=job_id) if job_id else self.answers.resolve(question)
         if answer is None or (
             answer.matched_pattern.startswith(("experience:unlisted_default", "tenure-compare:inferred:"))
             or answer.matched_pattern in {
@@ -1789,6 +1789,9 @@ class LinkedInPlatform(BaseJobPlatform):
 
     async def _fill_step_inputs(self, modal: Locator, job: Job | None = None, profile_name: str = "") -> None:
         """Fills radio fieldsets, text inputs, dropdowns, comboboxes strictly within the modal."""
+        def resolve_screening(question: ScreeningQuestion) -> ResolvedAnswer | None:
+            return self._resolve_screening(question, job_id=job.job_id if job else "")
+
         # 1. State-aware resume selection (never deselects already selected resume)
         target_resume_stem, target_resume_file = self._resume_for_role(
             profile_name, job.title if job else ""
@@ -1950,7 +1953,7 @@ class LinkedInPlatform(BaseJobPlatform):
                         log.info("linkedin.apply.email_default_kept")
                     continue
 
-                resolved = self._resolve_screening(ScreeningQuestion(text=label, kind="select", options=options))
+                resolved = resolve_screening(ScreeningQuestion(text=label, kind="select", options=options))
                 if resolved and resolved.value:
                     target_val = resolved.value
 
@@ -2040,7 +2043,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     option_labels = [(await safe_text(option)).strip() for option in options]
                 opt_texts = [label for label in option_labels if label]
 
-                resolved = self._resolve_screening(ScreeningQuestion(text=q_text, kind="radio", options=opt_texts)) if q_text else None
+                resolved = resolve_screening(ScreeningQuestion(text=q_text, kind="radio", options=opt_texts)) if q_text else None
                 target_val = resolved.value if resolved else ""
 
                 # CTC range containment (run 441: Current CTC range options
@@ -2093,7 +2096,7 @@ class LinkedInPlatform(BaseJobPlatform):
 
                 cb_label_low = cb_label.lower()
                 is_checked = await cb.is_checked()
-                resolved = self._resolve_screening(ScreeningQuestion(text=cb_label, kind="checkbox")) if cb_label else None
+                resolved = resolve_screening(ScreeningQuestion(text=cb_label, kind="checkbox")) if cb_label else None
                 if resolved and resolved.source in {"profile", "kb", "profile-override"}:
                     if self.answers._polarity(resolved.value) is True and not is_checked:
                         await cb.check(timeout=1500)
@@ -2282,7 +2285,7 @@ class LinkedInPlatform(BaseJobPlatform):
 
                 ans = ""
                 if is_numeric:
-                    resolved = self._resolve_screening(ScreeningQuestion(text=label, kind="text"))
+                    resolved = resolve_screening(ScreeningQuestion(text=label, kind="text"))
                     if resolved:
                         number = re.search(r"[-+]?\d*\.?\d+", resolved.value)
                         if number:
@@ -2296,7 +2299,7 @@ class LinkedInPlatform(BaseJobPlatform):
                                     value *= 100
                             ans = f"{value:g}"
                 else:
-                    resolved = self._resolve_screening(ScreeningQuestion(text=label, kind="text"))
+                    resolved = resolve_screening(ScreeningQuestion(text=label, kind="text"))
                     ans = resolved.value if resolved else ""
 
                     import datetime

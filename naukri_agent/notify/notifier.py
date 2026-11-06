@@ -222,6 +222,8 @@ def format_run_summary(
     ]
     if dry_run:
         lines.insert(1, "  ℹ️ SIMULATION ONLY — No live applications submitted.")
+    elif stats.scraped > 0 and stats.scraped == stats.plan_rejected and not (stats.considered or stats.errors):
+        lines.insert(1, "  ℹ️ All listings were rejected during planning. No application was attempted.")
 
     if stats.per_platform:
         lines.append("")
@@ -254,7 +256,7 @@ def format_run_summary(
         lines.append("⚠️ ERRORS / WARNINGS:")
         seen: dict[str, int] = {}
         for message in stats.errors:
-            key = message[:160]
+            key = message.strip().split("\n", 1)[0][:160]
             seen[key] = seen.get(key, 0) + 1
         for message, count in seen.items():
             suffix = f" (×{count})" if count > 1 else ""
