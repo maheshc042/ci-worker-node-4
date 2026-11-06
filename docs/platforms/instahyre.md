@@ -92,8 +92,9 @@ Before configuring filters, clears blocking modals:
 
 ### 4. Opening Opportunity Modal
 - Clicks `a#employer-profile-opportunity[ng-click='openApplyModal(opp)']`.
+- If the native click times out, checks for an opening modal first. Otherwise reacquires the exact native-ID card and dispatches one details-opening click. A recovered modal must expose the same job ID before eligibility is evaluated.
 - Awaits modal: `.candidate-apply-modal > .application-modal-block` or `#employer-profile-modal`.
-- Dumps modal HTML to `instahyre-modal-{job_id}.html`.
+- Dumps modal HTML to `instahyre-modal-{job_id}.html` after waiting for the description, so diagnostics can include the hydrated listing.
 
 ### 5. Detail Screening & External ATS Handoff
 - Reads full description from `#job-description .job-description`.

@@ -2154,8 +2154,9 @@ class CutshortPlatform(BaseJobPlatform):
             try:
                 if not await selected_resume.is_visible():
                     upload = modal.get_by_text("Upload another resume", exact=True)
-                    await upload.click(timeout=2500)
-                    await modal.locator("input[type='file']").set_input_files(str(resume_path), timeout=3000)
+                    async with self.page.expect_file_chooser(timeout=3000) as chooser:
+                        await upload.click(timeout=2500)
+                    await (await chooser.value).set_files(str(resume_path), timeout=3000)
                 await selected_resume.wait_for(state="visible", timeout=5000)
                 resume_verified = True
             except Exception as exc:

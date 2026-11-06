@@ -54,9 +54,10 @@ def _now_utc() -> datetime:
 
 
 class ReportExporter:
-    def __init__(self, output_dir: Path, run_id: str = "") -> None:
+    def __init__(self, output_dir: Path, run_id: str = "", *, profile_scope: str = "") -> None:
         self.output_dir = output_dir
         self.run_id = run_id
+        self.profile_scope = profile_scope
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _names(self, base: str, platform: str = "") -> Path:
@@ -65,7 +66,8 @@ class ReportExporter:
         Prefixed with the run id so consecutive runs stop clobbering each
         other's forensics (run 377's plan CSVs were lost to run 359's files).
         """
-        slug = "".join(ch if ch.isalnum() else "_" for ch in (platform or "").lower()).strip("_")
+        scope = "_".join(part for part in (platform, self.profile_scope) if part)
+        slug = "".join(ch if ch.isalnum() else "_" for ch in scope.lower()).strip("_")
         run_prefix = f"run{self.run_id}_" if self.run_id not in (None, "") else ""
         stem = f"{slug}_{base}" if slug else base
         return self.output_dir / f"{run_prefix}{stem}"

@@ -1,5 +1,13 @@
 # Cross-platform verification — 2026-11-06
 
+## Run 721 from GitHub artifact 42180823120
+
+The primary run reached all five enabled platforms and ended `partial`. Naukri reported nine new applications, one failure and four Sidekick items queued. Eight exact listings still showed Applied during read-only recheck. One redirected. The local detail rules now reject the observed financial-data, specialist BI and model-training requirements that passed in run 721. Datamatics remains an unresolved screening widget failure.
+
+LinkedIn authenticated and recorded four Easy Apply successes across two profiles and one outreach email sent. The second profile overwrote the first profile's exported files. LinkedIn now includes the profile in report filenames. Cutshort recorded one exact conversation receipt and two pre-Send résumé failures. The saved page has file inputs outside the modal. The local fix uses the chooser opened by the verified dialog's upload button and retains filename verification.
+
+Wellfound rejected all eight jobs at planning and exercised no application flow. Instahyre verified the 2-year slider setting and recorded eight exact Applied receipts and ten listing-opening timeouts before Apply. The local recovery is restricted to the exact opportunity and verifies the recovered modal's job ID. The CLI now returns a failing exit code for job failures or recorded run errors even when other jobs were applied. Screening review alone does not fail the CLI.
+
 Five platforms are enabled; HiringCafe is disabled. This review combines archived GitHub runs 708–709, earlier live receipts, a new read-only Instahyre receipt check and a HiringCafe access probe. It did not submit an application, answer a screening question, send a pitch or change historical outcomes.
 
 ## Archived GitHub runs

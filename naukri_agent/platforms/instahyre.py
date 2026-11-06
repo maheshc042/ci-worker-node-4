@@ -45,6 +45,8 @@ _SKILL_TAGS = (
     "#job-search-section .selectize-control .selectize-input .item[data-value]"
 )
 _EXPERIENCE_SLIDER = ".experience-filter [ng-model='search.sliderExperience']"
+_OPPORTUNITY_OPENER = "a#employer-profile-opportunity[ng-click='openApplyModal(opp)']"
+_OPPORTUNITY_MODAL = [".candidate-apply-modal > .application-modal-block", "#employer-profile-modal"]
 
 
 def _ai_tenure_shortfall(description: str, config: AgentConfig | None) -> FilterDecision | None:
@@ -1039,6 +1041,32 @@ class InstahyrePlatform(BaseJobPlatform):
             rows = rows.filter(has=page.locator(f"ul[id='job-skills-{numeric_id}']"))
         return rows if await rows.count() == 1 else None
 
+    async def _open_target_opportunity(self, job: Job, card: Locator) -> tuple[Locator | None, bool]:
+        opener = await first_visible(card, [_OPPORTUNITY_OPENER], timeout_ms=2500)
+        if opener is None:
+            return None, False
+        recovered = False
+        try:
+            await opener.click(timeout=4000)
+        except PlaywrightTimeoutError:
+            # A click can time out while the details panel is already opening.
+            modal = await first_visible(self.page, _OPPORTUNITY_MODAL, timeout_ms=1000)
+            if modal is not None:
+                return modal, True
+            if not job.job_id.removeprefix("instahyre-").isdecimal():
+                return None, False
+            current_card = await self._find_target_card(job)
+            if current_card is None:
+                return None, False
+            opener = current_card.locator(_OPPORTUNITY_OPENER)
+            if await opener.count() != 1:
+                return None, False
+            # This handler only opens details. It avoids the unstable hit target.
+            await opener.dispatch_event("click", timeout=2000)
+            log.info("instahyre.apply.opportunity_opener_recovered", job_id=job.job_id)
+            recovered = True
+        return await first_visible(self.page, _OPPORTUNITY_MODAL, timeout_ms=8000), recovered
+
     async def _verify_target_applied(self, job: Job) -> bool:
         """Read a fresh, company-filtered Applied feed without changing search.
 
@@ -1193,27 +1221,21 @@ class InstahyrePlatform(BaseJobPlatform):
             if await first_visible(card, applied_markers, timeout_ms=600) is not None:
                 return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
 
-            opener = await first_visible(
-                card, ["a#employer-profile-opportunity[ng-click='openApplyModal(opp)']"],
-                timeout_ms=2500,
-            )
-            if opener is None:
-                return ApplyOutcome(ApplicationStatus.FAILED, detail="Instahyre opportunity opener could not be verified")
             try:
-                await opener.click(timeout=4000)
-            except Exception as exc:
+                modal, recovered = await self._open_target_opportunity(job, card)
+            except PlaywrightError as exc:
                 return ApplyOutcome(ApplicationStatus.FAILED, detail=f"Instahyre opportunity did not open: {exc!s}")
-
-            modal = await first_visible(
-                self.page,
-                [".candidate-apply-modal > .application-modal-block", "#employer-profile-modal"],
-                timeout_ms=8000,
-            )
             if modal is None:
                 _record_timing()
                 return ApplyOutcome(ApplicationStatus.FAILED, detail="Modal did not open after clicking card")
 
-        # Dump opened modal HTML for exact inspection
+        description = await first_visible(
+            modal, ["#job-description .job-description", "div.opportunity-description", "div.job-description"],
+            timeout_ms=4500,
+        )
+        full_desc = await safe_text(description)
+
+        # Save the hydrated description, rather than the loading shell.
         try:
             dump_path = self.artifacts.dir / f"instahyre-modal-{job.job_id}.html"
             content = await self.page.content()
@@ -1222,14 +1244,22 @@ class InstahyrePlatform(BaseJobPlatform):
         except Exception as exc:
             log.debug("instahyre.modal_dump_failed", error=str(exc))
 
-        description = await first_visible(
-            modal, ["#job-description .job-description", "div.opportunity-description", "div.job-description"],
-            timeout_ms=4500,
-        )
-        full_desc = await safe_text(description)
         if not full_desc or pre_submit_check is None:
             await self._ensure_modal_closed()
             return ApplyOutcome(ApplicationStatus.FAILED, detail="Instahyre detail eligibility could not be verified")
+
+        native_id = job.job_id.removeprefix("instahyre-")
+        if recovered:
+            try:
+                modal_id = await modal.evaluate("""element => {
+                    const scope = window.angular?.element(element).scope();
+                    return String(scope?.job?.id ?? scope?.opp?.job?.id ?? '');
+                }""", timeout=2000)
+            except PlaywrightError:
+                modal_id = None
+            if modal_id != native_id:
+                await self._ensure_modal_closed()
+                return ApplyOutcome(ApplicationStatus.FAILED, detail="Instahyre modal did not verify the target job ID")
 
         job.description = full_desc
         minimum, maximum = extract_jd_experience(full_desc)

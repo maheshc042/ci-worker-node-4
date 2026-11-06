@@ -107,6 +107,22 @@ class TestNaukriExperienceSearch(unittest.IsolatedAsyncioTestCase):
 
 
 class TestArchivedMandatoryRequirements(unittest.TestCase):
+    def test_run721_specialist_requirements_block_but_python_sql_analytics_remains(self):
+        profile = AgentConfig.load().active_profiles(account="primary")[0]
+        filters = FilterEngine(profile.filters_for("recommended"))
+        job = Job("audit", "Data Analyst", "Example", "https://example.com/job")
+        for description in (
+            "Candidates must have hands-on experience with complex financial datasets.",
+            "We require strong expertise in Advanced Excel and Power BI.",
+            "Job Requirements: Proficiency in data visualization tools such as Tableau or Power BI.",
+            "Responsibilities: Design, train, and evaluate machine learning and deep learning models.",
+        ):
+            with self.subTest(description=description):
+                job.description = description
+                self.assertEqual(filters.evaluate_detail(job).reason, SkipReason.FILTER_DESCRIPTION)
+        job.description = "Analyze data in Python and SQL. Tableau or Power BI is a plus."
+        self.assertTrue(filters.evaluate_detail(job).passed)
+
     def test_naukri_ambiguous_tester_uses_the_description(self):
         profile = AgentConfig.load().active_profiles(account="primary")[0]
         filters = FilterEngine(profile.filters_for("recommended"), profile.to_candidate_profile())

@@ -58,7 +58,7 @@ from ..core.run_policy import RunPolicy
 from ..core.runtime_metrics import RuntimeMetrics
 from ..db.locks import advisory_lock_key
 from ..db.repository import Repository
-from ..logging_setup import bind_context, clear_context, get_logger
+from ..logging_setup import bind_context, clear_context, get_logger, unbind_context
 from ..naukri import selectors as S
 from ..naukri.apply import ApplyEngine
 from ..naukri.naukri_api import NaukriApiClient, extract_naukri_token
@@ -517,6 +517,7 @@ class Orchestrator:
                 executed_platforms: list[BaseJobPlatform] = []
 
                 for p_idx, p_name in enumerate(platform_specs):
+                    unbind_context("profile", "job_id")
                     remaining_run_time_s = total_timeout_s - self.elapsed_s
                     if remaining_run_time_s < 120:
                         log.warning(
@@ -787,6 +788,7 @@ class Orchestrator:
                 # this run's questionnaires AND any older threads still
                 # waiting for an answer.
                 # =========================================================
+                unbind_context("profile", "job_id")
                 message_platforms = [p for p in executed_platforms if hasattr(p, "handle_messages")]
                 # The sweep and the cold-email campaign ran 14 minutes past the
                 # run timeout in run 291. Gate both on remaining budget.
@@ -1149,6 +1151,7 @@ class Orchestrator:
         artifacts: ArtifactStore,
     ) -> None:
         assert self.repo is not None
+        unbind_context("job_id")
         bind_context(profile=profile.name)
         log.info(
             "profile.start",
@@ -1161,7 +1164,10 @@ class Orchestrator:
 
         # Built up-front, not at Step 3, so the dead-feed early returns below
         # can still export any application made by the review-retry pass.
-        exporter = ReportExporter(PROJECT_ROOT / "analysis", run_id=self.run_id)
+        exporter = ReportExporter(
+            PROJECT_ROOT / "analysis", run_id=self.run_id,
+            profile_scope=profile.name if platform.platform_name == "linkedin" else "",
+        )
 
         known = await self.repo.known_job_ids(
             profile.name,

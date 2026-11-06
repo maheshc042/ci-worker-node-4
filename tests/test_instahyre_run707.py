@@ -60,6 +60,25 @@ class TestInstahyreAppliedFeed(unittest.IsolatedAsyncioTestCase):
         self.assertIn('.application-status-box .status-label:text-is(\'Applied\')', find.await_args.args[1])
         platform.page.context.new_page.assert_not_called()
 
+    async def test_unstable_open_reacquires_exact_card_before_dispatching(self):
+        platform = self.platform()
+        old_opener = MagicMock(click=AsyncMock(side_effect=instahyre.PlaywrightTimeoutError("unstable")))
+        current_opener = MagicMock(count=AsyncMock(return_value=1), dispatch_event=AsyncMock())
+        current_card = MagicMock()
+        current_card.locator.return_value = current_opener
+        platform._find_target_card = AsyncMock(return_value=current_card)
+        modal = MagicMock()
+        with patch.object(instahyre, "first_visible", new=AsyncMock(side_effect=[old_opener, None, modal])):
+            self.assertEqual(await platform._open_target_opportunity(target(), MagicMock()), (modal, True))
+        platform._find_target_card.assert_awaited_once()
+        current_opener.dispatch_event.assert_awaited_once_with("click", timeout=2000)
+
+        current_opener.dispatch_event.reset_mock()
+        platform._find_target_card.return_value = None
+        with patch.object(instahyre, "first_visible", new=AsyncMock(side_effect=[old_opener, None])):
+            self.assertEqual(await platform._open_target_opportunity(target(), MagicMock()), (None, False))
+        current_opener.dispatch_event.assert_not_called()
+
     def verification(self, platform):
         locator = MagicMock()
         locator.filter.return_value = locator

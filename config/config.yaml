@@ -1043,6 +1043,11 @@ profiles:
         "lead data analyst to drive", "the lead data analyst will",
         "hands-on experience with clickhouse",
         "expertise in machine learning libraries such as scikit-learn or tensorflow",
+        # Run 721: specialist requirements hidden by broadly matching titles.
+        "hands-on experience with complex financial datasets",
+        "strong expertise in advanced excel and power bi",
+        "proficiency in data visualization tools such as tableau or power bi",
+        "design, train, and evaluate machine learning and deep learning models",
         "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
       ]
       allowed_locations: []

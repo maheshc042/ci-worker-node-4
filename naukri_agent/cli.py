@@ -177,7 +177,7 @@ def run(
                 )
                 stats = await orchestrator.run()
                 _print_stats(key, stats)
-                if stats.errors and stats.applied == 0:
+                if stats.failed or stats.errors:
                     failures += 1
         finally:
             await close_pool()
@@ -244,9 +244,7 @@ def _print_stats(account: str, stats) -> None:
         "external",
         "forwarded",
         "already_applied",
-        "external",
         "needs_review",
-        "failed",
     ):
         table.add_row(key.replace("_", " "), str(getattr(stats, key, 0)))
     console.print(table)
