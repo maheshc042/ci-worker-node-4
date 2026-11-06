@@ -700,6 +700,7 @@ class JobProfile(_Model):
     account: str = "primary"
     experience_years: float = Field(default=0, ge=0, le=50)
     use_recommended: bool = True
+    naukri_experience_search_terms: list[str] = Field(default_factory=list)
     max_applications_per_run: int = Field(default=15, ge=1, le=500)
     platform_limits: dict[str, int] = Field(default_factory=dict)
     min_rank_score: float = Field(default=0.0, ge=0.0, le=100.0)

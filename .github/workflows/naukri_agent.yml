@@ -39,6 +39,7 @@ on:
 concurrency:
   group: naukri-auto-apply-agent
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

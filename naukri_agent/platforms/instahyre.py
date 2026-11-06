@@ -9,9 +9,10 @@ import re
 import time as _time
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from playwright.async_api import Page
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..browser.artifacts import ArtifactStore
@@ -43,6 +44,7 @@ _SKILL_TAGS = (
     ".selectize-control.skills-drop-select-job-search .selectize-input .item[data-value], "
     "#job-search-section .selectize-control .selectize-input .item[data-value]"
 )
+_EXPERIENCE_SLIDER = ".experience-filter [ng-model='search.sliderExperience']"
 
 
 def _ai_tenure_shortfall(description: str, config: AgentConfig | None) -> FilterDecision | None:
@@ -413,6 +415,7 @@ class InstahyrePlatform(BaseJobPlatform):
             # searching with an invented number of years.
             exp_val = ""
 
+        legacy_experience_set = False
         if exp_input and exp_val:
             try:
                 await exp_input.click()
@@ -420,11 +423,9 @@ class InstahyrePlatform(BaseJobPlatform):
                 await exp_input.fill("")
                 await human_type(exp_input, exp_val)
                 await human_pause(400, 800)
+                legacy_experience_set = await exp_input.input_value(timeout=1500) == exp_val
             except Exception as exc:
                 log.debug("instahyre.filters.exp_select_failed", error=str(exc))
-        elif exp_val:
-            log.warning("instahyre.filters.experience_control_missing", requested_years=exp_val,
-                        detail="Search tenure not set; card and detail eligibility checks remain required")
 
         # 4. Click the search submit button. NOTE Sep 2026: Instahyre
         # renamed it from button#show-results ("Show results") to
@@ -459,6 +460,15 @@ class InstahyrePlatform(BaseJobPlatform):
                 await human_pause(3000, 5000)
 
 
+
+        if exp_val:
+            slider = await first_visible(self.page, [_EXPERIENCE_SLIDER], timeout_ms=2500)
+            if slider is not None:
+                if not await self._set_experience_slider(slider, int(exp_val)):
+                    log.warning("instahyre.filters.experience_slider_unverified", requested_years=exp_val)
+            elif not legacy_experience_set:
+                log.warning("instahyre.filters.experience_control_missing", requested_years=exp_val,
+                            detail="Search tenure not set; card and detail eligibility checks remain required")
 
         # Dump search results HTML for exact inspection
         try:
@@ -496,6 +506,63 @@ class InstahyrePlatform(BaseJobPlatform):
             except (AttributeError, TypeError, ValueError) as exc:
                 log.debug("instahyre.filters.fracture_check_failed", error=str(exc))
 
+
+    async def _set_experience_slider(self, slider: Locator, years: int) -> bool:
+        """Move the native handle and verify the resulting search and value."""
+        try:
+            bounds = await slider.evaluate(
+                """element => {
+                    const scope = window.angular?.element(element).isolateScope();
+                    return scope ? {min: scope.min, max: scope.max, value: scope.ngModel} : null;
+                }""",
+                timeout=2500,
+            )
+            if not bounds or not bounds["min"] <= years < bounds["max"]:
+                return False
+            label = slider.locator(".slider-value")
+            expected = {str(years)}
+            if years == bounds["max"] - 1:
+                expected.add(f"{years}+")
+            if bounds["value"] == years:
+                return await safe_text(label) in expected
+
+            handle = slider.locator(".slider-handle")
+            await handle.scroll_into_view_if_needed(timeout=2500)
+            thumb = await handle.bounding_box(timeout=2500)
+            track = await slider.locator(".slider-track").bounding_box(timeout=2500)
+            if not thumb or not track or track["width"] <= thumb["width"]:
+                return False
+            fraction = (years - bounds["min"]) / (bounds["max"] - bounds["min"])
+            target_x = track["x"] + thumb["width"] / 2 + (track["width"] - thumb["width"]) * fraction
+            y = thumb["y"] + thumb["height"] / 2
+
+            def is_filtered_search(response) -> bool:
+                url = urlsplit(response.url)
+                return (
+                    url.hostname == "www.instahyre.com"
+                    and url.path.rstrip("/") == "/api/v1/job_search"
+                    and parse_qs(url.query).get("years") == [str(years)]
+                )
+
+            async with self.page.expect_response(
+                is_filtered_search, timeout=8000,
+            ) as search:
+                await self.page.mouse.move(thumb["x"] + thumb["width"] / 2, y)
+                await self.page.mouse.down()
+                try:
+                    await self.page.mouse.move(target_x, y, steps=12)
+                finally:
+                    await self.page.mouse.up()
+            response = await search.value
+            if not response.ok:
+                return False
+            await response.body()
+            if await safe_text(label) in expected:
+                log.info("instahyre.filters.experience_slider_verified", years=years)
+                return True
+        except (PlaywrightError, TypeError, KeyError) as exc:
+            log.debug("instahyre.filters.experience_slider_failed", error_type=type(exc).__name__)
+        return False
 
     async def _dismiss_modals(self) -> None:
         """Dismiss popup modals (e.g. 'Are you looking for a job actively?')."""

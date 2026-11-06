@@ -8,6 +8,7 @@ from naukri_agent.core.models import Job, ScreeningQuestion, SkipReason
 from naukri_agent.core.orchestrator import Orchestrator
 from naukri_agent.notify.notifier import header_prefix
 from naukri_agent.naukri.apply import ApplyEngine
+from naukri_agent.naukri.search import JobSearcher
 
 
 class TestArchivedAnswerRegressions(unittest.TestCase):
@@ -78,7 +79,96 @@ class TestProfileSkillAnswer(unittest.IsolatedAsyncioTestCase):
                          "Approved skill answer")
 
 
+class TestNaukriExperienceSearch(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_search_deduplicates_and_rejects_a_lost_filter(self):
+        page = MagicMock()
+        page.goto = AsyncMock(return_value=MagicMock(ok=True))
+        slider = MagicMock(count=AsyncMock(return_value=1), wait_for=AsyncMock())
+        cards = MagicMock(count=AsyncMock(return_value=2))
+        cards.first.wait_for = AsyncMock()
+        duplicate = MagicMock(get_attribute=AsyncMock(return_value="123456789012"))
+        new = MagicMock(get_attribute=AsyncMock(return_value="123456789013"))
+        new.locator.return_value.first.count = AsyncMock(return_value=1)
+        cards.all = AsyncMock(return_value=[duplicate, new])
+        page.locator.side_effect = lambda selector: cards if "srp-jobtuple" in selector else slider
+        searcher = JobSearcher(page, 0, 0)
+        parsed = Job("reco-123456789013", "Python Developer", "Example",
+                     "https://www.naukri.com/job-listings-123456789013")
+        searcher._parse_card = AsyncMock(return_value=parsed)
+        page.url = "https://www.naukri.com/python-developer-jobs?experience=3"
+        jobs = await searcher.search_with_experience(["python developer"], 3, {"reco-123456789012"})
+        self.assertEqual(jobs, [parsed])
+        self.assertEqual(searcher._parse_card.await_count, 1)
+
+        page.url = "https://www.naukri.com/python-developer-jobs"
+        jobs = await searcher.search_with_experience(["python developer"], 3, set())
+        self.assertEqual(jobs, [])
+        self.assertEqual(searcher._parse_card.await_count, 1)
+
+
 class TestArchivedMandatoryRequirements(unittest.TestCase):
+    def test_naukri_ambiguous_tester_uses_the_description(self):
+        profile = AgentConfig.load().active_profiles(account="primary")[0]
+        filters = FilterEngine(profile.filters_for("recommended"), profile.to_candidate_profile())
+        for title in ("Tester", "Testing Engineer"):
+            with self.subTest(title=title):
+                job = Job("audit", title, "Example", "https://example.com/job")
+                self.assertTrue(filters.evaluate_card(job).passed)
+                job.description = "Perform electrical testing and implement automated testing scripts."
+                self.assertEqual(filters.evaluate_detail(job).reason, SkipReason.FILTER_DESCRIPTION)
+                job.description = "Software testing of SaaS products with Postman and Playwright."
+                self.assertTrue(filters.evaluate_detail(job).passed)
+
+    def test_aiml_alias_still_enforces_experience_bounds(self):
+        profile = AgentConfig.load().active_profiles(account="primary")[0]
+        filters = FilterEngine(profile.filters_for("recommended"), profile.to_candidate_profile())
+        job = Job("audit", "AIML Engineer", "Example", "https://example.com/job",
+                  min_experience=2, max_experience=3)
+        self.assertTrue(filters.evaluate_card(job).passed)
+        job.max_experience = 11
+        self.assertEqual(filters.evaluate_card(job).reason, SkipReason.FILTER_EXPERIENCE)
+        job.max_experience = 10
+        job.description = "Strong proficiency in Python with expertise in machine learning libraries such as scikit-learn or TensorFlow."
+        self.assertEqual(filters.evaluate_detail(job).reason, SkipReason.FILTER_DESCRIPTION)
+
+    def test_water_consultancy_does_not_match_software_qa(self):
+        config = AgentConfig.load()
+        for account in ("primary", "secondary"):
+            with self.subTest(account=account):
+                profile = config.active_profiles(account=account)[0]
+                filters = FilterEngine(profile.filters_for("recommended"))
+                job = Job(
+                    job_id="reco-051126926708", title="Water Quality Analyst/Modeller",
+                    company="AtkinsRéalis", url="https://www.naukri.com/job-listings-051126926708",
+                    min_experience=2, max_experience=4,
+                )
+                self.assertEqual(filters.evaluate_card(job).reason, SkipReason.FILTER_TITLE)
+
+                job.title = "Quality Analyst"
+                self.assertTrue(filters.evaluate_card(job).passed)
+                job.description = "Degree in Civil Engineering with 2 to 4 years of experience in the water industry. Python is a plus."
+                self.assertEqual(filters.evaluate_detail(job).reason, SkipReason.FILTER_DESCRIPTION)
+
+                job.description = "Automate browser tests with Playwright for our water quality analytics software."
+                self.assertTrue(filters.evaluate_detail(job).passed)
+
+    def test_primary_detail_catches_run716_requirements_hidden_by_generic_titles(self):
+        profile = AgentConfig.load().active_profiles(account="primary")[0]
+        filters = FilterEngine(profile.filters_for("recommended"))
+        cases = [
+            ("Data Analyst", "The Lead Data Analyst will remain hands-on while mentoring analysts."),
+            ("Data Engineer", "Analytical Databases: Hands-on experience with ClickHouse."),
+        ]
+        for title, description in cases:
+            with self.subTest(title=title):
+                job = Job("audit", title, "Example", "https://example.com/job")
+                self.assertTrue(filters.evaluate_card(job).passed)
+                job.description = description
+                self.assertEqual(filters.evaluate_detail(job).reason, SkipReason.FILTER_DESCRIPTION)
+
+                job.description = "Build SQL and Python workflows. ClickHouse familiarity is a plus."
+                self.assertTrue(filters.evaluate_detail(job).passed)
+
     def test_explicit_unsupported_requirements_block_generic_titles(self):
         config = AgentConfig.load()
         profile = config.active_profiles(account="secondary")[0]

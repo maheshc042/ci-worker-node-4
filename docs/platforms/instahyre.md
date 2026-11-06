@@ -39,8 +39,8 @@ Before configuring filters, clears blocking modals:
 
 ### 4. Experience Filter & Submission
 - Fills `input#years` using the configured Instahyre override first, followed by the profile, shared total tenure or profile ceiling. Values are converted to integer search years. Search experience is separate from a screening claim.
-- The run 707 UI has no supported years input. The adapter logs that search tenure was not set; downstream description experience checks remain required. Do not report the slider as configured merely because a desired value exists in config.
 - Clicks search trigger: Supports modern renamed button `button.skills-search-btn` (*"Search"*), with fallback to legacy `button#show-results` (*"Show results"*).
+- On the current UI, waits for the **Experience Level** slider after the initial search and moves its native handle to the configured value. Checks for a successful search response and the selected label. `0 years` and `25+` label the scale endpoints, while the handle shows the selected value. If the current layout cannot be verified, logs the gap and keeps downstream eligibility checks in force.
 - Dumps search results to `instahyre-search-results.html`.
 
 ---

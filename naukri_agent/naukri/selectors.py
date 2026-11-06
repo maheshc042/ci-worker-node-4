@@ -90,6 +90,10 @@ CAPTCHA_MARKERS = [
 ]
 
 # ------------------------------------------------------------- search result
+SEARCH_EXPERIENCE_SLIDER = "[role='slider'][aria-label='Experience']"
+SEARCH_RESULT_CARD = "div.srp-jobtuple-wrapper[data-job-id]"
+SEARCH_RESULT_TITLE = "a.title[href*='/job-listings-']"
+
 # Naukri has shipped several card layouts; support all of them.
 JOB_CARD_CONTAINERS = [
     "div.srp-jobtuple-wrapper",

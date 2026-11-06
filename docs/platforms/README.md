@@ -6,7 +6,7 @@ Read this guide and the relevant playbook before changing discovery, answers, ap
 
 | Platform | Job source and application route | Required application evidence |
 | --- | --- | --- |
-| [Naukri](naukri.md) | Recommended jobs, native Apply and screening drawer | Reopen through `_verify_post_submit(job)`, check the Apply state and explicit receipt |
+| [Naukri](naukri.md) | Recommended jobs and profile-specific experience-filtered Search, native Apply and screening drawer | Reopen through `_verify_post_submit(job)`, check the Apply state and explicit receipt |
 | [Cutshort](cutshort.md) | Recommended and filtered feeds, pitch dialog, separate Messages sweep | New View conversation for the exact job, then verify its thread links back to that job |
 | [LinkedIn](linkedin.md) | Track-specific search, Easy Apply or company-site link | Explicit sent receipt in the dialog or applied state on the exact job view |
 | [Wellfound](wellfound.md) | Candidate jobs feed, pitch form or company-site link | Reopen the exact listing and check persisted applied state |

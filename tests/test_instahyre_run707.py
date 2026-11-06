@@ -19,6 +19,37 @@ class TestInstahyreAppliedFeed(unittest.IsolatedAsyncioTestCase):
         platform.artifacts = MagicMock(dump_html=AsyncMock(), capture_failure=AsyncMock())
         return platform
 
+    async def test_experience_slider_requires_matching_label_and_successful_search(self):
+        platform = self.platform()
+        slider = MagicMock(evaluate=AsyncMock(return_value={"min": 0, "max": 26, "value": 26}))
+        label = MagicMock(count=AsyncMock(return_value=1), inner_text=AsyncMock(return_value="2"))
+        handle = MagicMock(scroll_into_view_if_needed=AsyncMock(), bounding_box=AsyncMock(
+            return_value={"x": 350, "y": 292, "width": 24, "height": 24},
+        ))
+        track = MagicMock(bounding_box=AsyncMock(return_value={"x": 172, "width": 202}))
+        slider.locator.side_effect = {".slider-value": label, ".slider-handle": handle,
+                                     ".slider-track": track}.__getitem__
+        response = MagicMock(ok=True, body=AsyncMock())
+        async def get_response():
+            return response
+        event = MagicMock()
+        event.__aenter__.side_effect = lambda: MagicMock(value=get_response())
+        platform.page.expect_response.return_value = event
+        platform.page.mouse = MagicMock(move=AsyncMock(), down=AsyncMock(), up=AsyncMock())
+
+        self.assertTrue(await platform._set_experience_slider(slider, 2))
+        matches_search = platform.page.expect_response.call_args.args[0]
+        endpoint = "https://www.instahyre.com/api/v1/job_search"
+        self.assertTrue(matches_search(MagicMock(url=f"{endpoint}?years=2")))
+        self.assertFalse(matches_search(MagicMock(url=f"{endpoint}?years=3")))
+        self.assertFalse(matches_search(MagicMock(url=endpoint)))
+        label.inner_text.return_value = "All"
+        self.assertFalse(await platform._set_experience_slider(slider, 2))
+        label.inner_text.return_value = "2"
+        response.ok = False
+        self.assertFalse(await platform._set_experience_slider(slider, 2))
+        self.assertEqual(platform.page.mouse.up.await_count, 3)
+
     async def test_exact_card_marker_can_confirm_without_second_lookup(self):
         platform = self.platform()
         card = MagicMock()

@@ -13,7 +13,8 @@ Workflow and implementation reference for the Naukri apply adapter. This guide d
 ---
 
 ## 2. Job Discovery & Feed Ingestion
-- **Feed URL**: `https://www.naukri.com/mnjuser/recommendedjobs` (Recommended feed only).
+- **Primary feed**: `https://www.naukri.com/mnjuser/recommendedjobs`. This page has no experience slider.
+- **Experience-filtered Search**: Profiles with `naukri_experience_search_terms` add up to 12 cards per configured term from the first results page. The agent uses the same `experience` query parameter set by the native left sidebar slider and checks that the visible slider and URL both confirm the profile's whole years. A failed check leaves the Search page out of the candidate pool. Search shares native job IDs, dedupe, planner rules and the mandatory description gate with Recommendations.
 - **Extracted Attributes**:
   - `job_id`: Extracted from card URL (e.g., `reco-<numeric_id>`).
   - `title`, `company`, `location`, `min_experience`, `max_experience`, `salary_text`, `posted_days_ago`, `tags`, `is_walkin`.
@@ -28,7 +29,7 @@ Workflow and implementation reference for the Naukri apply adapter. This guide d
 Every discovered listing is evaluated across two distinct filter gates before an application is attempted:
 
 ### Gate A: Card-Level Filter ([`FilterEngine.evaluate_card`](../../naukri_agent/core/filters.py))
-1. **Title Inclusion**: Must match at least one keyword in `title_must_include_any`. If the title is generic (e.g., "Software Engineer"), listing tags must contain matching tech skills.
+1. **Title Inclusion**: Match the profile's role keywords, including `AIML` as `AI/ML`. Naukri's bare `Tester` and `Testing Engineer` titles can reach detail review for QA-enabled profiles. The full description must identify software QA before they can reach Apply or Sidekick. Other generic titles can still require matching card skills.
 2. **Title Exclusion & Disjoint Specialization**: Rejects titles matching `title_must_not_include_any` or disjoint specializations (e.g., Salesforce, SAP, Mainframe, Embedded, Mobile/iOS/Android, DevOps when looking for Dev, etc.).
 3. **Experience Bounds**:
    - `job.min_experience > exp.max_years` (rejects requisitions requiring more experience than candidate ceiling).
@@ -99,3 +100,17 @@ The runs 702–703 audit removed the title/URL-only confirmation branch and imag
 The shared answer engine now holds unknown quantitative skill tenure for review, prevents contact-number collisions, and respects specific configured skill tenure over generic testing answers. Boolean skill adjacency remains a separate policy. Top Technical Skills can use the profile's configured core skills. Self-ratings without an approved value/scale and unlisted WebdriverIO tenure remain review items.
 
 The [detailed audit](../../analysis/run702_703_audit.md) covers 324 planner/outcome records. Current descriptions for the 13 applications show nine explicit requirement/role conflicts, three supported stack routes and one unverified CDAC qualification. Narrow secondary-profile description exclusions address the observed conflicts, while preserving Java-or-Python alternatives. Arbitrary qualification and named-skill JD tenure requirements are not comprehensively enforced. Archived rejected rows lack full original descriptions, so rejection recall cannot be certified. No new applications or review-queue resolutions were performed during this audit.
+
+### Primary run 716
+
+Run 716 selected 25 of 193 planner inputs. It recorded seven applications, eight existing applications, seven external routes, three screening reviews and one failure. A read-only recheck found the exact persisted Applied receipt and read the description for all seven new applications.
+
+AtkinsRéalis's Water Quality Analyst/Modeller matched the software profile's `quality analyst` title term. The role calls for civil or water resources qualifications and water-industry experience. The disjoint-title gate now catches water quality and related modeller titles. Both Naukri profiles also exclude the observed explicit water-industry tenure wording at the description gate. The primary profile now catches the exact lead analyst wording in MoveInSync's generic Data Analyst posting and the mandatory ClickHouse wording in the steel manufacturer's Data Engineer posting. All three cases reject when replayed against the current listing text. The rules preserve the ordinary QA title and optional ClickHouse references.
+
+Jero's Agentic AI Automation Engineer posting asks for hands-on low-code workflow experience and accepts tools similar to Power Automate. Confirm equivalent experience separately. Datamatics again opened a screening drawer without a detectable question. Run 716's evidence does not identify the widget layout needed to correct that path.
+
+The seven external-route listings and three screening-review listings were also reopened read-only. Acenet explicitly asks for three years of relevant AI/LLM development, above the two years configured for the primary profile. nVent asks for ERP, supply-chain or procurement data experience. These requirements expose remaining fit gaps in the route gate. Naukri showed Applied on the routed listings, while the run recorded Sidekick queueing. Neither verifies submission at the destination ATS.
+
+### Rejection audit and experience discovery
+
+The 108 attached rejection rows were all present in run 716's 168 planner rejections. The planner rejected 153 by title, 14 by freshness and one by experience. A read-only description check of 16 ambiguous cases found that Arvind's Tester and Prescient's Testing Engineer were software testing roles worth inspecting. Intellect Design Arena's AIML title exposed a spelling gap, but its description requires a specialist model-development stack. TTEC, Akamai, Mindteck, Vertiv and DXC had independent domain or stack mismatches. Qapitol's prompt role combines different seniority bands and remains a manual fit decision. Older listings remain subject to the three-day freshness rule.

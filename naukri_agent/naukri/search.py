@@ -23,7 +23,9 @@ import csv
 import re
 import time
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -368,6 +370,61 @@ class JobSearcher:
         _export_collected_csv(jobs_list)
 
         return jobs_list
+
+    async def search_with_experience(
+        self, terms: list[str], years: int, exclude_job_ids: set[str],
+    ) -> list[Job]:
+        """Collect a bounded Search supplement using the native slider setting."""
+        if not 1 <= years <= 30:
+            return []
+        collected: dict[str, Job] = {}
+        for term in terms:
+            slug = "-".join(re.findall(r"[a-z0-9]+", term.lower()))
+            if not slug:
+                continue
+            url = f"{S.BASE_URL}/{slug}-jobs?experience={years}"
+            try:
+                response = await self.page.goto(url, wait_until="domcontentloaded", timeout=18_000)
+                if response is None or not response.ok:
+                    log.warning("search.experience_page_unavailable", term=term)
+                    continue
+                slider = self.page.locator(S.SEARCH_EXPERIENCE_SLIDER)
+                await self.page.locator(
+                    f"{S.SEARCH_EXPERIENCE_SLIDER}[aria-valuenow='{years}']"
+                ).wait_for(state="visible", timeout=6_000)
+                actual_url = urlsplit(self.page.url)
+                if (
+                    actual_url.hostname != "www.naukri.com"
+                    or actual_url.path != f"/{slug}-jobs"
+                    or parse_qs(actual_url.query).get("experience") != [str(years)]
+                    or await slider.count() != 1
+                ):
+                    log.warning("search.experience_filter_unverified", term=term, years=years)
+                    continue
+                cards = self.page.locator(S.SEARCH_RESULT_CARD)
+                await cards.first.wait_for(state="visible", timeout=8_000)
+                count = await cards.count()
+                before = len(collected)
+                for card in (await cards.all())[:12]:
+                    native_id = await card.get_attribute("data-job-id", timeout=1_500)
+                    job_id = f"reco-{native_id}"
+                    if not native_id or job_id in exclude_job_ids or job_id in collected:
+                        continue
+                    title = card.locator(S.SEARCH_RESULT_TITLE).first
+                    if not await title.count():
+                        continue
+                    job = await self._parse_card(card, keyword=term, title_el=title)
+                    if job and urlsplit(job.url).hostname == "www.naukri.com" and (
+                        urlsplit(job.url).path.rstrip("/").endswith(f"-{native_id}")
+                    ):
+                        collected[job.job_id] = job
+                log.info("search.experience_filter_verified", term=term, years=years,
+                         cards=count, collected=len(collected) - before)
+            except PlaywrightTimeoutError:
+                log.warning("search.experience_filter_timeout", term=term, years=years)
+            except PlaywrightError as exc:
+                log.warning("search.experience_page_unavailable", term=term, error_type=type(exc).__name__)
+        return list(collected.values())
 
     async def _open_recommended(self) -> bool:
         """Open the recommendation feed with retries."""

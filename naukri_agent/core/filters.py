@@ -33,6 +33,7 @@ REMOTE_KEYWORDS = ("remote", "work from home", "wfh", "hybrid remote")
 def _normalise_str(text: str) -> str:
     """Normalize string and unify tech synonyms like Dot Net / .NET / dot.net -> dotnet, reactjs -> react, nodejs -> node."""
     low = (text or "").lower()
+    low = re.sub(r"\baiml\b", "ai/ml", low)
     low = re.sub(r"\bdot[\s.-]?net\b|(?<!\w)\.net\b", "dotnet", low)
     # Bare "NET" means .NET only when tech-adjacent ("TypeScript NET",
     # run 391). A bare \bnet\b rule would nuke real companies like
@@ -77,6 +78,13 @@ def _contains_any(haystack: str, needles: list[str]) -> str | None:
     return None
 
 
+_NAUKRI_AMBIGUOUS_QA_TITLES = {"tester", "testing engineer"}
+_SOFTWARE_QA_EVIDENCE = (
+    "software tester", "software testing", "software quality assurance",
+    "test automation for software",
+)
+
+
 DEDICATED_AI_KEYWORDS = (
     "machine learning", "ml engineer", "ml developer", "data scientist",
     "deep learning", "nlp engineer", "computer vision", "ai engineer",
@@ -101,6 +109,10 @@ DISJOINT_SPECIALIZATIONS = (
     # letters (run 368 applied to a "QA Executive - Microbiologist" food-lab
     # role). Surgical tokens — healthcare-IT (HL7, informatics) stays eligible.
     "microbiologist", "microbiology",
+    # Water consultancy uses "quality analyst" and "modeler" as job titles.
+    "water quality analyst", "water quality modeller", "water quality modeler",
+    "wastewater modeller", "wastewater modeler", "hydraulic modeller", "hydraulic modeler",
+    "flood modeller", "flood modeler",
     # Creative/content professions: graphics, game and creator roles hire
     # portfolios, not engineering tenure (run 391 applied to a "Software
     # Developer 2d/3d - Senior" graphics role and an "AI Artist" creator
@@ -289,7 +301,7 @@ class FilterEngine:
         # recruiter statements. They gate only when the title itself corroborates
         # seniority; otherwise the job flows to ranking/suitability scoring, which
         # still down-weights it via experience decay. Unknown data never rejects.
-        is_ai_role = any(term in title for term in DEDICATED_AI_KEYWORDS)
+        is_ai_role = any(term in title for term in DEDICATED_AI_KEYWORDS) or bool(re.search(r"\baiml\b", title))
         is_hybrid_ai = is_ai_role and any(
             term in title for term in HYBRID_AI_TITLE_MARKERS
         )
@@ -405,6 +417,12 @@ class FilterEngine:
                     f"title contains disjoint specialization '{hit_disjoint}' (candidate lacks requisite experience; recruiter will reject)",
                 )
 
+        # Bare Naukri testing titles need the full JD to distinguish software QA from other testing work.
+        ambiguous_qa = (
+            job.platform == "naukri" and title.strip() in _NAUKRI_AMBIGUOUS_QA_TITLES
+            and "qa engineer" in rules.title_must_include_any
+        )
+
         # 2. Mandatory Title Role Matching
         if rules.title_must_include_any:
             title_variants = [title]
@@ -434,7 +452,7 @@ class FilterEngine:
                     title_variants.extend(parts)
 
             matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
-            if not matched_title_term:
+            if not matched_title_term and not ambiguous_qa:
                 return FilterDecision(
                     False,
                     SkipReason.FILTER_TITLE,
@@ -483,7 +501,7 @@ class FilterEngine:
                     "automation", "sdet", "devops", "cloud", "database", "sql",
                 ],
             ) is not None
-            if is_broad_title and not specialized_tech_in_title:
+            if is_broad_title and not specialized_tech_in_title and not ambiguous_qa:
                 # Do NOT reject if description/tags are not loaded (e.g. search cards)
                 # or if the title is explicitly a target software role requested in title_must_include_any
                 has_card_content = bool(job.tags or job.description)
@@ -603,6 +621,16 @@ class FilterEngine:
         """Re-runs description rules against the full JD text."""
         rules = self.rules
         description = " ".join(job.description.lower().split())
+        if (
+            job.platform == "naukri" and job.title.lower().strip() in _NAUKRI_AMBIGUOUS_QA_TITLES
+            and not (
+                _contains_any(description, _SOFTWARE_QA_EVIDENCE)
+                or (_contains_any(description, ("software products",))
+                    and _contains_any(description, ("automated testing scripts",)))
+            )
+        ):
+            return FilterDecision(False, SkipReason.FILTER_DESCRIPTION,
+                                  "Generic testing title lacks software QA evidence in the full JD")
         if not description:
             return FilterDecision(True)
 
