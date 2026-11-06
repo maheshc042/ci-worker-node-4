@@ -32,6 +32,7 @@ from .analyzer import (
     is_spam_or_unpaid,
     parse_post_age_hours,
     post_hash,
+    post_content,
     resolve_recipient_first_name,
 )
 
@@ -56,9 +57,10 @@ _STEALTH_JS = """
 
 
 class LinkedInHunter:
-    def __init__(self, li_at_cookie: str = "", headless: bool = True) -> None:
+    def __init__(self, li_at_cookie: str = "", headless: bool = True, storage_state: dict | None = None) -> None:
         self.li_at_cookie = (li_at_cookie or "").strip()
         self.headless = headless
+        self.storage_state = storage_state
 
     async def _setup_stealth_context(
         self, p: Any, headless: bool | None = None, inject_cookies: bool = True
@@ -101,6 +103,14 @@ class LinkedInHunter:
         except Exception:
             pass
 
+        shared_cookies = [c for c in (self.storage_state or {}).get("cookies", [])
+                          if c.get("domain", "").lstrip(".") in {"linkedin.com", "www.linkedin.com"}]
+        if inject_cookies and any(c.get("name") == "li_at" for c in shared_cookies):
+            # Share the primary login that Easy Apply already uses, instead
+            # of preferring an unrelated stale campaign profile cookie.
+            await context.add_cookies(shared_cookies)
+            log.info("linkedin.shared_primary_session_loaded")
+            return context
         if inject_cookies and self.li_at_cookie:
             # A session saved by login_interactive() is always fresher than the
             # env cookie — injecting a stale li_at would overwrite it and break
@@ -382,6 +392,72 @@ class LinkedInHunter:
             log.warning("linkedin.goto_failed", error=str(second)[:150], url=search_url[:70])
             return False
 
+    async def _copy_post_permalink(self, page: Page, container) -> str:
+        """Use the post's native Copy link control without reading the OS clipboard."""
+        menu = container.locator("button[aria-label^='Open control menu for post']").first
+        if not await menu.count():
+            return ""
+        installed = False
+        try:
+            installed = await page.evaluate("""() => {
+                const clipboard = navigator.clipboard;
+                if (!clipboard) return false;
+                const own = Object.getOwnPropertyDescriptor(clipboard, 'writeText');
+                const command = document.execCommand;
+                window.__jobAgentCopiedLink = '';
+                Object.defineProperty(clipboard, 'writeText', {configurable:true, value: async value => {window.__jobAgentCopiedLink = String(value);}});
+                // Some LinkedIn layouts use a temporary selected textarea and
+                // execCommand rather than the asynchronous clipboard API.
+                document.execCommand = function(name, ...args) {
+                    if (String(name).toLowerCase() === 'copy') {
+                        const active = document.activeElement;
+                        const selected = active && typeof active.value === 'string'
+                            ? active.value.slice(active.selectionStart || 0, active.selectionEnd ?? active.value.length)
+                            : String(window.getSelection() || '');
+                        window.__jobAgentCopiedLink = selected;
+                        return true;
+                    }
+                    return command.call(this, name, ...args);
+                };
+                window.__jobAgentRestoreClipboard = () => {
+                    document.execCommand = command;
+                    if (own) Object.defineProperty(clipboard, 'writeText', own);
+                    else delete clipboard.writeText;
+                };
+                return true;
+            }""")
+            if not installed:
+                return ""
+            await menu.click(timeout=3000)
+            copy = page.get_by_text("Copy link to post", exact=True)
+            await copy.wait_for(state="visible", timeout=3000)
+            if await copy.count() != 1:
+                log.debug("linkedin.post_permalink_ambiguous", count=await copy.count())
+                return ""
+            await copy.click(timeout=3000)
+            await page.wait_for_function("() => !!window.__jobAgentCopiedLink", timeout=2000)
+            value = await page.evaluate("() => window.__jobAgentCopiedLink")
+            from urllib.parse import urlsplit
+            source = urlsplit(value)
+            if source.scheme == "https" and source.hostname == "lnkd.in" and source.path.startswith("/p/"):
+                # The current native copy menu emits a LinkedIn short link.
+                # Resolve its real redirect; never invent an activity URN.
+                response = await page.context.request.get(value, timeout=15000)
+                value = response.url
+                source = urlsplit(value)
+            if source.hostname in {"www.linkedin.com", "linkedin.com"} and source.path.startswith(("/posts/", "/feed/update/")):
+                return source._replace(query="", fragment="").geturl()
+        except Exception as exc:
+            log.debug("linkedin.post_permalink_unavailable", error=str(exc)[:100])
+        finally:
+            try:
+                if installed:
+                    await page.evaluate("() => {window.__jobAgentRestoreClipboard?.(); delete window.__jobAgentCopiedLink; delete window.__jobAgentRestoreClipboard;}")
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+        return ""
+
     async def hunt_for_jobs(
         self, search_url: str, required_skills: set[str] | frozenset[str] | None = None,
         search_label: str = "", seen: dict[str, list[str]] | None = None,
@@ -442,6 +518,13 @@ class LinkedInHunter:
                     await page.locator("form.login__form").count() > 0 or
                     await page.locator("#username").count() > 0
                 )
+                if is_auth_page:
+                    if self.headless and not any(x in page.url.lower() for x in ("checkpoint", "challenge", "security-check")):
+                        try:
+                            await page.wait_for_url("**/search/results/**", timeout=20_000)
+                            is_auth_page = any(x in page.url.lower() for x in ("login", "authwall", "signup", "checkpoint"))
+                        except Exception:
+                            pass
                 if is_auth_page:
                     if not self.headless:
                         log.info("linkedin.manual_login", detail="Waiting 60 seconds for you to log in MANUALLY...")
@@ -555,14 +638,6 @@ class LinkedInHunter:
                         _drop("no_email", text)
                         continue
 
-                    if is_spam_or_unpaid(text):
-                        _drop("spam_or_unpaid", text)
-                        continue
-
-                    if is_abroad_onsite(text):
-                        _drop("abroad_onsite", text)
-                        continue
-
                     author_gated += 1
                     author, headline = await self._extract_author(container)
                     if not author and not headline:
@@ -578,31 +653,43 @@ class LinkedInHunter:
                         log.debug("linkedin.lead.rejected_seeker_poster", headline=headline[:60])
                         continue
 
-                    if IIT_ONLY_REJECT_REGEX.search(text):
+                    hiring_text = post_content(text, headline)
+                    emails = extract_recruiter_emails(hiring_text)
+                    if not emails:
+                        _drop("no_email_in_post_body", text)
+                        continue
+                    if is_spam_or_unpaid(hiring_text):
+                        _drop("spam_or_unpaid", text)
+                        continue
+                    if is_abroad_onsite(hiring_text):
+                        _drop("abroad_onsite", text)
+                        continue
+
+                    if IIT_ONLY_REJECT_REGEX.search(hiring_text):
                         _drop("iit_only", text)
                         continue
 
-                    if ZERO_TECH_REJECT_REGEX.search(text):
+                    if ZERO_TECH_REJECT_REGEX.search(hiring_text):
                         _drop("zero_tech", text)
                         continue
 
-                    if not is_experience_match(text):
+                    if not is_experience_match(hiring_text):
                         _drop("experience", text)
                         continue
 
-                    role = classify_role(text)
+                    role = classify_role(hiring_text)
                     if not role:
                         _drop("role_or_tech", text)
                         continue
 
-                    if not has_profile_skill_overlap(text, required_skills):
+                    if not has_profile_skill_overlap(hiring_text, required_skills):
                         _drop("no_skill_overlap", text)
                         continue
 
                     post_url = ""
                     try:
                         link_loc = container.locator(
-                            "a[href*='urn:li:activity'], a[href*='activity-'], a[href*='/posts/']"
+                            "a[href*='/feed/update/urn:li:'], a[href*='urn:li:activity'], a[href*='activity-'], a[href*='/posts/']"
                         ).first
                         if await link_loc.count():
                             href = await link_loc.get_attribute("href") or ""
@@ -611,13 +698,16 @@ class LinkedInHunter:
                     except Exception:
                         post_url = ""
 
+                    if not post_url:
+                        post_url = await self._copy_post_permalink(page, container)
+
                     fn = resolve_recipient_first_name(author, emails[0] if emails else "")
 
                     results.append({
-                        "text": text, "role": role, "emails": emails,
+                        "text": hiring_text, "source_text": text, "role": role, "emails": emails,
                         "post_url": post_url, "author": author,
                         "headline": headline,
-                        "company": extract_company(text, headline),
+                        "company": extract_company(hiring_text, ""),
                         "first_name": fn,
                         "post_age_hours": parse_post_age_hours(text),
                     })

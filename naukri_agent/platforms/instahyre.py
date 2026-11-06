@@ -30,6 +30,41 @@ from .base import BaseJobPlatform
 
 log = get_logger(__name__)
 
+_APPLIED_CARD_MARKERS = [
+    "button:text-is('Applied')",
+    "span.applied-badge:text-is('Applied')",
+    ".application-status-box .status-label:text-is('Applied')",
+]
+_SKILL_INPUTS = [
+    "#skills-drop-select-job-search-selectized", "#skills-selectized",
+    "input[placeholder*='skills' i]",
+]
+_SKILL_TAGS = (
+    ".selectize-control.skills-drop-select-job-search .selectize-input .item[data-value], "
+    "#job-search-section .selectize-control .selectize-input .item[data-value]"
+)
+
+
+def _ai_tenure_shortfall(description: str, config: AgentConfig | None) -> FilterDecision | None:
+    """Compare an explicit AI-domain tenure requirement with approved AI years."""
+    if config is None:
+        return None
+    required_text = re.split(r"preferred qualifications|nice to have|good to have", description, flags=re.I)[0]
+    requirement = re.search(
+        r"(\d+(?:\.\d+)?)(?:\s*[-–]\s*\d+(?:\.\d+)?|\s*\+)?\s*years?\s+"
+        r"(?:of\s+)?(?:relevant\s+|hands-on\s+)?experience\s+in\s+"
+        r"(generative ai|large language models?|llms?)\b", required_text, re.I,
+    )
+    if not requirement:
+        return None
+    skill = "generative ai" if requirement[2].lower() == "generative ai" else "llm"
+    verified = config.experience.skills.get(skill)
+    minimum = float(requirement[1])
+    if verified is not None and float(verified) < minimum:
+        return FilterDecision(False, SkipReason.FILTER_EXPERIENCE,
+                              f"Requires {minimum:g} years in {skill}; configured experience is {verified:g} years")
+    return None
+
 
 class InstahyrePlatform(BaseJobPlatform):
     def __init__(
@@ -153,11 +188,23 @@ class InstahyrePlatform(BaseJobPlatform):
         Loops until clean (or 3 passes): single-pass clearing leaves fossils
         like the ever-present SDET tag, which then skew every filtered search.
         """
+        # Selectize collapses tags after the first four. Its native select-all
+        # gesture clears hidden tags too; verify the remaining real items.
+        skills_input = await first_visible(self.page, _SKILL_INPUTS, timeout_ms=1000)
+        if skills_input is not None:
+            try:
+                await skills_input.fill("")
+                await skills_input.focus()
+                await skills_input.press("Control+A")
+                await skills_input.press("Backspace")
+                await human_pause(100, 250)
+            except Exception:
+                pass
         remaining = 0
         for _ in range(3):
             try:
                 remove_buttons = await self.page.locator(
-                    "div.selectize-input div.item a.remove, div.selectize-input a.remove"
+                    ", ".join(f"{selector.strip()} a.remove" for selector in _SKILL_TAGS.split(","))
                 ).all()
                 for rem in remove_buttons:
                     try:
@@ -168,7 +215,7 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception:
                 pass
             try:
-                tags = await self.page.locator("div.selectize-input div.item").all_inner_texts()
+                tags = await self.page.locator(_SKILL_TAGS).all_inner_texts()
                 remaining = len([t for t in tags if t.strip()])
             except Exception:
                 remaining = 0
@@ -185,11 +232,7 @@ class InstahyrePlatform(BaseJobPlatform):
             pass
         skills_input = await first_visible(
             self.page,
-            [
-                "#skills-selectized",
-                "input[placeholder*='skills' i]",
-                "div.selectize-input input",
-            ],
+            _SKILL_INPUTS,
             timeout_ms=2500,
         )
         if skills_input is None:
@@ -216,8 +259,16 @@ class InstahyrePlatform(BaseJobPlatform):
         try:
             await exact_option.click(timeout=3000)
         except PlaywrightTimeoutError:
-            log.warning("instahyre.filters.skill_missing", skill=skill)
-            return
+            # The current UI supports free-text skill/title keywords through
+            # an explicit Add option. Select that control, never inject tags.
+            create = self.page.locator(".selectize-dropdown:visible .create").filter(
+                has_text=re.compile(rf"^\s*Add\s+{re.escape(skill)}\s*(?:…|\.\.\.)?\s*$", re.IGNORECASE)
+            )
+            if await create.count() != 1:
+                log.warning("instahyre.filters.skill_missing", skill=skill)
+                return
+            await create.click(timeout=2000)
+            log.info("instahyre.filters.keyword_selected", keyword=skill)
         await human_pause(250, 450)
         if skill.lower() not in await _tags_text():
             log.warning("instahyre.filters.skill_not_applied", skill=skill)
@@ -251,12 +302,7 @@ class InstahyrePlatform(BaseJobPlatform):
         # 2. Fill Skills Input (#skills-selectized) with Node.js (with dot) and Python
         skills_input = await first_visible(
             self.page,
-            [
-                "#skills-selectized",
-                "input[placeholder*='skills' i]",
-                "div.selectize-input input",
-                "input[placeholder*='Java' i]",
-            ],
+            _SKILL_INPUTS,
             timeout_ms=2500,
         )
 
@@ -297,7 +343,7 @@ class InstahyrePlatform(BaseJobPlatform):
 
             async def _tags_text() -> str:
                 try:
-                    tags = await self.page.locator("div.selectize-input div.item").all_inner_texts()
+                    tags = await self.page.locator(_SKILL_TAGS).all_inner_texts()
                     return " ".join(tags).lower()
                 except Exception:
                     return ""
@@ -376,6 +422,9 @@ class InstahyrePlatform(BaseJobPlatform):
                 await human_pause(400, 800)
             except Exception as exc:
                 log.debug("instahyre.filters.exp_select_failed", error=str(exc))
+        elif exp_val:
+            log.warning("instahyre.filters.experience_control_missing", requested_years=exp_val,
+                        detail="Search tenure not set; card and detail eligibility checks remain required")
 
         # 4. Click the search submit button. NOTE Sep 2026: Instahyre
         # renamed it from button#show-results ("Show results") to
@@ -424,7 +473,7 @@ class InstahyrePlatform(BaseJobPlatform):
         # the feed is unfiltered and the plan stage will mass-reject on title
         # (run 360: 117 scraped, 0 eligible). Loud warning, not silent drift.
         try:
-            active_tags = await self.page.locator("div.selectize-input div.item").all_inner_texts()
+            active_tags = await self.page.locator(_SKILL_TAGS).all_inner_texts()
             active_tags = [t.strip() for t in active_tags if t.strip()]
         except Exception:
             active_tags = []
@@ -556,7 +605,7 @@ class InstahyrePlatform(BaseJobPlatform):
                 break
             try:
                 raw_name = ""
-                name_loc = card.locator("div.employer-job-name div.company-name").first
+                name_loc = card.locator("div.employer-job-name .company-name").first
                 try:
                     if await name_loc.count() > 0:
                         raw_name = (await name_loc.inner_text(timeout=2000)).strip()
@@ -593,7 +642,7 @@ class InstahyrePlatform(BaseJobPlatform):
                         tags.append(txt)
 
                 location = ""
-                loc_node = card.locator("div.employer-locations span").first
+                loc_node = card.locator(".employer-chips-location, div.employer-locations span").first
                 if await loc_node.count() > 0:
                     location = (await safe_text(loc_node)).strip()
 
@@ -615,20 +664,28 @@ class InstahyrePlatform(BaseJobPlatform):
                             try { s = window.angular.element(el).scope(); } catch (e) { return ''; }
                             for (let depth = 0; depth < 6 && s; depth++) {
                                 const o = s.opp || s.selectedOpp || s.opportunity || null;
-                                const v = o && (o.id || o.opportunity_id || o.job_id || o._id || o.opp_id || o.opportunityId);
+                                const v = o && (o.job?.id || o.id || o.opportunity_id || o.job_id || o._id || o.opp_id || o.opportunityId);
                                 if (v) return String(v);
                                 s = s.$parent;
                             }
                             return '';
                         } catch (e) { return ''; }
                     }""") or "").strip()
-                    if opp_id:
-                        self._opp_ids_resolved = getattr(self, "_opp_ids_resolved", 0) + 1
                 except Exception as exc:
                     log.debug("instahyre.fetch.opp_id_failed", error=str(exc))
-                job_id = f"instahyre-{opp_id}" if opp_id else f"instahyre-{Job.stable_id(url, title, company)}"
+                if not opp_id:
+                    native = card.locator("ul[id^='job-skills-']").first
+                    native_id = (await native.get_attribute("id") or "") if await native.count() else ""
+                    match_id = re.fullmatch(r"job-skills-(\d+)", native_id)
+                    if match_id:
+                        opp_id = match_id[1]
+                if opp_id:
+                    self._opp_ids_resolved = getattr(self, "_opp_ids_resolved", 0) + 1
+                legacy_id = f"instahyre-{Job.stable_id(url, title, company)}"
+                job_id = f"instahyre-{opp_id}" if opp_id else legacy_id
 
-                if job_id in exclude_job_ids or job_id in seen_ids:
+                # Preserve dedupe against runs that stored the old title hash.
+                if job_id in exclude_job_ids or legacy_id in exclude_job_ids or job_id in seen_ids:
                     continue
 
                 seen_ids.add(job_id)
@@ -902,6 +959,67 @@ class InstahyrePlatform(BaseJobPlatform):
         except Exception:
             pass
 
+    async def _find_target_card(self, job: Job, page: Page | None = None):
+        page = page if page is not None else self.page
+        expected = " ".join(f"{job.company} - {job.title}".split())
+        name = page.locator("div.employer-job-name .company-name").filter(
+            has_text=re.compile(rf"^\s*{re.escape(expected)}\s*$", re.IGNORECASE)
+        )
+        titled = page.locator(f"div.employer-job-name[title={json.dumps(expected, ensure_ascii=False)}]")
+        rows = page.locator("div.employer-row").filter(has=name.or_(titled))
+        numeric_id = job.job_id.removeprefix("instahyre-")
+        if numeric_id.isdecimal():
+            rows = rows.filter(has=page.locator(f"ul[id='job-skills-{numeric_id}']"))
+        return rows if await rows.count() == 1 else None
+
+    async def _verify_target_applied(self, job: Job) -> bool:
+        """Read a fresh, company-filtered Applied feed without changing search.
+
+        Search cards can disappear after submitting. Neither disappearance,
+        the global applied count nor an employer popup establishes success.
+        """
+        card = await self._find_target_card(job)
+        if card is not None and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=1200):
+            return True
+        verification = await self.page.context.new_page()
+        try:
+            await verification.goto("https://www.instahyre.com/candidate/opportunities/?matching=true",
+                                    wait_until="domcontentloaded", timeout=25000)
+            tab = verification.locator(".interest_filters .tab").filter(
+                has_text=re.compile(r"^\s*Applied jobs\s*\d*\s*$")
+            )
+            await tab.wait_for(state="visible", timeout=8000)
+            await tab.click(timeout=4000)
+            company_input = verification.locator("#companies-selectized")
+            await company_input.fill("", timeout=4000)
+            await company_input.press_sequentially(job.company, delay=30)
+            option = verification.locator(".selectize-dropdown:visible [data-selectable]").filter(
+                has_text=re.compile(rf"^\s*{re.escape(job.company)}\s*(?:\(\d+\))?\s*$", re.I)
+            )
+            await option.wait_for(state="visible", timeout=5000)
+            if await option.count() != 1:
+                return False
+            await option.click(timeout=4000)
+            expected = " ".join(f"{job.company} - {job.title}".split())
+            await verification.locator(
+                f"div.employer-job-name[title={json.dumps(expected, ensure_ascii=False)}]"
+            ).first.wait_for(state="visible", timeout=8000)
+            selected = verification.locator(".interest_filters .tab.selected").filter(
+                has_text=re.compile(r"^\s*Applied jobs\b")
+            )
+            if await selected.count() != 1:
+                return False
+            card = await self._find_target_card(job, verification)
+            confirmed = card is not None and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=4000) is not None
+            await self.artifacts.dump_html(verification, "instahyre-applied-feed-check", "verification", job.job_id)
+            return confirmed
+        except Exception as exc:
+            log.warning("instahyre.verify.target_lookup_failed", job_id=job.job_id, error=str(exc)[:160])
+            await self.artifacts.capture_failure(verification, "instahyre-receipt-lookup-failed", "verification", job.job_id)
+            return False
+        finally:
+            await verification.close()
+
     async def apply_to_job(
         self,
         job: Job,
@@ -965,13 +1083,7 @@ class InstahyrePlatform(BaseJobPlatform):
                         log.warning("instahyre.apply.page_switch_unconfirmed", from_page=current_page_num, to_page=target_page)
 
             async def _find_card_on_current_view():
-                expected = " ".join(f"{job.company} - {job.title}".split())
-                name = self.page.locator("div.employer-job-name div.company-name").filter(
-                    has_text=re.compile(rf"^\s*{re.escape(expected)}\s*$", re.IGNORECASE)
-                )
-                titled = self.page.locator(f"div.employer-job-name[title={json.dumps(expected, ensure_ascii=False)}]")
-                rows = self.page.locator("div.employer-row").filter(has=name.or_(titled))
-                return rows if await rows.count() == 1 else None
+                return await self._find_target_card(job)
 
             card = await _find_card_on_current_view()
 
@@ -1010,7 +1122,7 @@ class InstahyrePlatform(BaseJobPlatform):
                     detail=f"Job card for {job.company} - {job.title} no longer on feed",
                 )
 
-            applied_markers = ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"]
+            applied_markers = _APPLIED_CARD_MARKERS
             if await first_visible(card, applied_markers, timeout_ms=600) is not None:
                 return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
 
@@ -1057,6 +1169,11 @@ class InstahyrePlatform(BaseJobPlatform):
         if minimum is not None:
             job.min_experience, job.max_experience = minimum, maximum
             job.experience_imputed = False
+        ai_gap = _ai_tenure_shortfall(full_desc, self.config)
+        if ai_gap is not None:
+            await self._ensure_modal_closed()
+            _record_timing()
+            return ApplyOutcome(ApplicationStatus.SKIPPED, reason=ai_gap.reason, detail=ai_gap.detail)
         decision = pre_submit_check(job)
         if not decision.passed:
             await self._ensure_modal_closed()
@@ -1103,7 +1220,7 @@ class InstahyrePlatform(BaseJobPlatform):
             except Exception as exc:
                 log.debug("instahyre.html_dump_failed", error=str(exc))
 
-            if await first_visible(card, ["button:text-is('Applied')", "span.applied-badge:text-is('Applied')"]):
+            if await first_visible(card, _APPLIED_CARD_MARKERS):
                 _record_timing()
                 return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
             _record_timing()
@@ -1132,22 +1249,24 @@ class InstahyrePlatform(BaseJobPlatform):
         except Exception as exc:
             log.warning("instahyre.apply.click_uncertain", job_id=job.job_id, error=str(exc)[:120])
 
-        target_card = await _find_card_on_current_view()
-        confirmation = (
-            await first_visible(target_card, applied_markers, timeout_ms=8000)
-            if target_card is not None else None
-        )
         await self._ensure_modal_closed()
         await self._dismiss_modals()
+        try:
+            confirmed = await self._verify_target_applied(job)
+        except Exception as exc:
+            log.warning("instahyre.apply.verification_failed", job_id=job.job_id, error=str(exc)[:160])
+            confirmed = False
         _record_timing()
-        if confirmation is not None:
+        if confirmed:
             return ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 confirmation_type="dom_marker",
-                confirmation_evidence="Instahyre target card shows Applied",
+                confirmation_evidence=f"Instahyre exact card shows Applied: {job.company} - {job.title}",
             )
+        shot = await self.artifacts.capture_failure(self.page, "instahyre-submit-unconfirmed", profile_name, job.job_id)
         return ApplyOutcome(
             ApplicationStatus.FAILED,
             reason=SkipReason.SUBMISSION_UNCONFIRMED,
             detail="Submission clicked but no Instahyre success confirmation was observed",
+            screenshot_path=shot,
         )

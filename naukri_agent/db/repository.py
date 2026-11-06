@@ -727,9 +727,16 @@ class Repository:
                 # near-identical to SequenceMatcher and would falsely block.
                 if _RATING_GARBAGE.fullmatch(j_company) or _RATING_GARBAGE.fullmatch(c_company):
                     continue
-                comp_ratio = SequenceMatcher(None, j_company, c_company).ratio()
+                company_matcher = SequenceMatcher(None, j_company, c_company)
+                # Both are documented upper bounds on ratio(), so this
+                # eliminates impossible matches without changing decisions.
+                if company_matcher.real_quick_ratio() <= 0.85 or company_matcher.quick_ratio() <= 0.85:
+                    continue
+                comp_ratio = company_matcher.ratio()
+                if comp_ratio <= 0.85:
+                    continue
                 title_ratio = SequenceMatcher(None, j_title, c_title).ratio()
-                if comp_ratio > 0.85 and title_ratio > 0.8:
+                if title_ratio > 0.8:
                     return True
             return False
 
@@ -1159,11 +1166,9 @@ class Repository:
         """
         Queue an unknown question for human review.
 
-        Before inserting a new row, fuzzy-match against already-resolved
-        questions across ALL profiles (answers are candidate facts — same
-        human). If similarity > 0.85, auto-resolve using the existing answer
-        instead of creating a new pending review item — this is the
-        self-learning loop.
+        Reuse an already-resolved question across profiles only when its
+        normalized wording is identical. Similar wording cannot establish
+        that a skill, location or eligibility fact is the same.
         """
         q_norm = question.strip()[:1000]
 
@@ -1190,6 +1195,7 @@ class Repository:
               FROM question_review
              WHERE resolved = TRUE
                AND answer IS NOT NULL
+               AND COALESCE(resolved_by, 'human') NOT IN ('auto-fuzzy', 'auto-cascade')
             """
         )
         best_ratio = 0.0
@@ -1201,6 +1207,8 @@ class Repository:
         numbers = re.findall(r"\d+(?:\.\d+)?", q_lower)
         for row in resolved_rows:
             other_question = (row["question"] or "").lower()
+            if ' '.join(other_question.split()) != ' '.join(q_lower.split()):
+                continue
             if re.findall(r"\d+(?:\.\d+)?", other_question) != numbers:
                 continue
             ratio = SequenceMatcher(None, q_lower, other_question, autojunk=False).ratio()
@@ -1412,6 +1420,8 @@ class Repository:
         cascaded = 0
         q_lower = question.lower()
         for pending in unresolved:
+            if ' '.join((pending["question"] or "").lower().split()) != ' '.join(q_lower.split()):
+                continue
             ratio = SequenceMatcher(
                 None, q_lower, (pending["question"] or "").lower(), autojunk=False
             ).ratio()

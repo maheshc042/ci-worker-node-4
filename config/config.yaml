@@ -214,6 +214,13 @@ answers:
   upload resume: "I'll do it later"
 
   # Contact & Links
+  first name: "Mahesh"
+  middle name: ""
+  last name: "Chitakoti"
+  full name: "Mahesh Chitakoti"
+  "re:first\\s*name": "Mahesh"
+  "re:middle\\s*name": ""
+  "re:last\\s*name|surname": "Chitakoti"
   phone: "9481777227"
   mobile: "9481777227"
   contact number: "9481777227"
@@ -461,6 +468,11 @@ answers:
   "re:fresher|recent graduate": "No"
   "re:database schemas|designed database": "Yes"
   "re:diversity|inclusive teams|career break": "No"
+  "re:background check|undergo.*background": "Yes"
+  "re:model evaluation|optimization.*tuning|performance tuning": "2"
+  "re:applied ai": "2"
+  "re:conversational ai": "2"
+  "re:voice ai": "1"
 
   # Technical MCQs
   "re:concurrency model.*strictly i/o-bound": "Asynchronous programming utilizing the Asyncio library."

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import re
 import socket
 import time
 from pathlib import Path
@@ -103,29 +104,21 @@ def _configured_resume_fallback(want_ai: bool, resume_dir: Path) -> Path:
         is_ai = any(k in (p.name or "").lower() for k in ["ai", "python", "ml", "llm"])
         if is_ai == want_ai:
             return resume_dir / Path(p.resume_file).name
-    if profiles:
-        return resume_dir / Path(profiles[0].resume_file).name
     return resume_dir
 
 
 def _get_resume_path(role: str, resume_dir: Path) -> Path:
-    """Find appropriate resume path for the classified role (glob first, config fallback)."""
-    if "AI" in role or "Python" in role or "ML" in role:
-        candidates = list(resume_dir.glob("*2026.pdf")) + list(resume_dir.glob("*AI*.pdf")) + list(resume_dir.glob("*Python*.pdf"))
-        if candidates:
-            return candidates[0]
-        return _configured_resume_fallback(want_ai=True, resume_dir=resume_dir)
-    else:
-        candidates = list(resume_dir.glob("*2026_1_*.pdf")) + list(resume_dir.glob("*FullStack*.pdf")) + list(resume_dir.glob("*Full_Stack*.pdf"))
-        if candidates:
-            return candidates[0]
-        return _configured_resume_fallback(want_ai=False, resume_dir=resume_dir)
+    """Use the configured track document rather than an arbitrary glob match."""
+    want_ai = bool(re.search(r"\b(ai|python|ml)\b", role, re.I))
+    return _configured_resume_fallback(want_ai=want_ai, resume_dir=resume_dir)
 
 
 async def run_campaign(
     daily_email_limit: int = 20,
     headed: bool = False,
     dry_run: bool = False,
+    max_emails_this_run: int | None = None,
+    hunt_budget_minutes: float = 12.0,
 ) -> int:
     settings = get_settings()
     config = AgentConfig.load()
@@ -162,7 +155,6 @@ async def run_campaign(
 
     headless = not headed if headed else (config.browser.headless if settings.headless is None else settings.headless)
     gemini_key = getattr(settings, "gemini_api_key", "") or os.getenv("GEMINI_API_KEY", "")
-    hunter = LinkedInHunter(li_at_cookie=li_cookie, headless=headless)
     mailer = ColdEmailer(sender_email=gmail_user, app_password=gmail_pass, gemini_api_key=gemini_key)
     if not dry_run and not mailer.verify_credentials():
         # verify_credentials is False on BOTH bad password and dead network
@@ -189,6 +181,8 @@ async def run_campaign(
     # re-emailed once per search (run 291 sent 4 attempts to one address).
     attempted_this_run: set[str] = set()
     repo = await Repository.create()
+    shared_session = await repo.load_session(settings.account("primary").session_key)
+    hunter = LinkedInHunter(li_at_cookie=li_cookie, headless=headless, storage_state=shared_session)
 
     resume_dir = settings.resume_dir
     emails_sent_today = 0
@@ -198,6 +192,8 @@ async def run_campaign(
     # sent today (recorded in contacted_recruiters) from the configured limit.
     already_sent_today = await repo.count_contacted_today()
     effective_limit = max(0, daily_email_limit - already_sent_today)
+    if max_emails_this_run is not None:
+        effective_limit = min(effective_limit, max(0, max_emails_this_run))
     if effective_limit == 0 and not dry_run:
         log.info(
             "linkedin.daily_limit_already_reached",
@@ -224,10 +220,15 @@ async def run_campaign(
             remaining_today=effective_limit,
         )
 
+    if max_emails_this_run is not None:
+        effective_limit = min(effective_limit, max(0, max_emails_this_run))
+    if effective_limit == 0:
+        return 0
+
     if dry_run:
         print(f"\n[🔍 DRY RUN MODE] Hunting recruiter posts (limit: {effective_limit} emails preview). No emails will be sent.\n")
 
-    from .analyzer import company_domain_match, lead_is_addressable, overlap_report, prioritize_leads, resolve_recipient_first_name
+    from .analyzer import company_domain_match, lead_is_addressable, overlap_report, prioritize_leads, resolve_recipient_first_name, campaign_profile_mismatch, extract_recruiter_emails, advertised_role
 
     # Match-to-profile skill set: union of every enabled profile's mapped
     # skills with real tenure. Posts naming none of these are rejected at
@@ -253,22 +254,25 @@ async def run_campaign(
     # Hunt time ceiling (minutes): deeper per-keyword reads must not turn
     # the campaign unbounded (run-291 class overrun). The current keyword
     # always finishes; new ones stop starting past the ceiling.
-    HUNT_BUDGET_MINUTES = 12.0
+    HUNT_BUDGET_MINUTES = max(0.0, hunt_budget_minutes)
     try:
         sources: list[tuple[str, str, str]] = [
             ("posts", kw, u) for kw, u in zip(SEARCH_KEYWORDS, SEARCH_URLS)
         ]
         hunt_start = time.monotonic()
         for source, keyword, url in sources:
-            if collected and (time.monotonic() - hunt_start) / 60.0 >= HUNT_BUDGET_MINUTES:
+            if (time.monotonic() - hunt_start) / 60.0 >= HUNT_BUDGET_MINUTES:
                 log.info("linkedin.hunt_budget_reached", collected=len(collected))
                 break
             log.info("linkedin.starting_search", source=source, url=url[:60])
             try:
-                posts = await hunter.hunt_for_jobs(
-                    url, required_skills=required_skills,
-                    search_label=keyword, seen=overlap,
+                posts = await asyncio.wait_for(
+                    hunter.hunt_for_jobs(url, required_skills=required_skills, search_label=keyword, seen=overlap),
+                    timeout=max(1.0, HUNT_BUDGET_MINUTES * 60 - (time.monotonic() - hunt_start)),
                 )
+            except TimeoutError:
+                log.info("linkedin.hunt_budget_reached", collected=len(collected))
+                break
             except CookieExpiredError as exc:
                 # Dead LinkedIn session stops HUNTING — but already-collected
                 # leads still send below (Gmail needs no LinkedIn session).
@@ -381,14 +385,29 @@ async def run_campaign(
             post_url = lead["post_url"]
             company = lead["company"]
             first_name = resolve_recipient_first_name(lead.get("first_name", ""), clean_email)
+            mismatch = campaign_profile_mismatch(text, config)
+            if mismatch:
+                log.info("linkedin.lead.profile_mismatch", reason=mismatch, post_url=post_url)
+                continue
+            source = urllib.parse.urlsplit(post_url)
+            if source.hostname not in {"linkedin.com", "www.linkedin.com"} or not source.path.startswith(("/posts/", "/feed/update/")):
+                log.info("linkedin.lead.source_unverified", role=role)
+                continue
+            if clean_email not in extract_recruiter_emails(text):
+                log.warning("linkedin.lead.recipient_not_in_source", post_url=post_url)
+                continue
             resume_path = _get_resume_path(role, resume_dir)
+            opening_title = advertised_role(text, role)
+            if not resume_path.is_file():
+                log.warning("linkedin.lead.resume_missing", role=role)
+                continue
             if await repo.has_emailed(clean_email, within_days=60):
                 log.info("linkedin.already_emailed", email=clean_email)
                 continue
 
             if dry_run:
                 body_preview = mailer._generate_body(
-                    role_name=role, job_description=text,
+                    role_name=opening_title, job_description=text,
                     company_name=company, recipient_name=first_name,
                     angle="application",
                 )
@@ -418,7 +437,7 @@ async def run_campaign(
                 policy.require_mutation("linkedin.outreach.send_email")
                 success = await mailer.send_application_async(
                     target_email=clean_email,
-                    role_name=role,
+                    role_name=opening_title,
                     resume_path=resume_path,
                     job_description=text,
                     company_name=company,

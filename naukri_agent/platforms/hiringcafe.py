@@ -748,6 +748,6 @@ class HiringCafePlatform(BaseJobPlatform):
         return ApplyOutcome(
             status=ApplicationStatus.EXTERNAL,
             reason=SkipReason.EXTERNAL_APPLY,
-            detail="HiringCafe direct company ATS link; forwarded to Sidekick",
+            detail="HiringCafe direct company ATS link validated for external handoff",
             external_url=job.url,
         )

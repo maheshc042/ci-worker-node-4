@@ -559,6 +559,11 @@ class Orchestrator:
                             log.info("platform.paused_dry_run_probe", platform=p_name, reason=pause_reason)
                         elif self.headed:
                             log.warning("platform.paused_attempting_headed_recovery", platform=p_name, reason=pause_reason)
+                        elif self.mode == "manual" and self.only_platform == p_name and "authentication was not confirmed" in pause_reason.lower():
+                            # An explicitly requested single-platform run can
+                            # re-check a repaired login. Normal authentication
+                            # must succeed before the existing resume path.
+                            log.warning("platform.paused_rechecking_auth", platform=p_name)
                         elif _should_retry_paused(
                             await self.repo.platform_pause_age_hours(self.account_key, p_name)
                         ):
@@ -738,6 +743,8 @@ class Orchestrator:
 
                         for profile in platform_profiles:
                             try:
+                                if platform.platform_name == "linkedin":
+                                    platform.answers = await self._build_answer_engine(profile)
                                 await self._run_profile(platform, profile, page, artifacts)
                             except StopRun as stop:
                                 log.warning("platform.stopped_early", platform=platform.platform_name, profile=profile.name, reason=str(stop))

@@ -610,8 +610,8 @@ class GeminiWriter:
             intro_rule = (
                 f"4. Intro (2 sentences): Say you came across their LinkedIn post regarding "
                 f"the {role_name} opening, ask if they would be open to referring you "
-                f"to the hiring team, stating you have {who.experience_label} of experience "
-                f"{intro_specialty}. Name ONLY overlap between their requirements "
+                f"to the hiring team, stating you have {who.experience_label} of total software engineering experience. "
+                f"Separately describe relevant work {intro_specialty} without assigning total tenure to it. Name ONLY overlap between their requirements "
                 f"and YOUR verified inventory above — never present a requirement "
                 f"(e.g. 'LLM evals', 'Go') as your own history."
             )
@@ -650,7 +650,8 @@ class GeminiWriter:
 
             intro_rule = (
                 f"4. Intro (2 sentences): State you are reaching out regarding the {role_name} opening you posted. "
-                f"State that over the past {who.experience_label}, you have {intro_specialty}. "
+                f"State {who.experience_label} of total software engineering experience, then separately describe relevant work {intro_specialty}. "
+                "Never imply every listed skill or GenAI specialization spans the entire career. "
                 f"Name ONLY overlap between their requirements and YOUR verified inventory above — "
                 f"never present a requirement (e.g. 'LLM evals', 'Go') as your own history. "
                 f"{extra_role_guidance}"
@@ -666,7 +667,8 @@ class GeminiWriter:
 
 Applicant Background (exact facts, use them):
 - Name: {who.name}
-- Total Experience: {who.experience_label} ({domain_label})
+- Total Software Engineering Experience: {who.experience_label}
+- Relevant Focus: {domain_label}
 - Current CTC: {who.current_ctc}
 - Expected CTC: {who.expected_ctc}
 - Notice Period: {who.notice_label}
@@ -692,7 +694,7 @@ RULES FOR THE EMAIL:
    "I hope this email finds you well" or any pleasantry.
 {intro_rule}
 5. Candidate Snapshot (clean, single-line bullets for rapid HR scan):
-   • Total Experience: {who.experience_label} ({domain_label})
+   • Total Experience: {who.experience_label} (Software Engineering)
    • Primary Stack: (verbatim 4-6 core tools from their requirements, e.g. {stack_example})
    • Current Location: {who.location}
    • Notice Period: {who.notice_label}

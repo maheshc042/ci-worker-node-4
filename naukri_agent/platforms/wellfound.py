@@ -872,6 +872,9 @@ class WellfoundPlatform(BaseJobPlatform):
                 confirmation_evidence="Wellfound target listing already shows Applied",
             )
 
+        if pre_submit_check is None:
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="Wellfound detail eligibility check is required")
+
         if not await self._read_description(job):
             shot = await self.artifacts.capture_failure(self.page, "wellfound-description-missing", profile_name, job.job_id)
             return ApplyOutcome(
@@ -925,11 +928,9 @@ class WellfoundPlatform(BaseJobPlatform):
                     detail=f"JD mentions none of the profile stack ({', '.join(must_skills[:6])})",
                 )
 
-
-        if pre_submit_check:
-            decision = pre_submit_check(job)
-            if not decision.passed:
-                return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
+        decision = pre_submit_check(job)
+        if not decision.passed:
+            return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
 
         apply_btn = await first_visible(
             self.page,
@@ -996,21 +997,18 @@ class WellfoundPlatform(BaseJobPlatform):
                 exp_m = re.search(r"experience\s*[:\n]\s*(\d+(?:\.\d+)?)\s*\+?\s*years?", modal_text, re.IGNORECASE)
                 if exp_m:
                     req_exp = float(exp_m.group(1))
-                    if req_exp > 3.5:
-                        log.info("wellfound.apply.modal_experience_mismatch", req_years=req_exp, candidate_max=3.5)
-                        close_btn = await first_visible(self.page, ["button[aria-label='Close']", "button:has-text('✕')"], timeout_ms=1000)
-                        if close_btn:
-                            try:
-                                await close_btn.click()
-                            except Exception:
-                                pass
-                        return ApplyOutcome(
-                            ApplicationStatus.SKIPPED,
-                            reason=SkipReason.FILTER_EXPERIENCE,
-                            detail=f"Requires {req_exp}+ YOE (candidate has 2.5 YOE)",
-                        )
-        except Exception:
-            pass
+                    if job.min_experience is None or job.experience_imputed or req_exp > job.min_experience:
+                        if job.experience_imputed or (job.max_experience is not None and req_exp > job.max_experience):
+                            job.max_experience = None
+                        job.min_experience = req_exp
+                        job.experience_imputed = False
+                        decision = pre_submit_check(job)
+                        if not decision.passed:
+                            return ApplyOutcome(ApplicationStatus.SKIPPED, reason=decision.reason, detail=decision.detail)
+        except Exception as exc:
+            log.warning("wellfound.apply.modal_eligibility_unverified", job_id=job.job_id, error=str(exc)[:120])
+            return ApplyOutcome(ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.STUCK_FLOW,
+                                detail="Could not verify the Wellfound dialog requirements")
 
         # Check for Location-gated rejection
         if await first_visible(self.page, ["text=not accepting applications from your", "text=not accepting applications from your location"]):
@@ -1021,18 +1019,17 @@ class WellfoundPlatform(BaseJobPlatform):
         relocate_choice = await first_visible(
             self.page,
             [
-                "label:has-text('I can relocate')",
-                "button:has-text('I can relocate')",
-                "div:has-text('I can relocate')",
+                "label:text-is('I can relocate')",
+                "button:text-is('I can relocate')",
+                "[role='dialog'] :text-is('I can relocate')",
             ],
             timeout_ms=1000,
         )
         if relocate_choice:
-            try:
-                await relocate_choice.click()
-                await human_pause(400, 800)
-            except Exception:
-                pass
+            shot = await self.artifacts.capture_failure(self.page, "wellfound-relocation-review", profile_name, job.job_id)
+            return ApplyOutcome(ApplicationStatus.NEEDS_REVIEW, reason=SkipReason.STUCK_FLOW,
+                                detail="Confirm relocation for this specific Wellfound listing before applying",
+                                screenshot_path=shot)
 
         # Handle Pitch Textarea ("What interests you about working for this company?")
         textarea = await first_visible(
@@ -1101,18 +1098,13 @@ class WellfoundPlatform(BaseJobPlatform):
                 links_line = "\n" + " | ".join(links) if links else ""
                 # Read pitch template from config.yaml candidate section
                 _cand = getattr(self._config, "candidate", None) if self._config is not None else None
-                pitch_body = (getattr(_cand, "wellfound_pitch", "") or "") or (
-                    "• Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations.\n"
-                    "• Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS.\n"
-                    "• Fast Delivery: Comfortable owning features end-to-end in fast-paced startup environments."
-                )
+                pitch_body = (getattr(_cand, "wellfound_pitch", "") or "").strip()
+                approved_note = f"{pitch_body}\n\n" if pitch_body else ""
                 pitch = (
                     f"Hi {company_label} Team,\n\n"
-                    f"I'm applying for the {clean_title} role to help build {company_label}'s product platform.\n\n"
-                    f"Over the past {who.experience_label}, I've specialized in building production backend services and GenAI architectures:\n"
-                    f"{pitch_body}\n\n"
-                    f"I am based in {who.location} and available to join immediately ({who.notice_label}).\n\n"
-                    f"Are you open to a quick 10-minute chat this week to discuss how I can contribute to {company_label}'s product roadmap?\n\n"
+                    f"I'm interested in the {clean_title} role. I'd welcome the opportunity to discuss the team's priorities "
+                    "and share examples from my work that are relevant to the opening.\n\n"
+                    f"{approved_note}"
                     f"Best regards,\n{who.name}{links_line}"
                 )
 

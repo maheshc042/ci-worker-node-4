@@ -1175,6 +1175,9 @@ class AgentConfig(_Model):
             title_must_exclude_any=sorted(forbidden_tech_and_seniority),
             description_must_exclude_any=[
                 "bpo", "commission only", "unpaid", "registration fee", "security deposit",
+                # Explicit mandatory backend / ML requirements from run 707.
+                "using java or kotlin and kafka",
+                "proficient in ml libraries: scikit-learn, tensorflow or pytorch",
                 "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
             ],
             experience=ExperienceRange(min_years=0, max_years=3.5),

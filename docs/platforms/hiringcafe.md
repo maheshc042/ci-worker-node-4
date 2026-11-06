@@ -69,7 +69,7 @@ Inspects candidate anchors on the detail page:
      ApplyOutcome(
          status=ApplicationStatus.EXTERNAL,
          reason=SkipReason.EXTERNAL_APPLY,
-         detail="HiringCafe direct company ATS link; forwarded to Sidekick",
+         detail="HiringCafe direct company ATS link validated for external handoff",
          external_url=job.url,
      )
      ```
@@ -86,6 +86,8 @@ Inspects candidate anchors on the detail page:
 ## Evidence and implementation limits
 
 Headless dry run 700 stopped at the Cloudflare clearance gate. Local checks verified the missing-check failure, detail rejection, accepted ATS route and invalid-board-link rejection. Live discovery and downstream delivery remain unverified.
+
+On 2026-11-06, one read-only headless Chrome navigation to the public listing returned HTTP 403 with the title `Just a moment...`. No challenge was clicked and no job data was available. HiringCafe remains disabled in the checked-in configuration.
 
 The current code attempts bounded Turnstile checkbox interactions. A guide's statement about cooldowns does not establish that this is compatible with the intended manual-challenge policy. Review the policy before extending that behavior. An unavailable feed must not be reported as zero eligible jobs.
 

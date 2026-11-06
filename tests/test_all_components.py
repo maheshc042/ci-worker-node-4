@@ -3529,7 +3529,8 @@ class TestLinkedInVerifySubmit(unittest.IsolatedAsyncioTestCase):
             key = tuple(sels)
             return first_visible_map.get(key)
 
-        job = MagicMock(job_id="li-1")
+        job = MagicMock(job_id="linkedin-1")
+        plat.page.url = "https://www.linkedin.com/jobs/view/1/"
         with patch.object(li_mod, "first_visible", new=AsyncMock(side_effect=fake_first_visible)), \
              patch.object(li_mod, "click_if_present", new=AsyncMock(return_value=False)), \
              patch.object(li_mod, "human_pause", new=AsyncMock()):
@@ -6799,6 +6800,37 @@ class TestWellfoundApplicationEvidence(unittest.TestCase):
 
 
 class TestWellfoundDetailExperience(unittest.IsolatedAsyncioTestCase):
+    async def test_dialog_experience_rechecks_configured_gate_before_submit(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.core.models import ApplicationStatus, FilterDecision, SkipReason
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.platforms import wellfound
+
+        job = Job("wellfound-123", "Python Developer", "Example", "https://wellfound.com/jobs/123-title",
+                  description="Build Python APIs", min_experience=1)
+        platform = object.__new__(wellfound.WellfoundPlatform)
+        platform.page = MagicMock(url=job.url, goto=AsyncMock(), evaluate=AsyncMock(return_value=""))
+        platform.page.locator.return_value.first = MagicMock(count=AsyncMock(return_value=1),
+            inner_text=AsyncMock(return_value="Experience: 3+ years"))
+        platform.policy = RunPolicy(dry_run=False, side_effects_enabled=True)
+        platform._metrics = None
+        platform._application_state = AsyncMock(return_value=("open", None))
+        platform._read_description = AsyncMock(return_value=True)
+        platform._profile_must_skills = MagicMock(return_value=[])
+        apply = MagicMock(click=AsyncMock(), is_enabled=AsyncMock(return_value=True))
+        observed = []
+
+        def check(candidate):
+            observed.append(candidate.min_experience)
+            return FilterDecision(candidate.min_experience <= 2, SkipReason.FILTER_EXPERIENCE, "Configured ceiling is 2")
+
+        with patch.object(wellfound, "first_visible", new=AsyncMock(side_effect=[apply, None])), \
+             patch.object(wellfound, "human_pause", new=AsyncMock()):
+            outcome = await platform.apply_to_job(job, "Example", pre_submit_check=check)
+        self.assertEqual(observed, [1, 3])
+        self.assertEqual(outcome.status, ApplicationStatus.SKIPPED)
+        self.assertEqual(outcome.reason, SkipReason.FILTER_EXPERIENCE)
+
     async def test_stated_tenure_replaces_title_imputation(self):
         from unittest.mock import AsyncMock, MagicMock, patch
         from naukri_agent.platforms import wellfound

@@ -108,6 +108,9 @@ SPAM_OR_UNPAID_REJECT_REGEX = re.compile(
 # location-silent posts pass (fail-open): most recruiter posts name no place.
 ABROAD_ONSITE_REJECT_REGEX = re.compile(
     r"("
+    r"\bremote(?:\s+(?:position|role|job))?\s+in\s+(?:the\s+)?(?:us|usa|united\s+states)\b|"
+    r"\b(?:united\s+states|usa)\s*[-:(]\s*remote\b|"
+    r"\b(?:toronto|vancouver|montreal|ottawa|london|berlin|sydney|singapore|dubai)\b[^\n]{0,60}\b(?:hybrid|on[ -]?site|required\s+\d\s+days)\b|"
     r"\b(?:us\s+citizen|us\s+citizens|green\s+card|h1-?b|security\s+clearance|"
     r"public\s+trust\s+clearance|sc\s+clearance|us\s+person)\b|"
     r"\$\s*\d|\b\d+k\s*(?:\/|per|a|\s)\s*(?:yr|year|annum|month)|"
@@ -224,9 +227,76 @@ def is_experience_match(text: str) -> bool:
     """Returns True if the post targets freshers or 0-3 years experience, rejecting senior roles."""
     if not text:
         return False
-    if EXPERIENCED_REJECT_REGEX.search(text):
+    required = re.split(r"preferred qualifications|nice to have|good to have", text, flags=re.I)[0]
+    if EXPERIENCED_REJECT_REGEX.search(required):
+        return False
+    from ..naukri.parser import extract_jd_experience
+    minimum, _ = extract_jd_experience(required)
+    if minimum is not None and minimum > 3.5:
         return False
     return True
+
+
+def campaign_profile_mismatch(text: str, config) -> str | None:
+    """Final send gate against verified facts, separate from lead discovery."""
+    from ..naukri.parser import extract_jd_experience
+    if is_abroad_onsite(text):
+        return 'location or work-authorization requirement conflicts with India-based profile'
+    if re.search(r"\b(?:i am|i'm|im)\s+(?:actively\s+|currently\s+)?(?:looking for (?:a |an )?job|seeking (?:new )?opportunities|open to (?:work|opportunities))\b", text, re.I):
+        return "first-person job-seeking post, not a hiring invitation"
+    if re.search(r"\b(?:hiring(?: for)?|role|position|opening)\s*[:\-]?\s*(?:an?\s+)?(?:junior\s+|senior\s+)?java\s+(?:backend\s+)?(?:developer|engineer)\b", text, re.I):
+        if float(config.experience.skills.get('java', 0)) == 0:
+            return "Java hiring role conflicts with configured background"
+    required = re.split(r"preferred qualifications|nice to have|good to have", text, flags=re.I)[0]
+    minimum, _ = extract_jd_experience(required)
+    total = config.experience.total_years
+    if minimum is not None and total is not None and minimum > total:
+        return f"requires {minimum:g} years; configured total is {total:g}"
+    skills = config.experience.skills or {}
+    if re.search(r"\b(?:train(?:ing)? (?:and (?:deploy|evaluate) )?(?:machine learning |deep learning )?models|model training and (?:evaluation|retraining))\b", required, re.I):
+        if not any(float(skills.get(skill, 0)) > 0 for skill in ('pytorch', 'tensorflow', 'scikit-learn')):
+            return 'model-training requirement is outside configured application-AI experience'
+    for match in re.finditer(
+        r"(\d+(?:\.\d+)?)(?:\s*[-–]\s*\d+(?:\.\d+)?|\s*\+)?\s*years?\s+"
+        r"(?:of\s+)?(?:relevant\s+|hands-on\s+)?experience\s+(?:in|with|using)\s+([^\n.;,]+)", required, re.I,
+    ):
+        named = match[2].strip().lower()
+        known = [(skill, years) for skill, years in skills.items()
+                 if re.search(rf"(?<!\w){re.escape(skill)}(?!\w)", named, re.I)]
+        specific = [(skill, years) for skill, years in known if skill not in {"software", "development", "engineering", "testing", "automation"}]
+        known = specific or known
+        if not known:
+            return f"unverified required skill tenure: {named[:100]}"
+        # "Python and GenAI" requires both facts; Python tenure must not
+        # conceal a shorter GenAI tenure. Explicit alternatives permit either.
+        available = (max if re.search(r"\bor\b", named) else min)(float(years) for _, years in known)
+        if float(match[1]) > available:
+            return f"required tenure exceeds configured facts: {named[:100]}"
+    for skill, years in skills.items():
+        if float(years) != 0 or len(skill) < 3:
+            continue
+        if re.search(rf"\b(?:mandatory|required|must have|proficient in|expertise in)\s+(?:\w+\s+){{0,2}}{re.escape(skill)}\b", required, re.I):
+            return f"mandatory skill has configured zero: {skill}"
+    return None
+
+
+def post_content(text: str, headline: str) -> str:
+    """Exclude verified poster metadata from the hiring-requirement text."""
+    if headline:
+        index = text.find(headline)
+        if 0 <= index < 600:
+            return text[index + len(headline):].strip()
+    return text
+
+
+def advertised_role(text: str, fallback: str) -> str:
+    """Use an explicit post title; keep the track label if none is stated."""
+    match = re.search(r"(?im)^\s*#?(?:job\s*title|position|role)\s*[:\-]\s*([^\n|]+)", text)
+    if match:
+        value = match[1].strip().strip('*# ')
+        if 3 <= len(value) <= 120:
+            return value
+    return fallback
 
 
 def is_spam_or_unpaid(text: str) -> bool:

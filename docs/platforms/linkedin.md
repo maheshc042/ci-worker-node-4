@@ -1,6 +1,6 @@
 # LinkedIn Platform Playbook
 
-Workflow and implementation reference for the LinkedIn Easy Apply adapter. This guide describes the current workflow and flags verification limits in the implementation in [`naukri_agent/platforms/linkedin.py`](../../naukri_agent/platforms/linkedin.py), [`filters.py`](../../naukri_agent/core/filters.py), and [`answers.py`](../../naukri_agent/core/answers.py).
+Workflow and implementation reference for LinkedIn Easy Apply and recruiter-post email outreach. Reviewed against live runs 713–715 and an SMTP send on 6 November 2026 IST. This guide describes behavior and evidence, not a guarantee for future website layouts.
 
 ---
 
@@ -8,7 +8,8 @@ Workflow and implementation reference for the LinkedIn Easy Apply adapter. This 
 - **Target URL**: `https://www.linkedin.com/feed/`
 - **Session Verification ([`linkedin_signed_in`](../../naukri_agent/platforms/linkedin.py))**:
   - Validates active profile markers: `img.global-nav__me-photo`, `.feed-identity-module`, `button.global-nav__me-menu-trigger`, or verified global nav elements.
-  - Allows up to 15 seconds for initial client-side authentication handshakes.
+  - Observes the initial silent sign-in transition for up to 25 checks. The current navigation link is `/mynetwork`, without a required trailing slash. A temporary login URL alone is not a failed session.
+  - A manual run explicitly selecting LinkedIn can recheck an authentication-only pause after the login is repaired. Successful authentication is still mandatory; challenge and rate-limit pauses are separate.
 - **Perimeter & Checkpoint Policy**:
   - Detects security challenges and checkpoints (`checkpoint`, `challenge`, `security-check`, `uas`, `authwall`).
   - **Headless Mode**: Immediately logs a warning and exits gracefully without hanging the run.
@@ -98,6 +99,8 @@ Iterates through modal steps, executing strict element resolution inside `modal`
   - Matches resume stem corresponding to the track (`want_ai` vs `want_fullstack`).
   - Audits document cards (`div[data-test-document-item]`). If target resume is present and unselected, clicks it.
   - If missing from LinkedIn storage, uploads the exact PDF from the local `resumes/` folder via `input[type='file']`.
+  - Supports the current native PDF radio selector as well as legacy cards. Selects the exact filename and verifies checked state; the AI filename must not prefix-match the Full Stack filename. These radios are document controls, not a question called “PDF”.
+  - Explicit AI/Python roles use the enabled AI profile's résumé even when discovered through the Full Stack search. Unverified selection blocks submission.
 - **Dropdowns (`<select>`)**:
   - Ignores Month/Year option dumps (`_looks_like_option_dump`).
   - Auto-selects India (+91) for phone country codes.
@@ -112,6 +115,8 @@ Iterates through modal steps, executing strict element resolution inside `modal`
   - Answers screening questions.
   - Automatically unchecks company marketing follow checkboxes (*"Follow company"*).
 - **Text, Numeric & Combobox Inputs**:
+  - Full name and unambiguous two-part first/last names come from the configured candidate name. An optional middle name can remain empty. Ambiguous identity fields still require review.
+  - Reconciles existing screening values and preselected radio answers against approved facts; a platform default is not candidate evidence. Each track receives its own answer engine.
   - Discovers detached question labels by traversing nearest preceding sibling headers.
   - **Phone Inputs**: Fills `applicant_phone` with digit validation and sequential typing fallback. Never submits hardcoded fake numbers.
   - **Email Inputs**: Fills `applicant_email`.
@@ -126,7 +131,7 @@ Iterates through modal steps, executing strict element resolution inside `modal`
 If any answer relied on generic tenure inferences (`experience:unlisted_default`, `willingness_affirmative`, etc.):
 - Captures screenshot of the form.
 - Safely closes modal.
-- Returns `NEEDS_REVIEW / UNANSWERED_QUESTION` with question items for orchestrator persistence. Notifications depend on the run settings.
+- Returns `NEEDS_REVIEW / UNANSWERED_QUESTION` with question items for orchestrator persistence. Repository review alerts currently reload the global notification configuration; an in-memory per-run notification override does not consistently suppress them.
 
 ### 4. Stuck Step Recovery
 If the step signature (`inputs:{count}::{form_text}`) remains unchanged for 3 consecutive attempts:
@@ -171,6 +176,8 @@ Before clicking submit, runs DOM validity script across all controls:
    - Inspects `/jobs/view/{job_id}`:
      - `main button:text-is('Applied')`
      - `main span:text-is('Application submitted')`
+     - `main p:text-is('Application submitted')` (observed in the current live layout)
+   - Requires the exact target `/jobs/view/{id}/` URL. If no supported receipt is visible, reopens that exact target and checks again. Never clicks Submit a second time to obtain a receipt.
 3. **Outcome Resolution**:
    - **Confirmed**: Returns `status = APPLIED`, `confirmation_type = "dom_marker"`, `confirmation_evidence = "LinkedIn explicit submission receipt or target listing applied state"`.
    - **Unconfirmed**: Captures inline error feedback, dismisses modal cleanly with Discard confirmation (`_dismiss_modal`), and returns `status = FAILED`, `reason = SkipReason.SUBMISSION_UNCONFIRMED`.
@@ -184,8 +191,31 @@ Before clicking submit, runs DOM validity script across all controls:
 4. **DO NOT use broad unified queries**: Execute sequential, track-specific queries per profile to preserve search relevance.
 5. **DO NOT apply without Easy Apply verification**: If the button says "Apply on company site", route to `EXTERNAL` with the resolved ATS link.
 
+## 7. Recruiter-post email workflow
+
+This is a separate route from Easy Apply. It sends email to an address explicitly published in a recruiter post; it does not send LinkedIn messages or infer email addresses.
+
+1. Check the global mutation setting, Gmail credentials and remaining daily email budget. The per-run limit can only reduce the daily allowance. Restore LinkedIn cookies from the primary account session before falling back to the campaign browser profile.
+2. Search recent hiring posts using the configured keyword list. Enforce the hunt deadline even when zero eligible leads are found. Observe normal login transitions; stop for blocked access or rate limits.
+3. Expand posts, extract the author's metadata, then evaluate the hiring body separately. A recruiter's “Senior” headline does not make the advertised job senior. Reject job-seeking posts, explicit experience conflicts, incompatible stacks and foreign-location restrictions. US-only remote and Toronto hybrid roles are incompatible with this India-based profile; worldwide remote is distinct.
+4. Require a published recipient and a verifiable post permalink. Current layouts can omit a permalink anchor: use the exact post's native More → Copy link to post control, capture only that copy action, and resolve a native `lnkd.in/p/...` redirect to an actual LinkedIn post. Do not invent activity IDs. A missing/ambiguous link blocks sending.
+5. Apply the final candidate-fact gate, normal 60-day recipient deduplication and résumé availability check. An explicit required skill tenure cannot borrow total-career tenure. Combined requirements must satisfy each named mapped skill; explicit alternatives permit either. General arbitrary JD interpretation remains limited.
+6. Use an explicit Position/Role/Job title from the post when available. Keep the classified track for résumé routing. Do not attribute a hiring client from the recruiter's headline employer. If the client is unverified, omit its name.
+7. Generate the pitch with total software engineering experience separate from domain specialties. Attach the configured track PDF. Send once through SMTP, with Date and Message-ID; record the contact after acceptance. The audit harness additionally held the exact draft for inspection before sending; normal unattended campaigns do not have that manual inspection step.
+8. Report SMTP acceptance separately from inbox delivery or recruiter response. A network loss during SMTP DATA can leave delivery uncertain; durable reconciliation for that case is not implemented. Do not describe this as guaranteed delivery.
+
+## 8. Answer-learning boundary
+
+Unlisted quantitative skill tenure stays in review. During run 715, the review queue incorrectly fuzzy-matched Appium to MongoDB. The answer engine blocked submission, but the queue promoted a wrong answer. Queue reuse and human-answer cascade now require identical normalized question wording. Historical fuzzy/cascade resolutions are excluded as reuse sources. The erroneous Appium KB entry was backed up and removed; review #476 is pending again. This does not establish that every historical learned answer has been audited.
+
 ## Verification evidence and limits
 
 Run 688 collected 125 Full Stack and QA listings and 77 AI and Python listings. The planner selected 33 and 22 respectively. Run 695 resolved mapped React and JavaScript tenure and held a testing-project preference for review. Run 698 reached the enabled final Submit application button with submission disabled.
 
-No fresh LinkedIn submission receipt was verified in those probes. The résumé-selection path attempts configured selection or upload, but the final readiness check alone does not prove that the intended file was retained across every dialog variant. Existing values and unknown metadata also need separate interpretation. A title pass does not establish named-skill tenure.
+Runs 713–714 exposed a detached-element scroll failure and the native résumé-radio parser gap. Saved-form replay now verifies the exact AI and Full Stack files with no spurious PDF question.
+
+Run 715 submitted Aditi Consulting Cloud Engineer – L2 Support (`4487717910`) and Oracle Automation Engineer (`4485817160`). Its original verifier reported both unconfirmed because it missed the current paragraph receipt. Read-only reopening confirmed exact “Application submitted” evidence for both; the repaired production verifier returned true for both. Application records and aggregate run counts were reconciled with audit events; original reports remain available. No second submission was made. The run also held Appium, background-check consent and model-evaluation tenure questions instead of guessing.
+
+The email campaign discovered a Python Developer post by Aiswarya V. A final live source check verified its published email, 2+ years requirement, Trivandrum location and salary up to 8 LPA. One reviewed email was accepted by Gmail on 6 November IST, with the AI/Python résumé and a Message-ID. This is live SMTP evidence, not verified inbox placement. See the [audit](../../analysis/linkedin_production_review.md).
+
+Remaining limits include title-based tenure estimates during early planning, incomplete arbitrary mandatory-skill/qualification interpretation, some post-menu variants that still fail closed on missing source links, and feed-oriented “considered” metrics that exclude direct review retries. Both live-submitted jobs used the Full Stack track; the AI form and résumé path were exercised, but the AI job remained blocked by genuine unanswered questions. A title pass does not establish every named skill or an overall 10/10 production result.

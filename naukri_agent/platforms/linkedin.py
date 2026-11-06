@@ -220,7 +220,7 @@ async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
     ):
         return False
     markers = [
-        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork/'])",
+        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
         "img.global-nav__me-photo",
         ".feed-identity-module",
         "button.global-nav__me-menu-trigger",
@@ -270,10 +270,13 @@ class LinkedInPlatform(BaseJobPlatform):
 
         # 1. Handle initial loading screen ("Please wait, we are signing you in to this account...")
         # Give LinkedIn up to 15 seconds to finish its client-side authentication handshake.
-        for _ in range(15):
+        for _ in range(25):
             cur_url = self.page.url.lower()
-            if any(x in cur_url for x in ("login", "uas", "checkpoint", "authwall")):
-                break  # Redirected to login page or challenge
+            if any(x in cur_url for x in ("checkpoint", "challenge", "security-check")):
+                break
+            # Remembered sessions can briefly visit /login or /uas while
+            # LinkedIn silently signs in. Observe that transition without
+            # entering credentials or bypassing a challenge.
             if await linkedin_signed_in(self.page, timeout_ms=1000):
                 log.info("linkedin.auth.session_reused")
                 return True
@@ -1441,10 +1444,11 @@ class LinkedInPlatform(BaseJobPlatform):
             return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn did not expose a verifiable application route")
 
         log.info("linkedin.apply.clicking_button", job_id=job.job_id)
-        await apply_btn.scroll_into_view_if_needed()
+        # Locator.click performs its own scrolling and retries React detach
+        # races. A separate pre-scroll was aborting otherwise valid jobs.
         await human_pause(400, 700)
         try:
-            await apply_btn.click()
+            await apply_btn.click(timeout=6000)
         except Exception:
             try:
                 await apply_btn.click(force=True)
@@ -1579,9 +1583,12 @@ class LinkedInPlatform(BaseJobPlatform):
                 error_el = await first_visible(modal, [".artdeco-inline-feedback--error", "p.artdeco-inline-feedback", "[data-test-form-builder-error]"], timeout_ms=1000)
                 err_txt = (await safe_text(error_el)).strip() if error_el else "Submission unconfirmed; modal remained open"
                 log.warning("linkedin.apply.submit_unconfirmed", job_id=job.job_id, error=err_txt)
+                shot = await self.artifacts.capture_failure(
+                    self.page, "linkedin-submit-unconfirmed", profile_name, job.job_id
+                ) if self.artifacts else None
                 await self._dismiss_modal()
                 _record_timing()
-                return ApplyOutcome(status=ApplicationStatus.FAILED, reason=SkipReason.SUBMISSION_UNCONFIRMED, detail=f"Submission unconfirmed: {err_txt}")
+                return ApplyOutcome(status=ApplicationStatus.FAILED, reason=SkipReason.SUBMISSION_UNCONFIRMED, detail=f"Submission unconfirmed: {err_txt}", screenshot_path=shot)
 
             # Check if modal advanced (inspecting actual input counts and modal body text)
             form_text = (await safe_text(modal)).strip()
@@ -1712,19 +1719,21 @@ class LinkedInPlatform(BaseJobPlatform):
         which case the caller must leave resume selection untouched.
         """
         title_low = (job_title or "").lower()
-        ai_track = any(k in title_low for k in ["ai", "python", "genai", "llm", "data", "machine learning"])
+        ai_track = bool(re.search(r"\b(ai|python|genai|llm|data|machine learning)\b", title_low))
         wanted = (profile_name or "").strip().lower()
         profiles = list(getattr(self.config, "profiles", []) or [])
         primary = next(
             (p for p in profiles if (p.name or "").strip().lower() == wanted and getattr(p, "resume_file", None)),
             None,
         )
-        if ai_track and primary is not None:
-            return self._resume_ref(primary.resume_file)
+        if ai_track:
+            for p in profiles:
+                if p.enabled and p.resume_file and re.search(r"\b(ai|python)\b", p.name, re.I):
+                    return self._resume_ref(p.resume_file)
         if not ai_track:
             # Full-stack/web track: prefer a non-AI profile's resume, else the caller's.
             for p in profiles:
-                if getattr(p, "resume_file", None) and not any(
+                if getattr(p, "enabled", True) and getattr(p, "resume_file", None) and not any(
                     k in (p.name or "").lower() for k in ["ai", "python"]
                 ):
                     return self._resume_ref(p.resume_file)
@@ -1734,6 +1743,21 @@ class LinkedInPlatform(BaseJobPlatform):
         if fallback:
             return self._resume_ref(fallback)
         return "", ""
+
+    @staticmethod
+    def _resume_name_matches(text: str, stem: str) -> bool:
+        # The AI filename is a prefix of the Full Stack filename. Underscore
+        # suffixes must not turn the wrong attachment into a match.
+        return bool(stem and re.search(re.escape(stem) + r"(?![\w])", text, re.I))
+
+    @staticmethod
+    async def _resume_card_selected(card) -> bool:
+        return bool(await card.evaluate("""el => {
+            if (el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true') return true;
+            if ([...el.classList].some(c => c.endsWith('--selected'))) return true;
+            if (el.querySelector('input:checked, [aria-checked="true"]')) return true;
+            return [...el.querySelectorAll('button')].some(b => /^deselect\\b/i.test(b.getAttribute('aria-label') || ''));
+        }"""))
 
     def _ctc_want_lpa(self, label_low: str) -> float | None:
         """Our CTC number for a pay question: current vs expected by label."""
@@ -1750,7 +1774,7 @@ class LinkedInPlatform(BaseJobPlatform):
 
     def _resolve_screening(self, question: ScreeningQuestion) -> ResolvedAnswer | None:
         answer = self.answers.resolve(question)
-        if answer and (
+        if answer is None or (
             answer.matched_pattern.startswith(("experience:unlisted_default", "tenure-compare:inferred:"))
             or answer.matched_pattern in {
                 "experience:default", "experience:total_fallback",
@@ -1774,21 +1798,29 @@ class LinkedInPlatform(BaseJobPlatform):
 
         resume_cards = await modal.locator("div[data-test-document-item], .jobs-document-upload-redesign-card, div.jobs-document-upload-redesign-card__container").all()
         card_selected = False
-        for card in (resume_cards if target_resume_stem else []):
+        native_resumes = modal.locator("input[type='radio'][aria-label$='.pdf' i]")
+        native_target = modal.get_by_role("radio", name=re.compile(rf"^{re.escape(target_resume_stem)}\.pdf$", re.I))
+        if target_resume_stem and await native_target.count() == 1:
+            try:
+                await native_target.check(timeout=3000)
+            except Exception:
+                radio_id = await native_target.get_attribute("id")
+                if radio_id:
+                    await modal.locator(f"label[for='{radio_id}']").click(timeout=3000)
+            card_selected = await native_target.is_checked()
+        for card in (resume_cards if target_resume_stem and not card_selected else []):
             card_text = (await safe_text(card)).lower()
-            aria_label = (await card.get_attribute("aria-label") or "").lower()
-            card_class = (await card.get_attribute("class") or "").lower()
-            is_selected = "selected" in aria_label or "container--selected" in card_class or "deselect" in card_text
+            is_selected = await self._resume_card_selected(card)
 
-            if target_resume_stem.lower() in card_text:
+            if self._resume_name_matches(card_text, target_resume_stem):
                 if not is_selected:
-                    select_btn = card.locator("button[aria-label*='Select' i]").first
+                    select_btn = card.get_by_role("button", name=re.compile(r"^Select\b", re.I)).first
                     if await select_btn.count() > 0:
                         await select_btn.click()
                     else:
                         await card.click()
                     await human_pause(300, 600)
-                card_selected = True
+                card_selected = await self._resume_card_selected(card)
                 break
 
         # Fallback: if no matching card was found/selected, check for file upload input
@@ -1804,6 +1836,20 @@ class LinkedInPlatform(BaseJobPlatform):
                         log.info("linkedin.apply.resume_uploaded_from_disk", file=target_resume_file)
                 except Exception as exc:
                     log.warning("linkedin.apply.resume_upload_failed", error=str(exc))
+
+        # Re-read after selection/upload; clicks and an upload call alone do
+        # not establish that the intended document was retained.
+        refreshed = await modal.locator("div[data-test-document-item], .jobs-document-upload-redesign-card, div.jobs-document-upload-redesign-card__container").all()
+        resume_ui_present = resume_cards or refreshed or await native_resumes.count() or await modal.locator("input[type='file']").count()
+        if resume_ui_present:
+            card_selected = bool(target_resume_stem and await native_target.count() == 1 and await native_target.is_checked())
+            for card in refreshed:
+                if self._resume_name_matches(await safe_text(card), target_resume_stem) and await self._resume_card_selected(card):
+                    card_selected = True
+                    break
+            if not card_selected:
+                self._screening_review.append({"text": f"Verify selected resume: {target_resume_file}", "kind": "resume", "options": []})
+                return
 
         # 2. Dropdowns (<select>) strictly inside modal
         selects = await modal.locator("select").all()
@@ -1941,10 +1987,16 @@ class LinkedInPlatform(BaseJobPlatform):
                 if not await rg.is_visible():
                     continue
 
-                # Check if already answered
-                already_checked = await rg.locator("input[type='radio']:checked, div[role='radio'][aria-checked='true']").count() > 0
-                if already_checked:
+                # Document-selection radios are handled and verified above;
+                # their PDF badge is not a screening question.
+                if (
+                    await rg.locator("input[type='radio'][aria-label$='.pdf' i]").count()
+                    or await rg.locator("div[data-test-document-item], .jobs-document-upload-redesign-card, div.jobs-document-upload-redesign-card__container").count()
+                ):
                     continue
+
+                # Check if already answered
+                # A preselected option is not a verified candidate fact.
 
                 q_text = ""
                 legend_el = rg.locator("legend").first
@@ -1964,6 +2016,9 @@ class LinkedInPlatform(BaseJobPlatform):
                     head_el = rg.locator("[data-test-form-builder-radio-button-form-component__title], p, span, h3, h4").first
                     if await head_el.count() > 0:
                         q_text = (await safe_text(head_el)).strip()
+
+                if q_text.strip().upper() in {"PDF", "DOC", "DOCX", "RESUME", "CV"}:
+                    continue
 
                 options = native_radios or await rg.locator("[role='radio']").all()
                 if native_radios:
@@ -2174,7 +2229,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     if not target_email:
                         log.warning("linkedin.apply.missing_applicant_email")
                         continue
-                    if not val or err_msg or ("@" not in val):
+                    if val.strip().casefold() != target_email.casefold() or err_msg:
                         await inp.scroll_into_view_if_needed()
                         await inp.click()
                         await inp.fill("")
@@ -2207,15 +2262,23 @@ class LinkedInPlatform(BaseJobPlatform):
                 if not label and not is_phone_field and not is_email_field:
                     continue
 
-                # Skip if already validly filled (never skip if an error is present or if numeric field has decimals/letters)
-                if val and not err_msg:
-                    if is_numeric:
-                        # Valid whole integer between 0 and 99
-                        if val.isdigit() and 0 <= int(val) <= 99:
-                            continue
-                        # If val contains decimals or letters (e.g. "2.5" or "2 years"), do NOT skip — fix it below
-                    else:
-                        continue
+                identity_label = re.sub(r"[^a-z ]", "", label_low).strip()
+                name_parts = (self.config.applicant_name or "").split()
+                identity_value = None
+                if identity_label in {"full name", "name"}:
+                    identity_value = self.config.applicant_name
+                elif len(name_parts) == 2 and identity_label in {"first name", "firstname", "given name"}:
+                    identity_value = name_parts[0]
+                elif len(name_parts) == 2 and identity_label in {"last name", "lastname", "surname", "family name"}:
+                    identity_value = name_parts[1]
+                elif identity_label == "middle name" and await inp.get_attribute("required") is None and await inp.get_attribute("aria-required") != "true":
+                    identity_value = ""
+                if identity_value is not None:
+                    await inp.fill(identity_value)
+                    continue
+
+                # Reconcile screening values with approved answers even when
+                # LinkedIn prefilled them. A valid-looking number is not proof.
 
                 ans = ""
                 if is_numeric:
@@ -2365,6 +2428,10 @@ class LinkedInPlatform(BaseJobPlatform):
     async def _verify_submit(self, modal, job) -> bool:
         """Require an explicit submission message or the target job's status."""
         try:
+            job_id = job.job_id.removeprefix("linkedin-")
+            current = urllib.parse.urlsplit(self.page.url)
+            if not job_id.isdecimal() or current.hostname != "www.linkedin.com" or current.path.rstrip("/") != f"/jobs/view/{job_id}":
+                return False
             confirmation = await first_visible(
                 self.page,
                 [
@@ -2383,11 +2450,19 @@ class LinkedInPlatform(BaseJobPlatform):
             job_id = job.job_id.removeprefix("linkedin-")
             current = urllib.parse.urlsplit(self.page.url)
             if current.hostname == "www.linkedin.com" and current.path.rstrip("/") == f"/jobs/view/{job_id}":
-                return await first_visible(
+                markers = ["main button:text-is('Applied')", "main span:text-is('Application submitted')", "main p:text-is('Application submitted')"]
+                if await first_visible(
                     self.page,
-                    ["main button:text-is('Applied')", "main span:text-is('Application submitted')"],
+                    markers,
                     timeout_ms=1500,
-                ) is not None
+                ) is not None:
+                    return True
+                # A newly submitted SPA can lag behind the receipt. Reopen
+                # only the exact target; never click Submit a second time.
+                await self.page.goto(f"https://www.linkedin.com/jobs/view/{job_id}/", wait_until="domcontentloaded", timeout=25000)
+                reopened = urllib.parse.urlsplit(self.page.url)
+                if reopened.hostname == "www.linkedin.com" and reopened.path.rstrip("/") == f"/jobs/view/{job_id}":
+                    return await first_visible(self.page, markers, timeout_ms=6000) is not None
         except Exception as exc:
             log.debug("linkedin.apply.verify_submit_failed", error=str(exc)[:120])
         return False

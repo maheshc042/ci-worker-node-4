@@ -49,6 +49,8 @@ The [answer engine](../../naukri_agent/core/answers.py) includes special intent 
 
 Quantitative tenure questions require configured facts; unlisted skill tenure goes to review. Numeric contact details cannot answer tenure questions, and a generic testing answer cannot override a named skill's configured zero. A configured zero for a known skill is different from inventing zero for an unlisted skill. Boolean skill adjacency and generic willingness handlers remain separate policies; they do not establish years of experience.
 
+Review-answer reuse and human-answer cascades require identical normalized question wording. Similar sentences naming different skills, cities or requirements must not share answers. Historical fuzzy/cascade resolutions are not trusted as new reuse sources; this does not constitute a full audit of the historical KB.
+
 The Cutshort Messages sweep examines fresh Pending and inbox threads. Its current code does not restrict every thread to an eligible job applied by this agent. Read that platform's limitations before enabling the sweep.
 
 ## Verification and maintenance
@@ -63,12 +65,14 @@ The Cutshort Messages sweep examines fresh Pending and inbox threads. Its curren
 
 | Platform | Evidence from this chat | Remaining limit |
 | --- | --- | --- |
-| Cutshort | Runs 682–684 confirmed an application and questionnaire receipts | Messages eligibility ownership and shared answer fallback policy need further enforcement |
-| LinkedIn | Run 688 completed discovery. Run 695 held a custom question. Run 698 reached final Submit under dry run | A fresh live submission receipt is unverified |
-| Instahyre | Run 699 completed discovery. Run 701 reached native Apply under dry run. Saved-page replay scoped the receipt to the job | A fresh live submission receipt is unverified |
-| HiringCafe | Run 700 stopped at clearance. Local handoff checks passed | Live discovery and downstream delivery remain unverified |
-| Naukri | Runs 702–703 audited; read-only run 704 found persisted Applied markers for all 13 reported applications | Current descriptions reveal selection conflicts; qualification and skill-specific tenure checks remain incomplete. See the [audit](../../analysis/run702_703_audit.md) |
-| Wellfound | Run 706's four reported failures now show settled Applied receipts; archived pages reveal the five-minute Undo window. See the [audit](../../analysis/run706_wellfound_audit.md) | Pending-send handling has local replay coverage; hard-coded modal tenure, relocation preference and fallback pitch claims remain separate gaps |
+| Cutshort | Runs 682–684 confirmed an application and questionnaire receipts; run 708 recorded one confirmed application and a separate three-answer Messages success | Messages eligibility ownership and shared answer fallback policy need further enforcement |
+| LinkedIn | Run 715's Aditi and Oracle submissions confirmed by the repaired verifier on exact live listings; one reviewed Python Developer email accepted by Gmail. See the [audit](../../analysis/linkedin_production_review.md) | AI-track submission remains held on unknown answers; arbitrary qualification/skill matching, some post menus and uncertain SMTP delivery remain limited |
+| Instahyre | Revised verifier confirmed run 707's five exact Applied cards. A live read-only recheck found no exact Applied receipt for any of run 708's five unconfirmed jobs | Run 708's outcomes remain unconfirmed. Mandatory-skill checks and general questionnaire coverage remain limited |
+| HiringCafe | Run 700 stopped at clearance. Local handoff checks passed. A later public probe returned HTTP 403 | Disabled; live discovery and downstream delivery remain unverified |
+| Naukri | Read-only run 704 found persisted Applied markers for all 13 reported applications from runs 702–703. Runs 708–709 reported 10 applied and 3 failed | Latest failures include screening detection and Apply dialogs that did not open. Qualification and skill-specific tenure checks remain incomplete |
+| Wellfound | Run 706's four reported failures now show settled Applied receipts; archived pages reveal the five-minute Undo window. Run 708 rejected all seven listings at planning | Configured modal tenure and relocation review changes are local; no fresh live submission exercised them |
+
+See the [2026-11-06 cross-platform recheck](verification-2026-11-06.md) for counts and outstanding checks.
 
 ## Contributor boundaries
 

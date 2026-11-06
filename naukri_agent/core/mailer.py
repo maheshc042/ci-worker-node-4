@@ -19,7 +19,7 @@ import ssl
 import email as email_pkg
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime, make_msgid, format_datetime
 from pathlib import Path
 
 from ..config import AgentConfig
@@ -46,6 +46,8 @@ class ColdEmailer:
         self.smtp_server = "smtp.gmail.com"
         self.smtp_port = 465
         self.gemini_writer = GeminiWriter(api_key=gemini_api_key)
+        self.last_message_id: str | None = None
+        self.last_send_status = "not_attempted"
 
     def verify_credentials(self) -> bool:
         """One-shot SMTP login check before a campaign burns minutes per recipient."""
@@ -157,6 +159,12 @@ class ColdEmailer:
             skills = "React, Node.js, TypeScript, JavaScript, PostgreSQL, REST APIs"
             domain_label = "Full Stack / Software Development"
 
+        # Overall career tenure must not become a claim of that many years
+        # in every listed specialty (configured GenAI tenure is shorter).
+        focus_label = domain_label
+        proof = f"I bring {who.experience_label} of software engineering experience. " + proof.split(", ", 1)[-1]
+        domain_label = "Software Engineering"
+
         first = clean_first_name(recipient_name)
         if first:
             salutation = f"Hi {first},"
@@ -196,6 +204,7 @@ class ColdEmailer:
 Candidate Snapshot:
 • Total Experience: {who.experience_label} ({domain_label})
 • Primary Stack: {skills}
+• Relevant Focus: {focus_label}
 • Current Location: {who.location}
 • Notice Period: {who.notice_label}
 • Current CTC: {who.current_ctc}
@@ -242,6 +251,7 @@ Best regards,
         company_name: str = "",
         angle: str = "application",
         recipient_name: str = "",
+        prepared_body: str | None = None,
     ) -> bool:
         """
         Constructs and dispatches the email with the PDF attachment synchronously.
@@ -250,6 +260,8 @@ Best regards,
         import time
 
         target_email = target_email.strip()
+        self.last_message_id = None
+        self.last_send_status = "not_attempted"
         resume_file = Path(resume_path)
 
         if not resume_file.exists():
@@ -314,12 +326,15 @@ Best regards,
             msg["Subject"] = subject
             msg["From"] = self.sender_email
             msg["To"] = clean_target
+            msg["Message-ID"] = make_msgid()
+            msg["Date"] = format_datetime(datetime.now(UTC))
+            self.last_message_id = str(msg["Message-ID"])
 
             from ..linkedin.analyzer import resolve_recipient_first_name
             effective_recipient = resolve_recipient_first_name(recipient_name, clean_target)
 
             # 2. Add the body text (Gemini AI or template)
-            body = self._generate_body(
+            body = prepared_body if prepared_body is not None else self._generate_body(
                 role_name=role_name,
                 job_description=job_description,
                 company_name=company_name,
@@ -379,8 +394,14 @@ Best regards,
                         raise last_err
                     return False
                 with server:
-                    server.send_message(msg)
-                log.info("mailer.sent_success", to=clean_target, role=clean_role)
+                    self.last_send_status = "unknown"
+                    refused = server.send_message(msg)
+                    if refused:
+                        self.last_send_status = "rejected"
+                        log.warning("mailer.recipient_refused", to=clean_target)
+                        return False
+                    self.last_send_status = "smtp_accepted"
+                log.info("mailer.sent_success", to=clean_target, role=clean_role, message_id=self.last_message_id)
                 return True
             finally:
                 try:
@@ -396,6 +417,9 @@ Best regards,
             )
             return False
         except Exception as exc:
+            if self.last_send_status == "smtp_accepted":
+                log.warning("mailer.accepted_before_disconnect", message_id=self.last_message_id)
+                return True
             log.exception("mailer.unexpected_error", to=target_email, error=str(exc))
             return False
 
@@ -502,6 +526,7 @@ Best regards,
         company_name: str = "",
         angle: str = "application",
         recipient_name: str = "",
+        prepared_body: str | None = None,
     ) -> bool:
         """Non-blocking wrapper for send_application to avoid blocking event loops."""
         return await asyncio.to_thread(
@@ -513,4 +538,5 @@ Best regards,
             company_name,
             angle,
             recipient_name,
+            prepared_body,
         )

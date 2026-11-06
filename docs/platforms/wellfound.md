@@ -54,9 +54,9 @@ Every job card selected for application is evaluated through two comprehensive f
 - **External ATS Handoff**: If clicking navigates away from `wellfound.com`, routes immediately to `EXTERNAL`.
 
 ### 2. Modal-Level In-Flight Gates
-- **Experience Requirement Gate**: Scrapes dialog text for `experience: X+ years`. The current code skips when `req_exp > 3.5` and includes a hard-coded 2.5-year candidate claim in the reason. Those literals are implementation debt, not authoritative candidate facts.
+- **Experience Requirement Gate**: Reads `experience: X+ years` from the dialog. A stronger requirement or an explicit value replacing an estimate is evaluated against the same configured detail gate before Send.
 - **Location-Gating**: Detects *"not accepting applications from your location"* and skips with `BLOCKED_LOCATION`.
-- **Relocation Prompt**: Clicks *"I can relocate"* if Wellfound prompts for candidate relocation willingness.
+- **Relocation Prompt**: If Wellfound asks the candidate to confirm relocation, captures the prompt for job-specific review and stops before Send.
 
 ### 3. Dual-Strategy Pitch Generation
 The supported Wellfound application path looks for a pitch note such as *"What interests you about working for this company?"*.
@@ -64,11 +64,7 @@ The supported Wellfound application path looks for a pitch note such as *"What i
   - Invokes `gemini.generate_wellfound_pitch(role_name, job_description, company_name)`.
   - **Stub Rejection**: If Gemini generates a brief stub (< 150 characters), it is discarded to prevent unprofessional one-liners.
 - **Strategy 2: Deterministic Fallback**:
-  - Uses `candidate.wellfound_pitch` from [`config.yaml`](../../config/config.yaml).
-  - Formats a clean startup pitch highlighting:
-    - Specialization in scalable backends and production GenAI pipelines.
-    - Candidate snapshot values where available. Read the current profile rather than assuming a fixed location or notice period.
-    - Contact links (GitHub and LinkedIn).
+  - Uses `candidate.wellfound_pitch` from [`config.yaml`](../../config/config.yaml) when configured. Otherwise uses a neutral role and company introduction, the configured name and available profile links.
 - **React Input Dispatch**: Injects pitch via `textarea.fill(pitch)` and dispatches synthetic `input` and `change` events so React state synchronizes cleanly.
 - **Pitch Retention Audit**: Verifies `await textarea.input_value()`. If the text was wiped by a React re-render, fails closed.
 
@@ -118,8 +114,6 @@ No fresh Wellfound submission was performed during this audit. Current receipts 
 - Run 706 exposed a mandatory model-training/MLOps ownership role passing a broad AI title/skill match. The unified profile now excludes the observed mandatory phrases and no longer lists MLOps as a core candidate skill. Optional MLOps exposure remains eligible. These narrow rules are not a general mandatory-skill parser.
 - Low absolute rupee compensation without a pay period now returns NEEDS_REVIEW before applying, rather than passing through the generic sub-1-LPA phantom-salary bypass. Do not infer monthly versus annual pay. This is a compensation blocker, not a candidate screening question for the answer-training queue.
 
-- The profile detail check and the hard-coded modal experience ceiling are separate gates. They should be consolidated around verified configured facts in a later code change.
-- The relocation control is clicked when shown. This behavior still needs a verified preference gate.
-- Without a configured pitch, the deterministic fallback contains specific achievement claims. Those claims require candidate validation before being treated as approved content.
+- Run 708 rejected all seven listings at planning, so that run did not exercise the form or receipt path. The configured experience recheck has regression coverage; the updated form flow has not sent a fresh live application.
 - This adapter has a pitch workflow, not a general questionnaire solver. Unsupported custom questions need review handling rather than an assumption that the pitch is the only field.
-- Its detail gate remains optional at the adapter API. The normal orchestrator supplies it. Callers must honor the mandatory handoff policy.
+- The adapter can read an existing receipt without a detail callback. Any new application or external route requires that callback to pass first.
