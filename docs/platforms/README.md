@@ -49,6 +49,8 @@ The [answer engine](../../naukri_agent/core/answers.py) includes special intent 
 
 Quantitative tenure questions require configured facts; unlisted skill tenure goes to review. Numeric contact details cannot answer tenure questions, and a generic testing answer cannot override a named skill's configured zero. A configured zero for a known skill is different from inventing zero for an unlisted skill. Boolean skill adjacency and generic willingness handlers remain separate policies; they do not establish years of experience.
 
+Profile skill lists can support a familiarity answer. They do not inherit the default number of years. Numeric answers use explicitly configured tenure or a verified answer for the question.
+
 Review-answer reuse and human-answer cascades require identical normalized question wording. Similar sentences naming different skills, cities or requirements must not share answers. Historical fuzzy/cascade resolutions are not trusted as new reuse sources; this does not constitute a full audit of the historical KB.
 
 The Cutshort Messages sweep examines fresh Pending and inbox threads. Its current code does not restrict every thread to an eligible job applied by this agent. Read that platform's limitations before enabling the sweep.

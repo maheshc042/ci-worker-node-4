@@ -1058,18 +1058,15 @@ class AgentConfig(_Model):
         if fallback_years is None:
             fallback_years = profile.experience_years if profile.experience_years else 2.0
 
-        # Ensure default_years is set so that ANY generic experience question gets answered
+        # Keep the legacy default separate from approved skill tenure.
         merged.default_years = fallback_years
 
-        # Inject all profile skills into the skills map if not explicitly defined
-        if merged.skills is None:
-            merged.skills = {}
-
-        for skill_list in (profile.core_skills, profile.secondary_skills, profile.bonus_skills):
-            for skill in skill_list:
-                s = str(skill).strip().lower()
-                if s and s not in merged.skills:
-                    merged.skills[s] = fallback_years
+        # A listed skill can establish familiarity but does not establish years.
+        merged.listed_skills = tuple(dict.fromkeys(
+            skill.strip().lower()
+            for skill in (*profile.core_skills, *profile.secondary_skills, *profile.bonus_skills)
+            if skill.strip()
+        ))
 
         return merged
 

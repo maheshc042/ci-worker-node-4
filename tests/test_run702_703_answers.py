@@ -12,6 +12,35 @@ from naukri_agent.naukri.search import JobSearcher
 
 
 class TestArchivedAnswerRegressions(unittest.TestCase):
+    def test_listed_skill_without_verified_years_stays_in_review(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="primary")[0]
+        engine = AnswerEngine([], experience=config.experience_for(profile))
+        self.assertIsNone(engine.resolve(ScreeningQuestion(
+            "How many years of experience do you have in Pydantic?", "text",
+        )))
+        self.assertEqual(engine.resolve(ScreeningQuestion(
+            "Do you have experience with Pydantic?", "radio", ["Yes", "No"],
+        )).value, "Yes")
+        self.assertEqual(engine.resolve(ScreeningQuestion(
+            "How many years of experience do you have in Appium?", "text",
+        )).value, "2")
+
+    def test_generic_testing_years_do_not_answer_unverified_tools(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="secondary")[0]
+        engine = AnswerEngine([], experience=config.experience_for(profile))
+        for skill in ("Cypress testing", "UnknownTool testing", "Cypress and Playwright"):
+            with self.subTest(skill=skill):
+                self.assertIsNone(engine.resolve(ScreeningQuestion(
+                    f"How many years of experience do you have in {skill}?", "text",
+                )))
+        for skill in ("software testing", "Cypress or Playwright"):
+            with self.subTest(skill=skill):
+                self.assertEqual(engine.resolve(ScreeningQuestion(
+                    f"How many years of experience do you have in {skill}?", "text",
+                )).value, "3")
+
     def test_job_scoped_permit_answer_cannot_transfer_to_another_listing(self):
         config = AgentConfig.load()
         profile = config.active_profiles(account="secondary")[0]

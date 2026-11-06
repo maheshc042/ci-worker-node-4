@@ -278,6 +278,7 @@ class ExperienceAnswers:
     default_years: float | None = None
     multi_skill_strategy: str = "max"
     skills: dict[str, float] | None = None
+    listed_skills: tuple[str, ...] = ()
     # Hybrid skill-absence policy (run 604 fix, user-approved): a screening
     # question names a skill the resume map does NOT cover. Judge it by
     # adjacency to the claimed core stack instead of a blanket No:
@@ -299,6 +300,7 @@ class ExperienceAnswers:
             default_years=(override.default_years if override.default_years is not None else self.default_years),
             multi_skill_strategy=override.multi_skill_strategy or self.multi_skill_strategy,
             skills=skills,
+            listed_skills=tuple(dict.fromkeys((*self.listed_skills, *override.listed_skills))),
             unclaimed_yes=list(self.unclaimed_yes) + list(override.unclaimed_yes),
             unclaimed_no=list(self.unclaimed_no) + list(override.unclaimed_no),
         )
@@ -1232,12 +1234,27 @@ class AnswerEngine:
                 matched.append((phrase, float(years)))
 
         if matched:
+            generic = {"automation", "testing", "qa", "software", "engineering", "development"}
             specific = [
                 pair for pair in matched
-                if pair[0] not in {"automation", "testing", "qa", "software", "engineering", "development"}
+                if pair[0] not in generic
             ]
             if specific:
+                if not re.search(r"\bor\b", text) and any(
+                    _contains_word(text, skill)
+                    and not any(_contains_word(phrase, skill) for phrase, _ in specific)
+                    for skill in config.listed_skills
+                ):
+                    return None
                 matched = specific
+            else:
+                subject = re.search(
+                    r"\b(?:experience|exp)\s+(?:do you have\s+)?(?:in|with|of|using|on)\s+(.+?)[?.!]*$",
+                    text,
+                ) or re.search(r"\b(?:years?|yrs?|months?)\s+(?:of\s+)?(.+?)\s+(?:experience|exp)\b", text)
+                general_terms = generic | {"and", "or", "test", "manual", "quality", "assurance", "hands", "on"}
+                if subject and set(re.findall(r"\w+", subject[1])) - general_terms:
+                    return None
             matched.sort(key=lambda pair: len(pair[0]), reverse=True)
             longest = matched[0][0]
             values = [years for phrase, years in matched if phrase == longest or phrase not in longest]
@@ -1399,6 +1416,8 @@ class AnswerEngine:
                 positive = True
             else:
                 zero = True
+        if not zero and not positive:
+            positive = any(_contains_word(low, skill) for skill in self.experience.listed_skills)
         return positive, zero
 
     def _resolve_skill_absence(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
