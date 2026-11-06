@@ -583,6 +583,11 @@ experience:
     prompt engineering: 2
     vector database: 2
     embeddings: 2
+    model evaluation: 2
+    model optimization: 2
+    performance tuning: 2
+    optimization: 2
+    tuning: 2
     hugging face: 0
     pytorch: 0
     deep learning: 0
