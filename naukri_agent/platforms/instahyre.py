@@ -911,10 +911,11 @@ class InstahyrePlatform(BaseJobPlatform):
             log.debug("instahyre.pagination.click_failed")
             return False
 
-    async def _switch_to_page(self, target_page: int) -> bool:
+    async def _switch_to_page(self, target_page: int, *, page: Page | None = None) -> bool:
         """Safely switch to target page in Instahyre search/reco feed using direct pagination element interaction."""
+        feed = self.page if page is None else page
         try:
-            pagination_div = self.page.locator("div.pagination").first
+            pagination_div = feed.locator("div.pagination").first
             if await pagination_div.count() == 0:
                 return False
 
@@ -955,11 +956,11 @@ class InstahyrePlatform(BaseJobPlatform):
 
                 # Wait for cards to be rendered on the feed
                 try:
-                    await self.page.locator("div.employer-row").first.wait_for(state="visible", timeout=4000)
+                    await feed.locator("div.employer-row").first.wait_for(state="visible", timeout=4000)
                 except Exception:
                     pass
 
-                await self.page.evaluate("window.scrollTo(0, 0)")
+                await feed.evaluate("window.scrollTo(0, 0)")
                 await human_pause(400, 800)
 
                 # Verify that the active page is indeed target_page
@@ -967,7 +968,8 @@ class InstahyrePlatform(BaseJobPlatform):
                 if await now_active.count() > 0:
                     now_text = (await safe_text(now_active)).strip()
                     if now_text == str(target_page):
-                        self._visited_pages.add(target_page)
+                        if page is None:
+                            self._visited_pages.add(target_page)
                         return True
                 log.debug("instahyre.pagination.switch_retry", target_page=target_page, attempt=attempt)
                 await human_pause(800, 1200)
@@ -1095,9 +1097,10 @@ class InstahyrePlatform(BaseJobPlatform):
             if await option.count() != 1:
                 return False
             await option.click(timeout=4000)
-            expected = " ".join(f"{job.company} - {job.title}".split())
             await verification.locator(
-                f"div.employer-job-name[title={json.dumps(expected, ensure_ascii=False)}]"
+                "div.employer-job-name .company-name"
+            ).filter(
+                has_text=re.compile(rf"^\s*{re.escape(job.company)}\s+-\s+", re.I)
             ).first.wait_for(state="visible", timeout=8000)
             selected = verification.locator(".interest_filters .tab.selected").filter(
                 has_text=re.compile(r"^\s*Applied jobs\b")
@@ -1105,7 +1108,19 @@ class InstahyrePlatform(BaseJobPlatform):
             if await selected.count() != 1:
                 return False
             card = await self._find_target_card(job, verification)
-            confirmed = card is not None and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=4000) is not None
+            for page_number in range(2, 6):
+                if card is not None:
+                    break
+                page_link = verification.locator("div.pagination li[ng-click='nthPage(pageNumber)']").filter(
+                    has_text=re.compile(rf"^\s*{page_number}\s*$")
+                )
+                if not await page_link.count() or not await self._switch_to_page(page_number, page=verification):
+                    break
+                card = await self._find_target_card(job, verification)
+            confirmed = (
+                card is not None and await selected.count() == 1
+                and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=4000) is not None
+            )
             await self.artifacts.dump_html(verification, "instahyre-applied-feed-check", "verification", job.job_id)
             return confirmed
         except Exception as exc:

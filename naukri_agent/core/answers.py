@@ -470,8 +470,17 @@ class AnswerEngine:
         if serving is not None:
             return serving
 
+        # These fields need an exact answer. Generic skill tenure, CTC, and
+        # total years do not establish role tenure, take-home pay, or months.
+        exact_only = bool(re.search(
+            r"\b(?:in[\s-]+hand|take[\s-]+home)\s+(?:salary|pay)\b"
+            r"|\badditional months of experience\b"
+            r"|\bexperience in (?:a |an )?devops role\b"
+            r"|\bexperience\b.*\bnode\.js and its frameworks\b",
+            text,
+        ))
         # Stage 1: User Configuration & KB! User config beats generic fallbacks.
-        entry = self._best_entry(text)
+        entry = self._best_entry(text, exact_only=exact_only)
         if entry is not None:
             fitted = self._fit_to_options(entry.answer, question, entry.pattern, entry.source)
             if fitted is not None:
@@ -483,6 +492,8 @@ class AnswerEngine:
                     fitted.confidence = 0.8
                 self._record_hit(entry)
                 return fitted
+        if exact_only:
+            return None
 
         if question.kind in {"radio", "select"} and re.fullmatch(
             r"(?:we must fill this position urgently\.\s+)?can you (?:join|start) immediately"
@@ -695,6 +706,10 @@ class AnswerEngine:
         # period", misstating status and revealing a conditional LWD date.
         if _EMPLOYMENT_STATUS_INTENT.search(text):
             return None
+        # A descriptive prompt can contain a willingness keyword such as
+        # "term" in "long-term career aspiration", even with no choices parsed.
+        if re.match(r"^which\b.*\bbest describes\b", text):
+            return None
         if not _WILLINGNESS_INTENT.search(text) or _NEGATIVE_QUESTIONS.search(text):
             return None
 
@@ -802,7 +817,7 @@ class AnswerEngine:
             "Yes", replace(question, options=_opts) if _opts != list(question.options or []) else question,
             "intent:willingness", "intent-map")
 
-    def _best_entry(self, text: str) -> _Entry | None:
+    def _best_entry(self, text: str, *, exact_only: bool = False) -> _Entry | None:
         question_tokens = _tokenise(text)
         best: _Entry | None = None
         best_score: tuple[int, int, int, int] | None = None
@@ -821,6 +836,11 @@ class AnswerEngine:
         ]
 
         for entry in self.entries:
+            if exact_only and not (
+                entry.regex.fullmatch(text) if entry.regex is not None
+                else entry.pattern.rstrip(" ?") == text.rstrip(" ?")
+            ):
+                continue
             if tenure_q and not _non_tenure_pat.search(entry.pattern):
                 continue
             if tenure_q and any(not _contains_word(entry.pattern, skill) for skill in named_zero_skills):

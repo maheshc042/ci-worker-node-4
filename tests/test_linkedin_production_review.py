@@ -13,6 +13,16 @@ from naukri_agent.platforms import linkedin
 
 
 class TestLinkedInAttachmentAndFacts(unittest.TestCase):
+    def test_validation_counter_does_not_change_screening_question(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.answers = AnswerEngine([], profile_answers={
+            "re:^are you currently based out of bangalore\\??$": "Yes",
+        })
+        question = ScreeningQuestion(
+            "* Invalid input 0/20 0 of 20 characters Are you currently based out of Bangalore?", "text",
+        )
+        self.assertEqual(platform._resolve_screening(question).value, "Yes")
+
     def test_explicit_opening_title_is_distinct_from_resume_track(self):
         self.assertEqual(advertised_role('Position: Python Developer\nExperience: 2+ Years','AI / Python Engineer'),'Python Developer')
         self.assertEqual(advertised_role('Build FastAPI APIs','AI / Python Engineer'),'AI / Python Engineer')

@@ -55,6 +55,49 @@ class TestArchivedAnswerRegressions(unittest.TestCase):
     def test_question_alert_has_review_status(self):
         self.assertEqual(header_prefix("review"), "❓ REVIEW")
 
+    def test_career_aspiration_does_not_get_a_willingness_answer(self):
+        engine = AnswerEngine([])
+        text = "Which of the following best describes your long-term career aspiration?"
+        self.assertIsNone(engine.resolve(ScreeningQuestion(text, "unknown")))
+        self.assertIsNone(engine.resolve(ScreeningQuestion(text, "radio", ["Technical lead", "Manager"])))
+        self.assertEqual(
+            engine.resolve(ScreeningQuestion("Are you willing to work onsite?", "radio", ["Yes", "No"])).value,
+            "Yes",
+        )
+
+    def test_distinct_salary_and_experience_fields_do_not_reuse_generic_facts(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="secondary")[0]
+        engine = AnswerEngine([], profile_answers={**config.answers, **profile.answers},
+                              experience=config.experience_for(profile))
+        for prompt in (
+            "What is your current in hand salary ?",
+            "Please select your total additional months of experience:*",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(engine.resolve(ScreeningQuestion(prompt, "text")))
+        for prompt in (
+            "How many years of experience do you have building backend services and APIs?",
+            "How many years of work experience do you have with Test Automation?",
+        ):
+            self.assertEqual(engine.resolve(ScreeningQuestion(prompt, "text")).value, "3")
+        for prompt, expected in (
+            ("Total Years of Experience in Devops Role?", "2"),
+            ("How many years of experience do you have in Node.js and its frameworks (Strapi, Express, NestJS)?", "3"),
+        ):
+            self.assertEqual(engine.resolve(ScreeningQuestion(prompt, "text")).value, expected)
+
+    def test_explicit_genai_minimum_is_separate_from_total_experience(self):
+        config = AgentConfig.load()
+        profile = config.active_profiles(account="primary")[0]
+        engine = FilterEngine(profile.filters_for("recommended"), profile.to_candidate_profile(config))
+        job = Job("instahyre-429094", "Data Scientist - LLM Training and Fine Tuning", "Prismforce", "",
+                  platform="instahyre", min_experience=3)
+        job.description = "Requirements: 3-5 years of hands-on experience in Gen AI and NLP."
+        self.assertEqual(engine.evaluate_detail(job).reason, SkipReason.FILTER_EXPERIENCE)
+        job.description = "Requirements: 2 years of hands-on experience in Gen AI and NLP."
+        self.assertTrue(engine.evaluate_detail(job).passed)
+
     def test_mobile_experience_cannot_use_phone_number(self):
         engine = AnswerEngine(
             [], profile_answers={"mobile": "1234567890"},

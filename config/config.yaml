@@ -159,6 +159,11 @@ notifications:
 # these, so account-specific numbers live on the profile.
 # ---------------------------------------------------------------------------
 answers:
+  're:^total years of experience in (?:a )?devops role\??$': "2"
+  're:^how many years of experience do you have in node\.js and its frameworks \(strapi, express, nestjs\)\??$': "3"
+  're:^have you built browser or computer-use agents that interact with live web applications\??$': "Yes"
+  're:^are you currently based out of bangalore\??$': "Yes"
+  're:^how many years of experience do you have building backend services and apis\??$': "3"
   "rate your hands-on experience in python development for automation, backend services, or infrastructure tools.": "Strong Exposure Built production-grade applications/tools using Python"
   "rate your hands-on experience in python development for automation": "Strong Exposure Built production-grade applications/tools using Python"
   "which backend experience you have?": "Python, FastAPI, Django, Node.js, REST APIs, PostgreSQL, Redis, Docker"
@@ -512,6 +517,9 @@ experience:
   skills:
     revops: 0
     asp.net core: 0
+    data validation: 2
+    test data generation: 2
+    gtm automation engineer: 2
     test case generation: 3
     webdriverio: 3
     webdriver io: 3
@@ -549,6 +557,7 @@ experience:
     angular: 0
     testing: 3
     software testing: 3
+    test automation: 3
     qa: 3
     devops: 3
     golang: 0
@@ -903,6 +912,11 @@ profiles:
     use_recommended: true
     naukri_experience_search_terms: [full stack developer, software test automation]
     job_screening_answers:
+      linkedin-4486703804:
+        "Are you comfortable working in an onsite setting?": "Yes"
+        "Apply to Arnifi 3/4 pages Additional Questions Are you comfortable working in an onsite setting?": "Yes"
+        # Current monthly take-home pay in INR, in the form's numeric format.
+        "What is your current in hand salary ?": "33000"
       reco-051126014304:
         "Would need a work permit to work in location of application?": "No"
       reco-051126012288:
@@ -1025,6 +1039,10 @@ profiles:
     job_screening_answers:
       reco-051126038635:
         "This position follows U.S. hours (8:30PM-5:30AM IST). Does this align with your working style?": "Yes, those hours align with my working style."
+        "Which of the following best describes your long-term career aspiration?": "Grow into a senior AI software engineer who builds reliable products and takes ownership from design through deployment."
+      linkedin-4482624538:
+        # Total engineering experience is configured as exactly three years.
+        "Please select your total additional months of experience:*": "0 month"
       reco-051126037899:
         "Are you available to work 20- 40 hrs/week for an engagement of 1 week, with 4 hours of overlap with PST and compenstaion of $9/hr?": "Yes"
       linkedin-4483862172:

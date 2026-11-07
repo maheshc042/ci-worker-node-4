@@ -53,6 +53,7 @@ class CandidateProfile:
     # Home city, mirrored from config.yaml `candidate.location`; used for
     # geography decisions such as walk-in filtering.
     location: str = ""
+    generative_ai_years: float | None = None
 
 
 @dataclass(slots=True)

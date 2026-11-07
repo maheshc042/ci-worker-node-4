@@ -634,6 +634,20 @@ class FilterEngine:
         if not description:
             return FilterDecision(True)
 
+        genai_years = getattr(self.candidate, "generative_ai_years", None)
+        if genai_years is not None:
+            for requirement in re.finditer(
+                r"(?<![\w./-])(\d+(?:\.\d+)?)(?:\s*[-–—]\s*\d+(?:\.\d+)?|\+)?"
+                r"\s+years?\s+of\s+(?:hands-on\s+)?experience\s+in\s+"
+                r"(?:gen\s*ai|generative ai)(?:\s+and\s+nlp)?(?=\s*(?:[.;]|$))",
+                description,
+            ):
+                minimum = float(requirement[1])
+                context = description[max(0, requirement.start() - 36):requirement.start()]
+                if minimum > genai_years and not re.search(r"\b(?:preferred|nice to have)\s*:?\s*$", context):
+                    return FilterDecision(False, SkipReason.FILTER_EXPERIENCE,
+                                          f"JD requires {minimum:g}y in GenAI, candidate has {genai_years:g}y")
+
         if rules.description_must_exclude_any:
             hit = _contains_any(description, rules.description_must_exclude_any)
             if hit:

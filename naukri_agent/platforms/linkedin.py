@@ -641,7 +641,7 @@ class LinkedInPlatform(BaseJobPlatform):
     # to the previous question's text box — and "1/20" would otherwise trip
     # the strong-text rule for the current question.
     _BLOCKED_COUNTER_DEBRIS_RE = re.compile(
-        r"^\*?\s*\d+\s*/\s*\d+\s*(\d+\s+of\s+\d+\s+(characters|words))?",
+        r"^\*?\s*(?:Invalid input\s+)?\d+\s*/\s*\d+\s*(\d+\s+of\s+\d+\s+(characters|words))?",
         re.IGNORECASE,
     )
 
@@ -695,6 +695,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 if any(rx.search(chunk) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES):
                     continue
                 core = LinkedInPlatform._BLOCKED_LEADING_DEBRIS_RE.sub("", chunk).strip()
+                invalid_text_input = bool(re.match(r"^\*?\s*Invalid input\b", core, re.I))
                 core = LinkedInPlatform._BLOCKED_COUNTER_DEBRIS_RE.sub("", core).strip()
                 if len(core) < 20 or any(
                     rx.search(core) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES
@@ -708,7 +709,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 scope = core + " " + following[:40]
                 has_yes = re.search(r"\bYes\b", scope) is not None
                 has_no = re.search(r"\bNo\b", scope) is not None
-                strong_text = re.search(
+                strong_text = invalid_text_input or re.search(
                     r"how many|years of|1\s*/\s*\d+|characters|number",
                     core, re.IGNORECASE,
                 )
@@ -1773,6 +1774,10 @@ class LinkedInPlatform(BaseJobPlatform):
         return None
 
     def _resolve_screening(self, question: ScreeningQuestion, *, job_id: str = "") -> ResolvedAnswer | None:
+        if question.kind == "text":
+            cleaned = self._BLOCKED_COUNTER_DEBRIS_RE.sub("", question.text).strip()
+            if cleaned and cleaned != question.text:
+                question = ScreeningQuestion(cleaned, question.kind, question.options, question.required)
         answer = self.answers.resolve(question, job_id=job_id) if job_id else self.answers.resolve(question)
         if answer is None or (
             answer.matched_pattern.startswith(("experience:unlisted_default", "tenure-compare:inferred:"))
@@ -2290,7 +2295,10 @@ class LinkedInPlatform(BaseJobPlatform):
                         number = re.search(r"[-+]?\d*\.?\d+", resolved.value)
                         if number:
                             value = float(number.group())
-                            if any(k in label_low for k in ["ctc", "salary", "compensation"]):
+                            # Listing-specific answers are already in the form's units.
+                            if resolved.matched_pattern != "profile:job_answer" and any(
+                                k in label_low for k in ["ctc", "salary", "compensation"]
+                            ):
                                 min_attr = await inp.get_attribute("min")
                                 minimum = float(min_attr) if min_attr and re.fullmatch(r"\d+(?:\.\d+)?", min_attr) else 0
                                 if any(k in label_low for k in ["inr", "annual", "per year", "per annum", "/year"]) or minimum >= 1000:

@@ -2157,10 +2157,11 @@ class CutshortPlatform(BaseJobPlatform):
                     async with self.page.expect_file_chooser(timeout=3000) as chooser:
                         await upload.click(timeout=2500)
                     await (await chooser.value).set_files(str(resume_path), timeout=3000)
-                await selected_resume.wait_for(state="visible", timeout=5000)
+                await selected_resume.wait_for(state="visible", timeout=12000)
                 resume_verified = True
             except Exception as exc:
                 log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
+                await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)

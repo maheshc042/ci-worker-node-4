@@ -116,6 +116,18 @@ class TestInstahyreAppliedFeed(unittest.IsolatedAsyncioTestCase):
         find.assert_not_awaited()
         page.close.assert_awaited_once()
 
+    async def test_receipt_can_be_on_a_later_company_feed_page(self):
+        platform = self.platform()
+        page, _ = self.verification(platform)
+        card = MagicMock()
+        platform._find_target_card = AsyncMock(side_effect=[None, None, card])
+        platform._switch_to_page = AsyncMock(return_value=True)
+        with patch.object(instahyre, "first_visible", new=AsyncMock(return_value=MagicMock())):
+            self.assertTrue(await platform._verify_target_applied(target()))
+        platform._switch_to_page.assert_awaited_once_with(2, page=page)
+        self.assertIs(platform._find_target_card.await_args.args[1], page)
+        page.close.assert_awaited_once()
+
     async def test_missing_exact_status_is_unconfirmed(self):
         platform = self.platform()
         page, _ = self.verification(platform)

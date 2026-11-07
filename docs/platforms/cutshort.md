@@ -13,7 +13,7 @@ This guide follows the [Cutshort adapter](../../naukri_agent/platforms/cutshort.
 
 1. Find the exact listing card and inspect its current action state. Existing View conversation or applied evidence produces an already-applied outcome.
 2. Open the job's application dialog. It contains the message field, résumé, optional company follow, Send and Cancel.
-3. Verify the dialog heading identifies the intended role and employer. Select the track résumé and verify the configured file when one is resolved. If replacement is needed, use the native file chooser opened by the dialog's Upload another resume control. The underlying file input may be mounted outside the dialog.
+3. Verify the dialog heading identifies the intended role and employer. Select the track résumé and verify the configured file when one is resolved. If replacement is needed, use the native file chooser opened by the dialog's Upload another resume control. The underlying file input may be mounted outside the dialog. If the filename stays unverified, capture the dialog state and stop before Send.
 4. Fill the tailored pitch and dispatch input/change events. The current application path does not run a questionnaire handler inside this dialog.
 5. Find Send within that dialog and click once under the mutation policy. A click error is treated as uncertain and still goes through confirmation.
 6. Observe the same page for the exact job's new View conversation link. The card's Apply and Not interested actions change after application.

@@ -120,7 +120,7 @@ Before configuring filters, clears blocking modals:
 1. **Card-Level Proof**:
    - Close application/promotional overlays, then re-find the unique exact target card.
    - Accept only `_APPLIED_CARD_MARKERS`: exact Applied button, legacy badge, or current application-status label.
-   - Search cards may disappear after applying and need not show a status. If no receipt is present, open a separate read-only tab, select Applied jobs, use the native company facet, and match the exact role and native ID where known. Require that exact card's Applied label while Applied jobs is selected. Preserve the main search tab and close the verification tab.
+   - Search cards may disappear after applying and need not show a status. If no receipt is present, open a separate read-only tab, select Applied jobs, and use the native company facet. Check up to five pages of that feed for the exact role and native ID where known. Require that exact card's Applied label while Applied jobs is selected. Preserve the main search tab and close the verification tab.
    - A missing/ambiguous company option, duplicate role cards, wrong native ID, missing badge or inaccessible feed remains unconfirmed. Global counts, employer popups and hidden templates are insufficient.
 2. **Outcome Resolution**:
    - **Confirmed**: Returns `status = APPLIED`, `confirmation_type = "dom_marker"`, `confirmation_evidence = "Instahyre target card shows Applied"`.

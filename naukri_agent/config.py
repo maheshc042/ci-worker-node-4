@@ -819,6 +819,7 @@ class JobProfile(_Model):
             target_experience_years=target_exp,
             min_acceptable_salary_lpa=self.filters.min_salary_lpa if self.filters else None,
             location=(config.candidate.location if config is not None else ""),
+            generative_ai_years=config.experience_for(self).skills.get("generative ai") if config else None,
         )
 
 
