@@ -5286,13 +5286,20 @@ class TestSpacedTitleVariants(unittest.TestCase):
         )
 
     def test_spaced_variants_pass_both_profiles(self):
-        # 2026-10 title-division cleanup: Front End / Back End / Application
-        # Developer are FS-only claims now. The AI profile no longer holds
-        # the generic families (front end, back end, full stack, application
-        # developer...) — bogus double-coverage was 374/1111 scraped titles.
-        fs_only = ["Front End Developer", "Back End Developer", "Application Developer"]
+        # Pure frontend roles (Front End Developer, Frontend Engineer) are excluded
+        # to prevent wasting daily application quota on non-matching pure UI roles.
         fs_engine = FilterEngine(self.fs_profile.filters_for("recommended"))
         ai_engine = FilterEngine(self.ai_profile.filters_for("recommended"))
+        self.assertFalse(fs_engine.evaluate_card(self._job("Front End Developer")).passed)
+        self.assertFalse(ai_engine.evaluate_card(self._job("Front End Developer")).passed)
+        # Compound roles with frontend still pass FS:
+        self.assertTrue(fs_engine.evaluate_card(self._job("Full Stack Developer (Frontend/Backend)")).passed)
+
+        # 2026-10 title-division cleanup: Back End / Application
+        # Developer are FS-only claims now. The AI profile no longer holds
+        # the generic families (back end, full stack, application
+        # developer...) — bogus double-coverage was 374/1111 scraped titles.
+        fs_only = ["Back End Developer", "Application Developer"]
         for title in fs_only:
             self.assertTrue(
                 fs_engine.evaluate_card(self._job(title)).passed,

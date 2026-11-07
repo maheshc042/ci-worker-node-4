@@ -2148,20 +2148,39 @@ class CutshortPlatform(BaseJobPlatform):
         if modal_matches_job and resume_path is not None and resume_path.is_file():
             # Cutshort displays the filename stem, optionally with its upload ID.
             filename = re.escape(resume_path.stem)
-            selected_resume = modal.get_by_text(
-                re.compile(rf"^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$", re.IGNORECASE)
-            ).first
+            clean_stem = re.escape(resume_path.stem.rstrip("_"))
+            resume_re = re.compile(
+                rf"(?:^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$|^{clean_stem}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$|\b{clean_stem}\b|cv_mahesh_chitakoti)",
+                re.IGNORECASE,
+            )
+            selected_resume = modal.get_by_text(resume_re).first
             try:
                 if not await selected_resume.is_visible():
-                    upload = modal.get_by_text("Upload another resume", exact=True)
-                    async with self.page.expect_file_chooser(timeout=3000) as chooser:
-                        await upload.click(timeout=2500)
-                    await (await chooser.value).set_files(str(resume_path), timeout=3000)
+                    radio = modal.locator('[role="radio"], input[type="radio"]').filter(has_text=resume_re).first
+                    if await radio.count() > 0:
+                        await radio.click()
+                    else:
+                        file_inp = modal.locator("input[type='file']").first
+                        if await file_inp.count() == 0:
+                            file_inp = self.page.locator("input[type='file']").first
+                        if await file_inp.count() > 0:
+                            await file_inp.set_input_files(str(resume_path))
+                        else:
+                            upload = modal.locator("text=/upload (?:another|new) resume/i, button:has-text('Upload')").first
+                            if await upload.count() == 0:
+                                upload = self.page.locator("text=/upload (?:another|new) resume/i, button:has-text('Upload')").first
+                            if await upload.count() > 0:
+                                async with self.page.expect_file_chooser(timeout=3000) as chooser:
+                                    await upload.click(timeout=2500)
+                                await (await chooser.value).set_files(str(resume_path), timeout=3000)
                 await selected_resume.wait_for(state="visible", timeout=12000)
                 resume_verified = True
             except Exception as exc:
-                log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
-                await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
+                if bool(resume_re.search(modal_text)):
+                    resume_verified = True
+                else:
+                    log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
+                    await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)

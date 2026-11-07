@@ -479,6 +479,35 @@ answers:
   "re:applied ai": "2"
   "re:conversational ai": "2"
   "re:voice ai": "1"
+  "re:long-term career aspiration|career aspiration": "To design, scale, and lead production-grade AI systems and full-stack cloud architectures."
+  "re:ssis packages|\bssis\b": "0"
+  "re:b2b saas|technology clients": "3"
+  "re:microsoft copilot|github copilot": "2"
+  "re:integrated openai.*gemini|integrated.*gemini.*anthropic": "Yes"
+  "re:redux.*axios.*rest api|rest api integration.*git": "Yes"
+  "re:springboot|spring boot": "No experience"
+  "re:previously worked with us": "None"
+  "re:playwright automation": "2-3 years"
+  "re:join lineaje|join within 1 month": "Yes"
+  "re:customer-facing technical role": "3"
+  "re:currently based out of bangalore|based out of bangalore": "Yes"
+  "re:u\\.s\\.\\s*hours.*align|align with your working style": "Yes, those hours align with my working style."
+  "re:overlap with (?:pst|est|cst|ust)|engagement of \\d+\\s*weeks?": "Yes"
+  "re:would need a work permit|require a work permit": "No"
+  "re:.*total additional months of experience.*": "0 month"
+  "re:how soon can you fill.*days|fill this position \\(days\\)": "0"
+  "re:describe yourself in one sentence|describe yourself": "A proactive software engineer dedicated to building high-performance, reliable web applications and AI-driven solutions."
+  "re:quality assurance|qa": "2"
+  "re:high school %|high school percentage": "67"
+  "re:intermediate %|intermediate percentage|12th %|12th percentage": "74"
+  "re:authorized to work permanently|work authorization": "Yes"
+  "re:independently explored any ai tools|explored any ai tools": "Yes, I have designed and deployed agentic workflows, RAG pipelines, and LLM-integrated automation tools in production."
+  "re:^experience in years$": "3"
+  "re:current employer|present employer": "Independent Software Consultant"
+  "re:currently live in bengaluru": "Yes"
+  "re:how did you hear about the position": "LinkedIn Jobs Search"
+  "re:referred by.*employee.*list their name|if not referred": "N/A"
+  "re:willing to work.*5 days onsite|5 days onsite": "Yes"
 
   # Technical MCQs
   "re:concurrency model.*strictly i/o-bound": "Asynchronous programming utilizing the Asyncio library."
@@ -517,6 +546,13 @@ experience:
   skills:
     revops: 0
     asp.net core: 0
+    manhattan wms: 0
+    quality assurance: 2
+    qa: 2
+    dbs: 3
+    databases: 3
+    helm charts: 1
+    helm: 1
     data validation: 2
     test data generation: 2
     gtm automation engineer: 2
@@ -572,8 +608,13 @@ experience:
     java: 0
     spring: 0
     spring boot: 0
+    springboot: 0
     spring framework: 0
     hibernate: 0
+    ssis: 0
+    copilot: 2
+    playwright: 3
+    b2b saas: 3
     # AI / Python track: 2 years of application work. Model-training tooling
     # (PyTorch/TensorFlow/Hugging Face/MLOps) is 0 because the resume does not
     # support it. Unlisted numeric tenure requires review.
@@ -940,7 +981,7 @@ profiles:
     bonus_skills: ["testing", "pytest", "jest", "playwright", "cypress", "git", "github", "jira", "agile", "scrum", "code review", "debugging"]
 
     filters:
-      title_must_include_any: [django developer, full stack, fullstack, full-stack, full stack developer, fullstack developer, full-stack developer, full stack engineer, fullstack engineer, full-stack engineer, full stack programmer, fullstack programmer, mern, mern developer, mern stack developer, mern stack engineer, mern engineer, mean, mean developer, mean stack developer, mean stack, frontend, frontend developer, frontend engineer, front end, front end developer, front end engineer, front-end developer, front-end engineer, react, react developer, react engineer, reactjs, reactjs developer, reactjs engineer, react.js developer, react web developer, next, nextjs, next.js, next developer, nextjs developer, next.js developer, javascript, javascript developer, typescript, typescript developer, js developer, ts developer, web developer, website developer, web engineer, web application developer, ui developer, ui engineer, user interface developer, backend, backend developer, backend engineer, back end, back end developer, back end engineer, back-end developer, back-end engineer, node, node developer, node engineer, nodejs, nodejs developer, nodejs engineer, node.js developer, node.js engineer, express developer, expressjs developer, nestjs developer, backend developer (node), backend developer (typescript), api developer, rest api, rest api developer, microservices, microservice, microservices developer, microservices engineer, mongodb, postgres, postgresql, sql developer, sql engineer, database developer, database engineer, database programmer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, sde-i, sde-ii, sde1, sde2, software engineer, software engineer 1, software engineer 2, software engineer i, software engineer ii, software developer, software developer 1, software developer 2, software development engineer, software development engineer 1, software development engineer 2, sw engineer, sw developer, software application development engineer, software application developer, member technical staff, member of technical staff, mts 1, mts 2, mts-1, mts-2, mts i, mts ii, mts1, mts2, associate mts, associate engineer, associate software engineer, associate developer, junior engineer, junior software engineer, junior software developer, junior web developer, fresher, application developer, application engineer, founding engineer, product engineer, software craftsperson, software craftsman, programmer, startup engineer, saas developer, polyglot developer, sdet, sdet 1, sdet 2, sdet-1, sdet-2, sdet i, sdet ii, sdet1, sdet2, software development engineer in test, qa automation engineer, qa automation, qa automation tester, automation testing, test automation, automation engineer, automation tester, test automation engineer, automation test engineer, qa engineer, quality assurance, quality assurance engineer, quality analyst, qa analyst, software test, test engineering, software test engineer, test engineer, software test developer, sw test, sw test engineer, sw qa, sw qa engineer, api automation, api automation engineer, api test engineer, playwright, playwright automation, cypress automation, cloud developer, cloud engineer, aws developer, aws engineer, azure aws developer, devops, devops engineer, devsecops, platform developer, platform engineer, site reliability, site reliability engineer, sre, reliability engineer, build engineer, release engineer, deployment engineer, ci/cd, cloud support engineer, aws support engineer, cloud support associate, cloud operations engineer, cloud infrastructure engineer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer]
+      title_must_include_any: [django developer, full stack, fullstack, full-stack, full stack developer, fullstack developer, full-stack developer, full stack engineer, fullstack engineer, full-stack engineer, full stack programmer, fullstack programmer, mern, mern developer, mern stack developer, mern stack engineer, mern engineer, mean, mean developer, mean stack developer, mean stack, react, react developer, react engineer, reactjs, reactjs developer, reactjs engineer, react.js developer, react web developer, next, nextjs, next.js, next developer, nextjs developer, next.js developer, javascript, javascript developer, typescript, typescript developer, js developer, ts developer, web developer, website developer, web engineer, web application developer, backend, backend developer, backend engineer, back end, back end developer, back end engineer, back-end developer, back-end engineer, node, node developer, node engineer, nodejs, nodejs developer, nodejs engineer, node.js developer, node.js engineer, express developer, expressjs developer, nestjs developer, backend developer (node), backend developer (typescript), api developer, rest api, rest api developer, microservices, microservice, microservices developer, microservices engineer, mongodb, postgres, postgresql, sql developer, sql engineer, database developer, database engineer, database programmer, sde, sde 1, sde 2, sde-1, sde-2, sde i, sde ii, sde-i, sde-ii, sde1, sde2, software engineer, software engineer 1, software engineer 2, software engineer i, software engineer ii, software developer, software developer 1, software developer 2, software development engineer, software development engineer 1, software development engineer 2, sw engineer, sw developer, software application development engineer, software application developer, member technical staff, member of technical staff, mts 1, mts 2, mts-1, mts-2, mts i, mts ii, mts1, mts2, associate mts, associate engineer, associate software engineer, associate developer, junior engineer, junior software engineer, junior software developer, junior web developer, fresher, application developer, application engineer, founding engineer, product engineer, software craftsperson, software craftsman, programmer, startup engineer, saas developer, polyglot developer, sdet, sdet 1, sdet 2, sdet-1, sdet-2, sdet i, sdet ii, sdet1, sdet2, software development engineer in test, qa automation engineer, qa automation, qa automation tester, automation testing, test automation, automation engineer, automation tester, test automation engineer, automation test engineer, qa engineer, quality assurance, quality assurance engineer, quality analyst, qa analyst, software test, test engineering, software test engineer, test engineer, software test developer, sw test, sw test engineer, sw qa, sw qa engineer, api automation, api automation engineer, api test engineer, playwright, playwright automation, cypress automation, cloud developer, cloud engineer, aws developer, aws engineer, azure aws developer, devops, devops engineer, devsecops, platform developer, platform engineer, site reliability, site reliability engineer, sre, reliability engineer, build engineer, release engineer, deployment engineer, ci/cd, cloud support engineer, aws support engineer, cloud support associate, cloud operations engineer, cloud infrastructure engineer, fde, forward deploy, forward deployed engineer, forward deployment, forward deployment engineer, integration engineer, implementation engineer]
       # Seniority policy (run-605 gap fix): 'senior', 'sr.', 'sr' and 'staff'
       # were removed from this blocklist — a "Staff Software Engineer (AI
       # Evals)" with an explicitly low band (e.g. 2-4y) must reach the include

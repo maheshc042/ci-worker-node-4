@@ -628,6 +628,8 @@ class LinkedInPlatform(BaseJobPlatform):
         re.compile(r"^\d+\s*of\s*\d+", re.IGNORECASE),
         re.compile(r"^\d+\s*/\s*\d+\s*(characters|words)?$", re.IGNORECASE),
         re.compile(r"^apply to .{0,80} \d+\s*/\s*\d+\s*pages?$", re.IGNORECASE),
+        re.compile(r"\b\d+\s+notifications\b", re.IGNORECASE),
+        re.compile(r"^(?:back\s+)?(?:review|next|submit)(?:\s+\d+\s+notifications)?$", re.IGNORECASE),
     )
     # Trailing debris from the PREVIOUS question ("...Hyderabad? * Yes No
     # This field is required How many years..."): strip it before kind

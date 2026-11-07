@@ -47,7 +47,8 @@ _EXPERIENCE_INTENT = re.compile(
 
 _TOTAL_EXPERIENCE_INTENT = re.compile(
     r"\b(?:total|overall|cumulative|aggregate)\s+(?:work\s+|professional\s+)?"
-    r"(?:experience|exp)\b",
+    r"(?:experience|exp)\b|"
+    r"how\s+many\s+years\s+(?:of\s+)?experience\s+do\s+you\s+have(?:\s+in\s+total)?\s*[?.!*]*$",
     re.IGNORECASE,
 )
 
@@ -709,6 +710,10 @@ class AnswerEngine:
         # A descriptive prompt can contain a willingness keyword such as
         # "term" in "long-term career aspiration", even with no choices parsed.
         if re.match(r"^which\b.*\bbest describes\b", text):
+            return None
+        # Questions asking for a numeric timeframe in days (e.g. "(days)", "in days", "how soon can you fill")
+        # are duration/notice questions, not a boolean willingness question.
+        if re.search(r"\(days\)|in\s+days\b|how\s+many\s+days|how\s+soon\s+can\s+you\s+fill", text):
             return None
         if not _WILLINGNESS_INTENT.search(text) or _NEGATIVE_QUESTIONS.search(text):
             return None
