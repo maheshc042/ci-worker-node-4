@@ -775,10 +775,57 @@ class WellfoundPlatform(BaseJobPlatform):
         if not description:
             return False
         job.description = description
-        minimum, maximum = extract_jd_experience(description)
-        if minimum is not None:
-            job.min_experience, job.max_experience = minimum, maximum
-            job.experience_imputed = False
+
+        # 1. Stated tenure in Wellfound's structured characteristic metadata:
+        # Wellfound renders <dt>Experience</dt><dd>3+ years</dd> outside the markdown JD body.
+        # Recruiters often specify tenure only here, leaving description text with 0 numbers.
+        structured_found = False
+        try:
+            exp_node = await first_visible(
+                self.page,
+                [
+                    "dt:text-matches('^experience$', 'i') + dd",
+                    "div:has(> dt:text-matches('^experience$', 'i')) dd",
+                    "[data-test='JobCharacteristics'] :text-matches('^experience$', 'i') + *",
+                    "dt:has-text('Experience') + dd",
+                ],
+                timeout_ms=1500,
+            )
+            if exp_node:
+                exp_text = (await exp_node.inner_text(timeout=1000)).strip()
+                lo, hi = _parse_card_experience(exp_text)
+                if lo is not None:
+                    job.min_experience, job.max_experience = lo, hi
+                    job.experience_imputed = False
+                    structured_found = True
+        except Exception as exc:
+            log.debug("wellfound.fetch.metadata_experience_failed", job_id=job.job_id, error=str(exc)[:100])
+
+        # 2. Unstructured description body fallback
+        if not structured_found:
+            minimum, maximum = extract_jd_experience(description)
+            if minimum is not None:
+                job.min_experience, job.max_experience = minimum, maximum
+                job.experience_imputed = False
+            else:
+                # 3. Whole-page text regex fallback (e.g. 'Experience\n3+ years')
+                try:
+                    main_loc = self.page.locator("main, body").first
+                    if await main_loc.count() > 0:
+                        body_text = await main_loc.inner_text(timeout=1500)
+                        exp_m = re.search(
+                            r"\bexperience\b\s*[:\n]?\s*(\d+(?:\.\d+)?)\s*(?:[-–—+]|\s*(?:to|-)\s*)?\s*(\d+(?:\.\d+)?)?\s*(?:yrs|years|yr)?",
+                            body_text,
+                            re.IGNORECASE,
+                        )
+                        if exp_m:
+                            lo = float(exp_m.group(1))
+                            hi = float(exp_m.group(2)) if exp_m.group(2) else (None if "+" in exp_m.group(0) else lo)
+                            job.min_experience, job.max_experience = lo, hi
+                            job.experience_imputed = False
+                except Exception as exc:
+                    log.debug("wellfound.fetch.page_experience_failed", job_id=job.job_id, error=str(exc)[:100])
+
         return True
 
     async def _application_state(self, job: Job) -> tuple[str, int | None]:

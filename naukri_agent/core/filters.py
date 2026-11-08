@@ -318,18 +318,13 @@ class FilterEngine:
 
         # 8. Numeric experience bounds (provenance-guarded: see gate 7)
         exp = rules.experience
+        ceiling = exp.max_years if (exp and exp.max_years is not None) else 4.5
         if exp_trusted and job.min_experience is not None:
-            if job.min_experience > 3.5:
+            if job.min_experience > ceiling:
                 return FilterDecision(
                     False,
                     SkipReason.FILTER_EXPERIENCE,
-                    f"requires {job.min_experience}y > ceiling 3.5y",
-                )
-            if job.min_experience > exp.max_years:
-                return FilterDecision(
-                    False,
-                    SkipReason.FILTER_EXPERIENCE,
-                    f"requires {job.min_experience}y > max {exp.max_years}y",
+                    f"requires {job.min_experience}y > ceiling {ceiling}y",
                 )
         if exp_trusted and job.max_experience is not None:
             # Recruiter dummy values (e.g. >= 20 yrs on job boards indicate "no upper cap")
@@ -499,7 +494,7 @@ class FilterEngine:
                 title,
                 [
                     "react", "node", "python", "mern", "frontend", "backend", "full stack",
-                    "fullstack", "ai", "ml", "fastapi", "django", "llm", "genai", "qa",
+                    "fullstack", "full-stack", "ai", "ml", "fastapi", "django", "llm", "genai", "qa",
                     "automation", "sdet", "devops", "cloud", "database", "sql",
                 ],
             ) is not None
@@ -511,8 +506,8 @@ class FilterEngine:
                     _contains_any(title, [tr])
                     for tr in (
                         "software engineer", "software developer", "sde", "associate software engineer",
-                        "junior software engineer", "full stack", "backend developer", "frontend developer",
-                        "software development engineer"
+                        "junior software engineer", "full stack", "fullstack", "full-stack", "backend developer",
+                        "frontend developer", "software development engineer", "founding engineer"
                     )
                 )
                 if has_card_content and not is_target_role:

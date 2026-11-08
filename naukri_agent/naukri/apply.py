@@ -215,6 +215,11 @@ class ApplyEngine:
         if await self._is_expired_posting():
             return "stale"
 
+        # Anti-bot / challenge gate (reCAPTCHA, Turnstile, "let us know you're human").
+        # Fast exit before calling the page unresolvable.
+        if await self._is_challenge_wall():
+            return "challenge"
+
         # Fallback re-check (see comment at the top of _state): the page may
         # have landed on a search-listing URL only after the probes above
         # drove it there or Playwright finished following the redirect.
@@ -257,6 +262,26 @@ class ApplyEngine:
             return False
         banner = " ".join(text[:900].split())
         return any(marker in banner for marker in self._EXPIRED_MARKERS)
+
+    async def _is_challenge_wall(self) -> bool:
+        """True when Naukri presents an anti-bot challenge (reCAPTCHA, Turnstile, or human verification gate)."""
+        try:
+            challenge_selectors = [
+                "iframe[src*='recaptcha']",
+                "iframe[title*='reCAPTCHA' i]",
+                "iframe[title*='recaptcha' i]",
+                "div.g-recaptcha",
+                "div#captcha",
+                "iframe[src*='challenges.cloudflare.com']",
+                "text=/let us know you(?:’|')re human/i",
+                "text=/verify you are human/i",
+                "text=/unusual activity/i",
+                "text=/are you a robot/i",
+            ]
+            hit = await first_visible(self.page, challenge_selectors, timeout_ms=2_000)
+            return hit is not None
+        except Exception:
+            return False
 
     async def _visible_action_labels(self, limit: int = 6) -> list[str]:
         """Visible button/link labels on the page (diagnostics only).
@@ -395,6 +420,10 @@ class ApplyEngine:
                     raise PWTimeoutError("Naukri job description did not load before the pre-submit check")
             jt.readiness_s += time.perf_counter() - t_ready_0
 
+            if state == "challenge":
+                log.warning("naukri.apply.challenge_detected", job_id=job.job_id, url=(self.page.url or "")[:120])
+                return "challenge"
+
             if state == "unknown":
                 # Job-title walk-in marker (run 526: "Walk-in || Python
                 # Software Developer" failed classification — the TAB title
@@ -457,6 +486,20 @@ class ApplyEngine:
                 status=ApplicationStatus.SKIPPED,
                 reason=SkipReason.STALE_JOB,
                 detail="Expired posting detected at classification (no apply machinery on page)",
+                attempts=attempt_used,
+            )
+
+        if state == "challenge":
+            shot = await self.artifacts.capture_failure(self.page, "challenge-wall", profile, job.job_id)
+            jt.total_s = time.perf_counter() - t_job_start
+            if self.metrics:
+                self.metrics.job_timings.append(jt)
+            log.warning("naukri.apply.challenge_paused", job_id=job.job_id, title=job.title[:60])
+            return ApplyOutcome(
+                status=ApplicationStatus.FAILED,
+                reason=SkipReason.CLOUDFLARE_CHALLENGE,
+                detail="Naukri anti-bot verification gate (reCAPTCHA / human check) active on job page",
+                screenshot_path=shot,
                 attempts=attempt_used,
             )
 

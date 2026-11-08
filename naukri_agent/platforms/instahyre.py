@@ -1088,19 +1088,41 @@ class InstahyrePlatform(BaseJobPlatform):
             await tab.wait_for(state="visible", timeout=8000)
             await tab.click(timeout=4000)
             company_input = verification.locator("#companies-selectized")
-            await company_input.fill("", timeout=4000)
-            await company_input.press_sequentially(job.company, delay=30)
-            option = verification.locator(".selectize-dropdown:visible [data-selectable]").filter(
-                has_text=re.compile(rf"^\s*{re.escape(job.company)}\s*(?:\(\d+\))?\s*$", re.I)
-            )
-            await option.wait_for(state="visible", timeout=5000)
-            if await option.count() != 1:
+            base_company = re.sub(r"\s*\([^)]*\)", "", job.company).strip()
+            paren_match = re.search(r"\(([^)]+)\)", job.company)
+            paren_company = paren_match.group(1).strip() if paren_match else None
+
+            search_terms = [job.company]
+            if base_company and base_company != job.company:
+                search_terms.append(base_company)
+            if paren_company and paren_company != job.company:
+                search_terms.append(paren_company)
+
+            matched_option = None
+            for term in search_terms:
+                await company_input.fill("", timeout=4000)
+                await company_input.press_sequentially(term, delay=30)
+                term_re = re.compile(
+                    rf"^\s*(?:{re.escape(job.company)}|{re.escape(term)})\s*(?:\(\d+\))?\s*$", re.I
+                )
+                option = verification.locator(".selectize-dropdown:visible [data-selectable]").filter(
+                    has_text=term_re
+                )
+                try:
+                    await option.first.wait_for(state="visible", timeout=3000)
+                    if await option.count() >= 1:
+                        matched_option = option.first
+                        break
+                except Exception:
+                    continue
+
+            if matched_option is None:
                 return False
-            await option.click(timeout=4000)
+            await matched_option.click(timeout=4000)
             await verification.locator(
                 "div.employer-job-name .company-name"
             ).filter(
-                has_text=re.compile(rf"^\s*{re.escape(job.company)}\s+-\s+", re.I)
+                has_text=re.compile(rf"^\s*(?:{re.escape(job.company)}|{re.escape(base_company)})\s+-\s+", re.I)
             ).first.wait_for(state="visible", timeout=8000)
             selected = verification.locator(".interest_filters .tab.selected").filter(
                 has_text=re.compile(r"^\s*Applied jobs\b")

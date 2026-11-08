@@ -102,3 +102,58 @@ class TestWellfoundMandatoryTraining(unittest.TestCase):
         candidate.description = 'Build Python APIs and RAG workflows. Optional MLOps exposure is a bonus.'
         self.assertTrue(filters.evaluate_detail(candidate).passed)
         self.assertNotIn('mlops', profile.core_skills)
+
+
+class TestWellfoundStructuredExperience(unittest.IsolatedAsyncioTestCase):
+    async def test_structured_metadata_experience_overrides_imputed_senior(self):
+        platform = object.__new__(wellfound.WellfoundPlatform)
+        platform.page = MagicMock()
+
+        desc_node = MagicMock(inner_text=AsyncMock(return_value="Design modular POM architecture using Playwright."))
+        exp_node = MagicMock(inner_text=AsyncMock(return_value="3+ years"))
+
+        target_job = Job(
+            job_id="wellfound-4953796",
+            title="Senior Automation Engineer",
+            company="Workong",
+            url="https://wellfound.com/jobs/4953796-senior-automation-engineer",
+            min_experience=5.0,
+            max_experience=10.0,
+            experience_imputed=True,
+        )
+
+        with patch.object(wellfound, "first_visible", new=AsyncMock(side_effect=[desc_node, exp_node])):
+            self.assertTrue(await platform._read_description(target_job))
+
+        self.assertEqual(target_job.min_experience, 3.0)
+        self.assertIsNone(target_job.max_experience)
+        self.assertFalse(target_job.experience_imputed)
+
+    async def test_page_body_regex_fallback_overrides_imputed_senior(self):
+        platform = object.__new__(wellfound.WellfoundPlatform)
+        desc_node = MagicMock(inner_text=AsyncMock(return_value="Design modular POM architecture using Playwright."))
+
+        main_elem = MagicMock(
+            count=AsyncMock(return_value=1),
+            inner_text=AsyncMock(return_value="Location\nBengaluru\nExperience\n3+ years\nSkills\nPlaywright"),
+        )
+        platform.page = MagicMock()
+        platform.page.locator = MagicMock(return_value=MagicMock(first=main_elem))
+
+        target_job = Job(
+            job_id="wellfound-4953796",
+            title="Senior Automation Engineer",
+            company="Workong",
+            url="https://wellfound.com/jobs/4953796-senior-automation-engineer",
+            min_experience=5.0,
+            max_experience=10.0,
+            experience_imputed=True,
+        )
+
+        with patch.object(wellfound, "first_visible", new=AsyncMock(side_effect=[desc_node, None])):
+            self.assertTrue(await platform._read_description(target_job))
+
+        self.assertEqual(target_job.min_experience, 3.0)
+        self.assertIsNone(target_job.max_experience)
+        self.assertFalse(target_job.experience_imputed)
+

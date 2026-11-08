@@ -1170,6 +1170,7 @@ class AgentConfig(_Model):
 
         instahyre_limit = max((p.platform_limits.get("instahyre", 150) for p in active), default=150)
 
+        max_exp = max((p.filters.experience.max_years for p in active if p.filters and p.filters.experience), default=3.5)
         unified_filters = FilterRules(
             title_must_include_any=combined_includes,
             title_must_exclude_any=sorted(forbidden_tech_and_seniority),
@@ -1180,7 +1181,7 @@ class AgentConfig(_Model):
                 "proficient in ml libraries: scikit-learn, tensorflow or pytorch",
                 "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
             ],
-            experience=ExperienceRange(min_years=0, max_years=3.5),
+            experience=ExperienceRange(min_years=0, max_years=max_exp),
             min_salary_lpa=5.0,
             max_posted_days=3,
             require_easy_apply=True,
@@ -1299,6 +1300,7 @@ class AgentConfig(_Model):
 
         cutshort_limit = max((p.platform_limits.get("cutshort", 40) for p in active), default=40)
 
+        max_exp = max((p.filters.experience.max_years for p in active if p.filters and p.filters.experience), default=3.5)
         unified_filters = FilterRules(
             title_must_include_any=combined_includes,
             title_must_exclude_any=sorted(forbidden_tech_and_seniority),
@@ -1306,7 +1308,7 @@ class AgentConfig(_Model):
                 "bpo", "commission only", "unpaid", "registration fee", "security deposit",
                 "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
             ],
-            experience=ExperienceRange(min_years=0, max_years=3.5),
+            experience=ExperienceRange(min_years=0, max_years=max_exp),
             min_salary_lpa=5.0,
             max_posted_days=3,
             require_easy_apply=True,
@@ -1442,7 +1444,7 @@ class AgentConfig(_Model):
                 description_must_exclude_any=[
                     "bpo", "commission only", "unpaid", "registration fee", "security deposit",
                 ],
-                experience=ExperienceRange(min_years=0, max_years=3.5),
+                experience=ExperienceRange(min_years=0, max_years=max_exp),
                 min_salary_lpa=None,
                 max_posted_days=3,
                 min_rating=None,
@@ -1543,6 +1545,7 @@ class AgentConfig(_Model):
 
         wellfound_limit = max((p.platform_limits.get("wellfound", 50) for p in active), default=50)
 
+        max_exp = max((p.filters.experience.max_years for p in active if p.filters and p.filters.experience), default=3.5)
         unified_filters = FilterRules(
             title_must_include_any=combined_includes,
             title_must_exclude_any=sorted(forbidden_tech_and_seniority),
@@ -1553,7 +1556,7 @@ class AgentConfig(_Model):
                 "own the full mlops lifecycle", "deep expertise in data science workflows",
                 "prefers women", "women diversity", "women-only", "women only", "female only", "female diversity", "diversity drive"
             ],
-            experience=ExperienceRange(min_years=0, max_years=3.5),
+            experience=ExperienceRange(min_years=0, max_years=max_exp),
             min_salary_lpa=5.0,
             max_posted_days=7,
             require_easy_apply=False,
