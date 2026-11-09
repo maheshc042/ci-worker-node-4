@@ -194,6 +194,7 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
             for k in ["genai", "machine learning", "chatbot", "fastapi"]
         )
         is_ai_job |= bool(re.search(r"\b(?:ai|ml|llms?|gpt|rag|agents?|nlp)\b", text_for_resume))
+        is_ai_job |= bool(re.search(r"\bpython\s+(?:(?:backend|software)\s+)?(?:developer|engineer)\b", job.title, re.I))
         profiles = [
             p for p in (getattr(cfg, "profiles", []) or [])
             if p.enabled and getattr(p, "resume_file", None)
@@ -214,6 +215,14 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
     except Exception as exc:
         log.debug("cutshort.apply.dynamic_resume_failed", error=str(exc)[:80])
         return None, ""
+
+
+def _resume_label_pattern(path: Path) -> re.Pattern[str]:
+    stem = path.stem.rstrip("_")
+    # The rendered filename can omit the local trailing underscore or use
+    # it as the separator before Cutshort's four-character upload suffix.
+    suffix = r"(?:_{1,2}[A-Za-z0-9]{4}|_)?" if stem != path.stem else r"(?:_[A-Za-z0-9]{4})?"
+    return re.compile(rf"^{re.escape(stem)}{suffix}(?:[.]pdf)?$", re.IGNORECASE)
 
 
 class CutshortChatbot:
@@ -2144,11 +2153,9 @@ class CutshortPlatform(BaseJobPlatform):
 
         resume_path, target_track = _track_resume_for(job, modal_text)
         resume_verified = resume_path is None
+        resume_failure_path = None
         if modal_matches_job and resume_path is not None and resume_path.is_file():
-            filename = re.escape(resume_path.stem)
-            selected_resume = modal.get_by_text(
-                re.compile(rf"^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$", re.IGNORECASE)
-            ).first
+            selected_resume = modal.get_by_text(_resume_label_pattern(resume_path)).first
             try:
                 if not await selected_resume.is_visible():
                     upload = modal.get_by_text("Upload another resume", exact=True)
@@ -2159,7 +2166,9 @@ class CutshortPlatform(BaseJobPlatform):
                 resume_verified = True
             except Exception as exc:
                 log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
-                await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
+                resume_failure_path = await self.artifacts.capture_failure(
+                    self.page, "cutshort-resume-unverified", profile_name, job.job_id,
+                )
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)
@@ -2427,6 +2436,7 @@ class CutshortPlatform(BaseJobPlatform):
             outcome = ApplyOutcome(
                 ApplicationStatus.FAILED,
                 detail=f"Cutshort could not verify the selected {target_track} résumé",
+                screenshot_path=resume_failure_path,
             )
         elif await self._cloudflare_wall(blocked=True):
             outcome = ApplyOutcome(
@@ -2464,6 +2474,9 @@ class CutshortPlatform(BaseJobPlatform):
     async def handle_messages(self, *, deadline: float | None = None) -> list[dict]:
         """Inspect newly applied jobs, the Pending backlog and recent inbox threads."""
         self.require_mutation("messages.answer_flow")
+        timeout_minutes = (getattr(self, "config", None) or AgentConfig.load()).run.cutshort_questionnaire_timeout_minutes
+        sweep_deadline = monotonic() + timeout_minutes * 60
+        deadline = min(deadline, sweep_deadline) if deadline is not None else sweep_deadline
         self.questionnaire_stats = dict(checked=0, submitted=0, already_submitted=0,
                                         stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
         unanswered: list[dict] = []
@@ -2494,6 +2507,10 @@ class CutshortPlatform(BaseJobPlatform):
                         raise ValueError("Cutshort conversation points to a different job")
                     if await self._answer_current_chat(pane, job_url, unanswered, False, wait_for_widget=True):
                         seen_jobs.add(self._message_job_path(job_url))
+            except TimeoutError:
+                self.questionnaire_stats["incomplete"] = 1
+                log.warning("cutshort.messages.time_budget_exhausted", phase="new_applications")
+                break
             except Exception as exc:
                 self.questionnaire_stats["unconfirmed"] += 1
                 log.warning("cutshort.messages.applied_thread_unverified", job=job_url, error=str(exc)[:150])
@@ -2523,6 +2540,10 @@ class CutshortPlatform(BaseJobPlatform):
                     await self._scan_message_rows(
                         panel, set(), unanswered, deadline, pending=pending, seen_jobs=seen_jobs,
                     )
+            except TimeoutError:
+                self.questionnaire_stats["incomplete"] = 1
+                log.warning("cutshort.messages.time_budget_exhausted", phase="pending" if pending else "inbox")
+                break
             except Exception as exc:
                 self.questionnaire_stats["incomplete"] = 1
                 log.warning("cutshort.messages.scan_failed", pending=pending, error=str(exc)[:150])
@@ -2564,36 +2585,46 @@ class CutshortPlatform(BaseJobPlatform):
         rows = panel.locator("ul[role='list'] > div[role='button']")
         if seen_jobs is None:
             seen_jobs = set()
-        failed_here: set[tuple[str, str]] = set()
         at_end = False
         # Use the conversation row's company and full job title, not its changing preview.
         while deadline is None or monotonic() < deadline:
-            opened = False
-            for row in await rows.all():
-                if not await row.is_visible():
-                    continue
+            previous_count = len(processed)
+            batch = await rows.evaluate_all(r"""rows => rows.filter(row => row.getClientRects().length).map(row => {
+                const normalize = text => text.trim().replace(/\s+/g, ' ');
+                const title = [...row.querySelectorAll('div')].find(
+                    el => el.children.length === 0 && normalize(el.textContent).startsWith('For job ')
+                );
+                return {
+                    title: title ? normalize(title.textContent) : '',
+                    company: row.querySelector("img[alt$=' profile picture']")?.alt.replace(/ profile picture$/, '').trim() || '',
+                    age: row.querySelector('.conversation-date')?.textContent || '',
+                    questionnaire: row.innerText.includes('[Questionnaire]'),
+                };
+            })""")
+            for item in batch:
                 if deadline is not None and monotonic() >= deadline:
                     self.questionnaire_stats["incomplete"] = 1
                     return
-                title = (await safe_text(row.get_by_text(re.compile(r"^For job .+$")).first)).strip()
-                avatar = row.locator("img[alt$=' profile picture']").first
-                company = (await avatar.get_attribute("alt", timeout=800) or "").removesuffix(" profile picture").strip() if await avatar.count() else ""
+                company, title = item["company"], item["title"]
                 key = (company, title)
                 if not all(key):
                     # A visible conversation row with no exact identity needs investigation.
                     log.warning("cutshort.messages.row_identity_unavailable")
                     self.questionnaire_stats["incomplete"] = 1
                     continue
-                if key in processed or key in failed_here:
+                if key in processed:
                     continue
-                expected_questionnaire = "[Questionnaire]" in await safe_text(row)
+                processed.add(key)
+                expected_questionnaire = item["questionnaire"]
                 if not pending and not expected_questionnaire:
-                    age = self._message_age_hours(await safe_text(row.locator(".conversation-date").first))
+                    age = self._message_age_hours(item["age"])
                     if age is None or age >= 24:
                         self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
-                        processed.add(key)
                         continue
                 try:
+                    row = rows.filter(has=self.page.get_by_text(title, exact=True)).filter(
+                        has=self.page.get_by_alt_text(f"{company} profile picture", exact=True),
+                    )
                     await row.click(timeout=4000)
                     pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
                         has=self.page.get_by_text(title, exact=True),
@@ -2606,15 +2637,11 @@ class CutshortPlatform(BaseJobPlatform):
                         pane, key, unanswered, expected_questionnaire,
                     ):
                         seen_jobs.add(job_path)
-                    processed.add(key)
                 except Exception as exc:
                     self.questionnaire_stats["unconfirmed"] += 1
                     log.warning("cutshort.messages.thread_unverified", item=key, error=str(exc)[:120])
-                    failed_here.add(key)
-                    continue
-                opened = True
-                break
-            if opened:
+            if len(processed) > previous_count:
+                at_end = False
                 continue
             # Scroll the actual row container. At its end there is no further batch.
             moved = await rows.count() > 0 and await rows.last.evaluate("""row => {
@@ -2638,17 +2665,34 @@ class CutshortPlatform(BaseJobPlatform):
         """Inspect only the verified conversation pane."""
         self.questionnaire_stats["checked"] += 1
         index = self.questionnaire_stats["checked"]
-        await self.artifacts.dump_html(self.page, "questionnaire-before", "Cutshort", str(index))
-        widgets = pane.locator("div:has(> #message_response_type_screening)")
+        widget_selector = (
+            "div:has(> #message_response_type_screening):has(form:visible:is("
+            ":has(fieldset), :has(textarea), :has(button:text-is('Submit')), "
+            ":has(button:text-is('Send response')), :has(:text-is('Questionnaire submitted!')), "
+            ":has(:text-is('Your response has been recorded'))))"
+        )
+        widgets = pane.locator(widget_selector)
         if expected_questionnaire or wait_for_widget:
-            ready = await first_visible(pane, ["div:has(> #message_response_type_screening)"], timeout_ms=5000)
+            ready = await first_visible(pane, [widget_selector], timeout_ms=5000)
             if ready is None and expected_questionnaire:
+                await self.artifacts.dump_html(self.page, "questionnaire-missing", "Cutshort", str(index))
                 raise ValueError("Cutshort questionnaire widget did not load")
         scopes = [widget for widget in await widgets.all() if await widget.is_visible()]
         handled = bool(scopes)
+        issue = False
+        captured = False
         for scope in scopes or [pane]:
+            receipt = scope.locator(
+                "form :is(:text-is('Questionnaire submitted!'), :text-is('Your response has been recorded')):visible"
+            )
+            if scopes and await receipt.count():
+                self.questionnaire_stats["already_submitted"] += 1
+                continue
+            if scopes and not captured:
+                await self.artifacts.dump_html(self.page, "questionnaire-before", "Cutshort", str(index))
+                captured = True
             # A conversation row does not establish which résumé a file question asks for.
-            chatbot = CutshortChatbot(scope, self.answers, resume_path=None)
+            chatbot = CutshortChatbot(scope, self.answers, max_questions=1, resume_path=None)
             success, answered, error_msg = await chatbot.run()
             if chatbot.submitted:
                 self.questionnaire_stats["submitted"] += 1
@@ -2656,11 +2700,14 @@ class CutshortPlatform(BaseJobPlatform):
             elif chatbot.already_submitted:
                 self.questionnaire_stats["already_submitted"] += 1
             elif not chatbot.unanswered and (not success or scopes):
-                self.questionnaire_stats["unconfirmed"] += 1
+                issue = True
                 log.warning("cutshort.messages.unconfirmed", thread=key, reason=error_msg or "questionnaire form missing")
             for question in chatbot.unanswered:
                 if question not in unanswered:
                     unanswered.append(question)
             handled |= chatbot.submitted or chatbot.already_submitted or bool(chatbot.unanswered)
-        await self.artifacts.dump_html(self.page, "questionnaire-after", "Cutshort", str(index))
+        if issue:
+            self.questionnaire_stats["unconfirmed"] += 1
+        if captured or issue:
+            await self.artifacts.dump_html(self.page, "questionnaire-after", "Cutshort", str(index))
         return handled

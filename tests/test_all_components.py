@@ -6932,6 +6932,41 @@ class TestCutshortConversationReceipt(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
+    def test_python_track_and_resume_label_keep_tracks_distinct(self):
+        from naukri_agent.platforms.cutshort import _resume_label_pattern, _track_resume_for
+
+        job = Job("cutshort-python", "Python developer", "Example", "https://cutshort.io/job/example")
+        path, track = _track_resume_for(job)
+        self.assertEqual(track, "AI / Python Engineer")
+        full_stack = path.with_stem(path.stem + "_1_")
+        self.assertTrue(_resume_label_pattern(full_stack).fullmatch(full_stack.stem + "_X9aB.pdf"))
+        self.assertTrue(_resume_label_pattern(full_stack).fullmatch(full_stack.stem.rstrip("_") + "_X9aB"))
+        self.assertIsNone(_resume_label_pattern(path).fullmatch(full_stack.stem.rstrip("_") + "_X9aB"))
+
+    async def test_one_thread_with_multiple_failed_forms_counts_once(self):
+        from naukri_agent.platforms import cutshort
+
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.page = MagicMock()
+        platform.answers = MagicMock()
+        platform.artifacts = MagicMock(dump_html=AsyncMock())
+        platform.questionnaire_stats = dict(checked=0, submitted=0, already_submitted=0, unconfirmed=0)
+        pane = MagicMock()
+        scopes = [MagicMock(is_visible=AsyncMock(return_value=True)) for _ in range(3)]
+        pane.locator.return_value.all = AsyncMock(return_value=scopes)
+        for scope in scopes:
+            scope.locator.return_value.count = AsyncMock(return_value=0)
+        scopes[0].locator.return_value.count.return_value = 1
+        chatbot = MagicMock(
+            run=AsyncMock(return_value=(False, 0, "invalid form")),
+            submitted=False, already_submitted=False, unanswered=[],
+        )
+        with patch.object(cutshort, "CutshortChatbot", return_value=chatbot) as bot_factory:
+            await platform._answer_current_chat(pane, "example", [], False)
+
+        self.assertEqual(bot_factory.call_count, 2)
+        self.assertEqual(platform.questionnaire_stats, dict(checked=1, submitted=0, already_submitted=1, unconfirmed=1))
+
     def test_one_day_window_requires_a_verifiable_age(self):
         from naukri_agent.platforms.cutshort import CutshortPlatform
 
@@ -6956,28 +6991,24 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         panel = MagicMock()
         rows = panel.locator.return_value
 
-        def make_row(index, age, text=""):
-            row = MagicMock(is_visible=AsyncMock(return_value=True), click=AsyncMock())
-            row.count = AsyncMock(return_value=1)
-            row.inner_text = AsyncMock(return_value=text)
-            title = row.get_by_text.return_value.first
-            title.count = AsyncMock(return_value=1)
-            title.inner_text = AsyncMock(return_value=f"For job Engineer {index}")
-            avatar = MagicMock(count=AsyncMock(return_value=1),
-                               get_attribute=AsyncMock(return_value="Example profile picture"))
-            date = MagicMock(first=MagicMock(count=AsyncMock(return_value=1),
-                                            inner_text=AsyncMock(return_value=age)))
-            avatar_selector = MagicMock(first=avatar)
-            row.locator.side_effect = lambda selector: date if selector == ".conversation-date" else avatar_selector
-            return row
+        by_title = {}
+
+        def make_row(index, age, questionnaire=False):
+            title = f"For job Engineer {index}"
+            row = MagicMock(click=AsyncMock())
+            row.filter.return_value = row
+            by_title[title] = row
+            return dict(title=title, company="Example", age=age, questionnaire=questionnaire), row
 
         recent = [make_row(i, "23 hours ago") for i in range(66)]
-        recent[0].click.side_effect = RuntimeError("row did not open")
-        stale = make_row(100, "2 days ago")
-        unknown = make_row(101, "yesterday")
-        tagged = make_row(102, "2 days ago", "[Questionnaire]")
-        rows.all = AsyncMock(side_effect=[recent[:2], *([row] for row in recent[2:]), [tagged], [stale, unknown], []])
-        rows.count = AsyncMock(return_value=len(recent) + 2)
+        recent[0][1].click.side_effect = RuntimeError("row did not open")
+        stale, stale_row = make_row(100, "2 days ago")
+        unknown, unknown_row = make_row(101, "yesterday")
+        tagged, tagged_row = make_row(102, "2 days ago", True)
+        platform.page.get_by_text.side_effect = lambda text, **_: text
+        rows.filter.side_effect = lambda *, has: by_title[has]
+        rows.evaluate_all = AsyncMock(return_value=[*(data for data, _ in recent), tagged, stale, unknown])
+        rows.count = AsyncMock(return_value=len(recent) + 3)
         rows.last.evaluate = AsyncMock(return_value=False)
 
         processed = set()
@@ -6985,17 +7016,18 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
             await platform._scan_message_rows(panel, processed, [], None)
 
         self.assertEqual(platform._answer_current_chat.await_count, 66)
-        recent[0].click.assert_awaited_once()
-        stale.click.assert_not_called()
-        unknown.click.assert_not_called()
-        tagged.click.assert_awaited_once()
+        recent[0][1].click.assert_awaited_once()
+        stale_row.click.assert_not_called()
+        unknown_row.click.assert_not_called()
+        tagged_row.click.assert_awaited_once()
         self.assertEqual(platform.questionnaire_stats, dict(stale=1, unknown_age=1, unconfirmed=1, incomplete=0))
 
-        rows.all = AsyncMock(side_effect=[[stale], [unknown], [], []])
+        self.assertEqual(rows.evaluate_all.await_count, 3)
+        rows.evaluate_all.return_value = [stale, unknown]
         with patch.object(cutshort, "human_pause", new=AsyncMock()):
             await platform._scan_message_rows(panel, set(), [], None, pending=True)
-        stale.click.assert_awaited_once()
-        unknown.click.assert_awaited_once()
+        stale_row.click.assert_awaited_once()
+        unknown_row.click.assert_awaited_once()
 
     async def test_sweep_checks_new_application_then_waits_for_pending_rows(self):
         from naukri_agent.platforms import cutshort

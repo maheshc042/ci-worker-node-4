@@ -123,6 +123,7 @@ run:
   screenshot_on_failure: true
   screenshot_on_success: false
   run_timeout_minutes: 90          # 90-minute allowance for multi-platform completion
+  cutshort_questionnaire_timeout_minutes: 15
 
 # Naukri's primary feed. Profiles may also opt into experience-filtered Search.
 recommended:

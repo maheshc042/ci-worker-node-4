@@ -444,6 +444,7 @@ class RunConfig(_Model):
     screenshot_on_failure: bool = True
     screenshot_on_success: bool = False
     run_timeout_minutes: int = Field(default=90, ge=1, le=1_440)
+    cutshort_questionnaire_timeout_minutes: int = Field(default=15, ge=1, le=90)
     # Max submits to a single company per run. Five applications to one
     # employer in ten minutes reads as spam to recruiters and burns slots
     # better spent across companies. Override in config.yaml under `run:`.

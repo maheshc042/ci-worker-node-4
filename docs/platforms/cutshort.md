@@ -27,9 +27,9 @@ An applied listing can disappear or show stale controls when reopened. Confirmat
 
 1. After the application pass, the orchestrator can run the separate sweep when mutations are enabled and enough time remains. Dry-run planning skips it.
 2. Reopen verified conversations from this run's applications and inspect each one for screening. Then open `https://cutshort.io/profile/candidate-conversations?stage=awaiting` and focus Pending through `#tab-awaiting`.
-3. Wait for conversation rows or an explicit empty state before scanning Pending and then the inbox. Scroll each list to its end and deduplicate handled questionnaires by verified job link across passes. The run time budget still applies.
+3. Wait for conversation rows or an explicit empty state before scanning Pending and then the inbox. Read each batch of rows together, scroll to discover further batches and deduplicate handled questionnaires by verified job link. The sweep uses at most 15 minutes by default, within the overall run budget. Set `run.cutshort_questionnaire_timeout_minutes` to adjust it. Report incomplete coverage if the time budget expires.
 4. Include the Pending backlog and explicitly tagged questionnaire rows regardless of the displayed conversation age. The rolling 24-hour cutoff applies to other inbox rows. Report older and unknown-age inbox skips separately.
-5. Verify the opened conversation shows the row's full job title and company. Inspect each screening widget in that conversation. Count an existing exact form receipt separately.
+5. Verify the opened conversation shows the row's full job title and company. Inspect screening widgets with a supported visible form or exact receipt. Count existing exact receipts separately, and count unconfirmed processing at most once per opened thread.
 6. Resolve configured answers and dates. Preserve an already selected answer when it matches the resolved option. Verify required controls. File questions without verified document context go to review.
 7. Unresolved answers block questionnaire submission and return review items.
 8. Click Submit once. If the same form asks “Responses cannot be changed after submission. Are you sure?”, click its Yes control once.
