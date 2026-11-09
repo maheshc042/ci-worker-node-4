@@ -2403,6 +2403,9 @@ class CutshortPlatform(BaseJobPlatform):
             confirmed=confirmed,
         )
         if confirmed:
+            if not hasattr(self, "_applied_conversations"):
+                self._applied_conversations = {}
+            self._applied_conversations[job.url] = conversation_url
             outcome = ApplyOutcome(
                 ApplicationStatus.APPLIED,
                 detail="Application confirmed",
@@ -2459,14 +2462,41 @@ class CutshortPlatform(BaseJobPlatform):
     # Phase 2 Message Handling (Questionnaire Sweep)
     # ---------------------------------------------------------
     async def handle_messages(self, *, deadline: float | None = None) -> list[dict]:
-        """Scan the last 24 hours of Pending and the inbox within the run budget."""
+        """Inspect newly applied jobs, the Pending backlog and recent inbox threads."""
         self.require_mutation("messages.answer_flow")
         self.questionnaire_stats = dict(checked=0, submitted=0, already_submitted=0,
                                         stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
-        processed: set[tuple[str, str]] = set()
         unanswered: list[dict] = []
+        seen_jobs: set[str] = set()
         base_url = "https://cutshort.io/profile/candidate-conversations"
         log.info("cutshort.messages.start")
+        for job_url, conversation_url in getattr(self, "_applied_conversations", {}).items():
+            if deadline is not None and monotonic() >= deadline:
+                self.questionnaire_stats["incomplete"] = 1
+                break
+            try:
+                remaining = max(0, deadline - monotonic()) if deadline is not None else None
+                async with asyncio.timeout(remaining):
+                    await self.page.goto(conversation_url, wait_until="domcontentloaded", timeout=20000)
+                    current = urlsplit(self.page.url)
+                    expected = urlsplit(conversation_url)
+                    if (current.hostname != expected.hostname
+                        or current.path not in {"/profile/conversations/candidate", "/profile/candidate-conversations"}
+                        or parse_qs(current.query).get("thread") != parse_qs(expected.query).get("thread")):
+                        raise ValueError("Cutshort conversation changed while opening the thread")
+                    pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
+                        has=self.page.get_by_text("View full job description", exact=True),
+                    )
+                    href = await pane.get_by_text("View full job description", exact=True).get_attribute(
+                        "href", timeout=7000,
+                    )
+                    if not href or self._message_job_path(href) != self._message_job_path(job_url):
+                        raise ValueError("Cutshort conversation points to a different job")
+                    if await self._answer_current_chat(pane, job_url, unanswered, False, wait_for_widget=True):
+                        seen_jobs.add(self._message_job_path(job_url))
+            except Exception as exc:
+                self.questionnaire_stats["unconfirmed"] += 1
+                log.warning("cutshort.messages.applied_thread_unverified", job=job_url, error=str(exc)[:150])
         for pending in (True, False):
             if deadline is not None and monotonic() >= deadline:
                 self.questionnaire_stats["incomplete"] = 1
@@ -2483,13 +2513,29 @@ class CutshortPlatform(BaseJobPlatform):
                 await panel.wait_for(state="visible", timeout=8000)
                 remaining = max(0, deadline - monotonic()) if deadline is not None else None
                 async with asyncio.timeout(remaining):
-                    await self._scan_message_rows(panel, processed, unanswered, deadline)
+                    ready = await first_visible(panel, [
+                        "ul[role='list'] > div[role='button']",
+                        ":text-is('No conversations here.')",
+                        ":text-is('No conversations here')",
+                    ], timeout_ms=10000)
+                    if ready is None:
+                        raise ValueError("Cutshort conversation rows or empty state did not load")
+                    await self._scan_message_rows(
+                        panel, set(), unanswered, deadline, pending=pending, seen_jobs=seen_jobs,
+                    )
             except Exception as exc:
                 self.questionnaire_stats["incomplete"] = 1
                 log.warning("cutshort.messages.scan_failed", pending=pending, error=str(exc)[:150])
         self.questionnaire_stats["questions"] = len(unanswered)
         log.info("cutshort.messages.done", **self.questionnaire_stats)
         return unanswered
+
+    @staticmethod
+    def _message_job_path(href: str) -> str:
+        job = urlsplit(urljoin("https://cutshort.io", href))
+        if job.hostname not in {"cutshort.io", "www.cutshort.io"} or not job.path.startswith("/job/"):
+            raise ValueError("Cutshort conversation has no supported job link")
+        return job.path.rstrip("/")
 
     @staticmethod
     def _message_age_hours(text: str) -> float | None:
@@ -2513,8 +2559,11 @@ class CutshortPlatform(BaseJobPlatform):
 
     async def _scan_message_rows(
         self, panel: Locator, processed: set[tuple[str, str]], unanswered: list[dict], deadline: float | None,
+        *, pending: bool = False, seen_jobs: set[str] | None = None,
     ) -> None:
         rows = panel.locator("ul[role='list'] > div[role='button']")
+        if seen_jobs is None:
+            seen_jobs = set()
         failed_here: set[tuple[str, str]] = set()
         at_end = False
         # Use the conversation row's company and full job title, not its changing preview.
@@ -2529,7 +2578,6 @@ class CutshortPlatform(BaseJobPlatform):
                 title = (await safe_text(row.get_by_text(re.compile(r"^For job .+$")).first)).strip()
                 avatar = row.locator("img[alt$=' profile picture']").first
                 company = (await avatar.get_attribute("alt", timeout=800) or "").removesuffix(" profile picture").strip() if await avatar.count() else ""
-                date_label = await safe_text(row.locator(".conversation-date").first)
                 key = (company, title)
                 if not all(key):
                     # A visible conversation row with no exact identity needs investigation.
@@ -2538,21 +2586,26 @@ class CutshortPlatform(BaseJobPlatform):
                     continue
                 if key in processed or key in failed_here:
                     continue
-                age = self._message_age_hours(date_label)
-                if age is None or age >= 24:
-                    self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
-                    processed.add(key)
-                    continue
+                expected_questionnaire = "[Questionnaire]" in await safe_text(row)
+                if not pending and not expected_questionnaire:
+                    age = self._message_age_hours(await safe_text(row.locator(".conversation-date").first))
+                    if age is None or age >= 24:
+                        self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
+                        processed.add(key)
+                        continue
                 try:
-                    expected_questionnaire = "[Questionnaire]" in await safe_text(row)
                     await row.click(timeout=4000)
                     pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
                         has=self.page.get_by_text(title, exact=True),
                     ).filter(has=self.page.get_by_text(company, exact=True))
-                    await pane.get_by_text("View full job description", exact=True).wait_for(
-                        state="visible", timeout=6000,
+                    href = await pane.get_by_text("View full job description", exact=True).get_attribute(
+                        "href", timeout=6000,
                     )
-                    await self._answer_current_chat(pane, key, unanswered, expected_questionnaire)
+                    job_path = self._message_job_path(href or "")
+                    if job_path not in seen_jobs and await self._answer_current_chat(
+                        pane, key, unanswered, expected_questionnaire,
+                    ):
+                        seen_jobs.add(job_path)
                     processed.add(key)
                 except Exception as exc:
                     self.questionnaire_stats["unconfirmed"] += 1
@@ -2579,16 +2632,20 @@ class CutshortPlatform(BaseJobPlatform):
         self.questionnaire_stats["incomplete"] = 1
 
     async def _answer_current_chat(
-        self, pane: Locator, key: tuple[str, str], unanswered: list[dict], expected_questionnaire: bool,
-    ) -> None:
+        self, pane: Locator, key: str | tuple[str, str], unanswered: list[dict],
+        expected_questionnaire: bool, *, wait_for_widget: bool = False,
+    ) -> bool:
         """Inspect only the verified conversation pane."""
         self.questionnaire_stats["checked"] += 1
         index = self.questionnaire_stats["checked"]
         await self.artifacts.dump_html(self.page, "questionnaire-before", "Cutshort", str(index))
         widgets = pane.locator("div:has(> #message_response_type_screening)")
-        if expected_questionnaire:
-            await widgets.first.wait_for(state="visible", timeout=5000)
+        if expected_questionnaire or wait_for_widget:
+            ready = await first_visible(pane, ["div:has(> #message_response_type_screening)"], timeout_ms=5000)
+            if ready is None and expected_questionnaire:
+                raise ValueError("Cutshort questionnaire widget did not load")
         scopes = [widget for widget in await widgets.all() if await widget.is_visible()]
+        handled = bool(scopes)
         for scope in scopes or [pane]:
             # A conversation row does not establish which résumé a file question asks for.
             chatbot = CutshortChatbot(scope, self.answers, resume_path=None)
@@ -2604,4 +2661,6 @@ class CutshortPlatform(BaseJobPlatform):
             for question in chatbot.unanswered:
                 if question not in unanswered:
                     unanswered.append(question)
+            handled |= chatbot.submitted or chatbot.already_submitted or bool(chatbot.unanswered)
         await self.artifacts.dump_html(self.page, "questionnaire-after", "Cutshort", str(index))
+        return handled

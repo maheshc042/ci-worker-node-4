@@ -53,7 +53,7 @@ Profile skill lists can support a familiarity answer. They do not inherit the de
 
 Review-answer reuse and human-answer cascades require identical normalized question wording. Similar sentences naming different skills, cities or requirements must not share answers. Historical fuzzy/cascade resolutions are not trusted as new reuse sources; this does not constitute a full audit of the historical KB.
 
-The Cutshort Messages sweep examines Pending and inbox threads from the last 24 hours. It reports questionnaire outcomes separately from applications and uses the remaining run time as its bound. Its current code does not restrict every thread to an eligible job applied by this agent. Read that platform's limitations before enabling the sweep.
+The Cutshort Messages sweep checks this run's verified application conversations, the Pending backlog, tagged questionnaire rows and other inbox threads from the last 24 hours. It reports questionnaire outcomes separately from applications and uses the remaining run time as its bound. Its current code does not restrict every backlog thread to an eligible job applied by this agent. Read that platform's limitations before enabling the sweep.
 
 ## Verification and maintenance
 

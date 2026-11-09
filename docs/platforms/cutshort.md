@@ -26,9 +26,9 @@ An applied listing can disappear or show stale controls when reopened. Confirmat
 ## Messages questionnaires in order
 
 1. After the application pass, the orchestrator can run the separate sweep when mutations are enabled and enough time remains. Dry-run planning skips it.
-2. Open `https://cutshort.io/profile/candidate-conversations?stage=awaiting` and focus Pending through `#tab-awaiting`.
-3. Scan Pending and then the unfiltered inbox. Scroll the conversation list to its end and share inspected-thread keys across both passes. The run time budget still applies.
-4. Inspect threads from the last 24 hours. Count older and unknown-age threads separately. A relative label like Yesterday alone cannot establish a rolling 24-hour age.
+2. Reopen verified conversations from this run's applications and inspect each one for screening. Then open `https://cutshort.io/profile/candidate-conversations?stage=awaiting` and focus Pending through `#tab-awaiting`.
+3. Wait for conversation rows or an explicit empty state before scanning Pending and then the inbox. Scroll each list to its end and deduplicate handled questionnaires by verified job link across passes. The run time budget still applies.
+4. Include the Pending backlog and explicitly tagged questionnaire rows regardless of the displayed conversation age. The rolling 24-hour cutoff applies to other inbox rows. Report older and unknown-age inbox skips separately.
 5. Verify the opened conversation shows the row's full job title and company. Inspect each screening widget in that conversation. Count an existing exact form receipt separately.
 6. Resolve configured answers and dates. Preserve an already selected answer when it matches the resolved option. Verify required controls. File questions without verified document context go to review.
 7. Unresolved answers block questionnaire submission and return review items.
@@ -40,10 +40,10 @@ Free-form recruiter questions go to review. The general chat composer is separat
 
 ## Current limitations
 
-- The sweep selects fresh threads from Pending and the inbox. It does not verify every thread against the agent's application records and current job eligibility.
+- The backlog sweep verifies the conversation's job identity. It does not verify every thread against the agent's application records and current job eligibility.
 - Shared answer-engine fallbacks still need a caller-by-caller integrity review.
 - The adapter treats an unresolved résumé mapping differently from a configured file that cannot be verified. A configured file mismatch blocks Send, but the absence of a mapping is not itself proof that the existing résumé is the right one.
-- Unsupported thread layouts and unconfirmed attempts appear in the sweep report. Threads that arrive after the sweep can be picked up on the next run if still within the age window.
+- Unsupported thread layouts and unconfirmed attempts appear in the sweep report. Questionnaires that arrive after the sweep can be picked up on the next run.
 
 ## Evidence
 

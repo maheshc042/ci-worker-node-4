@@ -242,11 +242,11 @@ def format_run_summary(
     if stats.questionnaire_stats:
         q = stats.questionnaire_stats
         lines.append(
-            f"  • Cutshort questionnaires (24h) — {q.get('checked', 0)} threads checked | "
+            f"  • Cutshort questionnaires — {q.get('checked', 0)} threads checked | "
             f"{q.get('submitted', 0)} submitted | {q.get('already_submitted', 0)} already submitted | "
             f"{q.get('questions', 0)} questions to review ({q.get('queued', 0)} queued) | "
-            f"{q.get('unconfirmed', 0)} unconfirmed | {q.get('stale', 0)} older | "
-            f"{q.get('unknown_age', 0)} unknown age"
+            f"{q.get('unconfirmed', 0)} unconfirmed | {q.get('stale', 0)} older inbox threads skipped | "
+            f"{q.get('unknown_age', 0)} inbox threads with unknown age skipped"
         )
 
     if stats.walkin_alerts:

@@ -6948,18 +6948,18 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         platform = object.__new__(cutshort.CutshortPlatform)
         platform.page = MagicMock()
         platform.questionnaire_stats = dict(stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
-        platform._answer_current_chat = AsyncMock()
+        platform._answer_current_chat = AsyncMock(return_value=False)
         pane = MagicMock()
         pane.filter.return_value = pane
-        pane.get_by_text.return_value.wait_for = AsyncMock()
+        pane.get_by_text.return_value.get_attribute = AsyncMock(return_value="/job/example")
         platform.page.locator.return_value = pane
         panel = MagicMock()
         rows = panel.locator.return_value
 
-        def make_row(index, age):
+        def make_row(index, age, text=""):
             row = MagicMock(is_visible=AsyncMock(return_value=True), click=AsyncMock())
             row.count = AsyncMock(return_value=1)
-            row.inner_text = AsyncMock(return_value="[Questionnaire]")
+            row.inner_text = AsyncMock(return_value=text)
             title = row.get_by_text.return_value.first
             title.count = AsyncMock(return_value=1)
             title.inner_text = AsyncMock(return_value=f"For job Engineer {index}")
@@ -6975,7 +6975,8 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         recent[0].click.side_effect = RuntimeError("row did not open")
         stale = make_row(100, "2 days ago")
         unknown = make_row(101, "yesterday")
-        rows.all = AsyncMock(side_effect=[recent[:2], *([row] for row in recent[2:]), [stale, unknown], []])
+        tagged = make_row(102, "2 days ago", "[Questionnaire]")
+        rows.all = AsyncMock(side_effect=[recent[:2], *([row] for row in recent[2:]), [tagged], [stale, unknown], []])
         rows.count = AsyncMock(return_value=len(recent) + 2)
         rows.last.evaluate = AsyncMock(return_value=False)
 
@@ -6983,8 +6984,41 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         with patch.object(cutshort, "human_pause", new=AsyncMock()):
             await platform._scan_message_rows(panel, processed, [], None)
 
-        self.assertEqual(platform._answer_current_chat.await_count, 65)
+        self.assertEqual(platform._answer_current_chat.await_count, 66)
         recent[0].click.assert_awaited_once()
         stale.click.assert_not_called()
         unknown.click.assert_not_called()
+        tagged.click.assert_awaited_once()
         self.assertEqual(platform.questionnaire_stats, dict(stale=1, unknown_age=1, unconfirmed=1, incomplete=0))
+
+        rows.all = AsyncMock(side_effect=[[stale], [unknown], [], []])
+        with patch.object(cutshort, "human_pause", new=AsyncMock()):
+            await platform._scan_message_rows(panel, set(), [], None, pending=True)
+        stale.click.assert_awaited_once()
+        unknown.click.assert_awaited_once()
+
+    async def test_sweep_checks_new_application_then_waits_for_pending_rows(self):
+        from naukri_agent.platforms import cutshort
+
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.require_mutation = MagicMock()
+        platform.page = MagicMock()
+        job_url = "https://cutshort.io/job/example"
+        thread_url = "https://cutshort.io/profile/candidate-conversations?thread=new"
+        platform._applied_conversations = {job_url: thread_url}
+        platform.page.goto = AsyncMock(side_effect=lambda url, **_: setattr(platform.page, "url", url))
+        locator = platform.page.locator.return_value
+        locator.first = locator
+        locator.filter.return_value = locator
+        locator.wait_for = AsyncMock()
+        locator.get_attribute = AsyncMock(return_value="true")
+        locator.get_by_text.return_value.get_attribute = AsyncMock(return_value="/job/example")
+        events = []
+        platform._answer_current_chat = AsyncMock(side_effect=lambda *a, **k: events.append("new") or True)
+        platform._scan_message_rows = AsyncMock(
+            side_effect=lambda *a, pending, seen_jobs, **k: events.append((pending, set(seen_jobs))),
+        )
+        ready = AsyncMock(side_effect=lambda *a, **k: events.append("loaded") or locator)
+        with patch.object(cutshort, "first_visible", ready):
+            await platform.handle_messages()
+        self.assertEqual(events, ["new", "loaded", (True, {"/job/example"}), "loaded", (False, {"/job/example"})])
