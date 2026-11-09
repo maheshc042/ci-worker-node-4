@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from naukri_agent.config import AgentConfig
 from naukri_agent.core.filters import FilterEngine
@@ -4316,7 +4316,7 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
                 return object() if receipt and final_btn.click.await_count else None
             if any("Responses cannot be changed" in s for s in selectors):
                 return object() if confirm_btn is not None and btn.click.await_count else None
-            if selectors == ["button[type='submit']:text-is('Yes')"]:
+            if selectors == ["button:text-is('Yes')"]:
                 self.assertIs(_page, page.locator("form:has(fieldset)").first)
                 return confirm_btn
             # Only the submit-button candidate lists (they contain a
@@ -4345,6 +4345,23 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok, error)
         btn.click.assert_awaited_once()
         confirm_btn.click.assert_awaited_once()
+
+    async def test_invalid_questionnaire_does_not_click_submit(self):
+        page, btn = self._submit_page()
+        btn.evaluate.return_value = False
+        ok, _, error = await self._run_submit(page, btn)
+        self.assertFalse(ok)
+        self.assertIn("invalid", error)
+        btn.click.assert_not_awaited()
+
+    async def test_disappearing_submit_button_does_not_confirm(self):
+        page, btn = self._submit_page()
+        btn.count = AsyncMock(return_value=0)
+        btn.is_visible = AsyncMock(return_value=False)
+        ok, _, error = await self._run_submit(page, btn)
+        self.assertFalse(ok)
+        self.assertIn("submit unconfirmed", error)
+        btn.click.assert_awaited_once()
 
     async def test_selected_questionnaire_option_is_not_clicked_again(self):
         bot = self._bot()
@@ -4390,6 +4407,8 @@ class TestCutshortDateFileRadiogroupFills(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bot._match_chip("10 years", "1"))
         self.assertFalse(bot._match_chip("Noida", "No"))
         self.assertTrue(bot._match_chip("Yes, this works", "Yes"))
+        self.assertTrue(bot._match_chip("I am not in this location but can relocate", "I am not in this location but can relocate"))
+        self.assertTrue(bot._match_chip("Served notice, available immediately", "Served notice, available immediately"))
 
     async def test_submit_fail_closed_when_questionnaire_still_visible(self):
         # Run-644 ground truth: click "succeeded", answered=3, but the
@@ -6913,50 +6932,59 @@ class TestCutshortConversationReceipt(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
-    async def test_process_questionnaire_rows_handles_multiple_threads_and_reopens_tab(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
+    def test_one_day_window_requires_a_verifiable_age(self):
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        age = CutshortPlatform._message_age_hours
+        self.assertLess(age("23 hours ago"), 24)
+        self.assertEqual(age("a day ago"), 24)
+        self.assertGreater(age("2 days ago"), 24)
+        self.assertIsNone(age("yesterday"))
+        self.assertIsNone(age(""))
+
+    async def test_scan_continues_after_failed_row_and_has_no_count_cap(self):
         from naukri_agent.platforms import cutshort
 
         platform = object.__new__(cutshort.CutshortPlatform)
         platform.page = MagicMock()
-        platform.page.url = "https://cutshort.io/profile/candidate-conversations?stage=awaiting"
-        platform._open_awaiting_tab = AsyncMock()
-        platform._close_chat_overlay = AsyncMock()
-        platform._answer_current_chat = AsyncMock(return_value=[])
+        platform.questionnaire_stats = dict(stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
+        platform._answer_current_chat = AsyncMock()
+        pane = MagicMock()
+        pane.filter.return_value = pane
+        pane.get_by_text.return_value.wait_for = AsyncMock()
+        platform.page.locator.return_value = pane
+        panel = MagicMock()
+        rows = panel.locator.return_value
 
-        # Create 3 mock rows representing 3 pending questionnaire cards
-        def make_row(title_text):
-            r = MagicMock()
-            r.count = AsyncMock(return_value=1)
-            r.is_visible = AsyncMock(return_value=True)
-            r.inner_text = AsyncMock(return_value=title_text)
-            r.click = AsyncMock()
-            r.scroll_into_view_if_needed = AsyncMock()
-            return r
+        def make_row(index, age):
+            row = MagicMock(is_visible=AsyncMock(return_value=True), click=AsyncMock())
+            row.count = AsyncMock(return_value=1)
+            row.inner_text = AsyncMock(return_value="[Questionnaire]")
+            title = row.get_by_text.return_value.first
+            title.count = AsyncMock(return_value=1)
+            title.inner_text = AsyncMock(return_value=f"For job Engineer {index}")
+            avatar = MagicMock(count=AsyncMock(return_value=1),
+                               get_attribute=AsyncMock(return_value="Example profile picture"))
+            date = MagicMock(first=MagicMock(count=AsyncMock(return_value=1),
+                                            inner_text=AsyncMock(return_value=age)))
+            avatar_selector = MagicMock(first=avatar)
+            row.locator.side_effect = lambda selector: date if selector == ".conversation-date" else avatar_selector
+            return row
 
-        row1 = make_row("Techjays For job AI Quality Engineer 28 minutes ago [Questionnaire]")
-        row2 = make_row("Incubyte For job Data Craftsperson - I 29 minutes ago [Questionnaire]")
-        row3 = make_row("TrueBlue For job Software Engineer 30 minutes ago [Questionnaire]")
-
-        locator_mock = MagicMock()
-        locator_mock.count = AsyncMock(return_value=3)
-        locator_mock.nth = MagicMock(side_effect=lambda idx: [row1, row2, row3][idx])
-        platform.page.locator = MagicMock(return_value=locator_mock)
+        recent = [make_row(i, "23 hours ago") for i in range(66)]
+        recent[0].click.side_effect = RuntimeError("row did not open")
+        stale = make_row(100, "2 days ago")
+        unknown = make_row(101, "yesterday")
+        rows.all = AsyncMock(side_effect=[recent[:2], *([row] for row in recent[2:]), [stale, unknown], []])
+        rows.count = AsyncMock(return_value=len(recent) + 2)
+        rows.last.evaluate = AsyncMock(return_value=False)
 
         processed = set()
-        with patch.object(cutshort.AgentConfig, "load") as mock_cfg:
-            mock_profile = MagicMock(enabled=True, platform_limits={"cutshort": 3})
-            mock_cfg.return_value.profiles = [mock_profile]
-            
-            # Run the sweep
-            unanswered = await platform._process_questionnaire_rows(processed)
+        with patch.object(cutshort, "human_pause", new=AsyncMock()):
+            await platform._scan_message_rows(panel, processed, [], None)
 
-        # Verified: all 3 rows were clicked and processed
-        self.assertEqual(len(processed), 3)
-        self.assertEqual(row1.click.await_count, 1)
-        self.assertEqual(row2.click.await_count, 1)
-        self.assertEqual(row3.click.await_count, 1)
-        # Verified: _open_awaiting_tab was invoked repeatedly across rounds
-        self.assertGreaterEqual(platform._open_awaiting_tab.await_count, 3)
-        self.assertEqual(platform._answer_current_chat.await_count, 3)
-
+        self.assertEqual(platform._answer_current_chat.await_count, 65)
+        recent[0].click.assert_awaited_once()
+        stale.click.assert_not_called()
+        unknown.click.assert_not_called()
+        self.assertEqual(platform.questionnaire_stats, dict(stale=1, unknown_age=1, unconfirmed=1, incomplete=0))

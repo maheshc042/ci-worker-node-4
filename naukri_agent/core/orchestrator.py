@@ -790,19 +790,22 @@ class Orchestrator:
                 # waiting for an answer.
                 # =========================================================
                 unbind_context("profile", "job_id")
-                message_platforms = [p for p in executed_platforms if hasattr(p, "handle_messages")]
+                message_platforms = [p for p in executed_platforms if p.platform_name == "cutshort"]
                 # The sweep and the cold-email campaign ran 14 minutes past the
                 # run timeout in run 291. Gate both on remaining budget.
                 sweep_budget_s = self.config.run.run_timeout_minutes * 60 - self.elapsed_s
                 sweep_online = False
-                if message_platforms and self.policy.may_mutate and sweep_budget_s >= 180:
+                if message_platforms and self.policy.may_mutate and sweep_budget_s > 15:
                     sweep_online = await _internet_available()
                     if not sweep_online:
                         log.warning("run.questionnaire_sweep.skipped_offline")
                         self.stats.errors.append(
                             "questionnaire sweep skipped: no internet connectivity"
                         )
+                elif message_platforms and self.policy.may_mutate:
+                    self.stats.errors.append("questionnaire sweep skipped: run time budget exhausted")
                 if sweep_online:
+                    sweep_deadline = time.monotonic() + sweep_budget_s
                     log.info(
                         "run.questionnaire_sweep.start",
                         platforms=[p.platform_name for p in message_platforms],
@@ -815,37 +818,33 @@ class Orchestrator:
                             m_platform.page = sweep_page
                             sweep_unanswered: list = []
                             try:
-                                sweep_unanswered = await m_platform.handle_messages() or []
+                                sweep_unanswered = await m_platform.handle_messages(deadline=sweep_deadline) or []
                             finally:
                                 if not sweep_page.is_closed():
                                     await sweep_page.close()
-                            # Persist sweep leftovers for training: Cutshort
-                            # questionnaires answered nothing for these (run
-                            # 539: Figma/React/workflow essays vanished). Cap
-                            # the burst; upsert dedupes repeats by
-                            # (profile, question).
+                            sweep_stats = getattr(m_platform, "questionnaire_stats", None)
+                            if sweep_stats:
+                                self.stats.questionnaire_stats = dict(sweep_stats)
+                                if sweep_stats["unconfirmed"] or sweep_stats["incomplete"]:
+                                    self.stats.errors.append("Cutshort questionnaire sweep had unconfirmed threads or incomplete coverage")
+                            # Persist every unresolved question. Repository upserts deduplicate repeats.
                             if sweep_unanswered and self.repo is not None:
-                                try:
-                                    sweep_profile = self.config.get_unified_cutshort_profile().name
-                                except Exception:
-                                    sweep_profile = ""
-                                if sweep_profile:
-                                    for _uq in (sweep_unanswered or [])[:15]:
-                                        try:
-                                            _qt = str(_uq.get("text", "")).strip()[:1000]
-                                            if not _qt:
-                                                continue
-                                            await self.repo.queue_question_for_review(
-                                                profile=sweep_profile,
-                                                question=_qt,
-                                                kind=str(_uq.get("kind", "unknown")),
-                                                options=list(_uq.get("options", []) or []),
-                                            )
-                                        except Exception:
-                                            continue
-                                    log.info("run.questionnaire_sweep.queued",
-                                             platform=m_platform.platform_name,
-                                             count=min(len(sweep_unanswered), 15))
+                                sweep_profile = self.config.get_unified_cutshort_profile().name
+                                queued = 0
+                                for question in sweep_unanswered:
+                                    try:
+                                        await self.repo.queue_question_for_review(
+                                            profile=sweep_profile,
+                                            question=question["text"],
+                                            kind=question["kind"],
+                                            options=question["options"],
+                                        )
+                                        queued += 1
+                                    except Exception as exc:
+                                        log.warning("run.questionnaire_sweep.queue_failed", error=str(exc)[:120])
+                                self.stats.questionnaire_stats["queued"] = queued
+                                if queued < len(sweep_unanswered):
+                                    self.stats.errors.append("Some Cutshort questionnaire questions could not be queued")
                         except Exception as exc:
                             log.warning(
                                 "run.questionnaire_sweep.platform_failed",

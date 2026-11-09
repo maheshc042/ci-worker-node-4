@@ -27,14 +27,14 @@ An applied listing can disappear or show stale controls when reopened. Confirmat
 
 1. After the application pass, the orchestrator can run the separate sweep when mutations are enabled and enough time remains. Dry-run planning skips it.
 2. Open `https://cutshort.io/profile/candidate-conversations?stage=awaiting` and focus Pending through `#tab-awaiting`.
-3. Process questionnaire rows, then inspect the unfiltered candidate inbox. Share processed-thread keys across both passes.
-4. Skip threads classified as older than three days. Relative timestamps that cannot be parsed do not establish that a thread is fresh.
-5. Save the opened thread and inspect its form. An existing Questionnaire submitted! or Your response has been recorded receipt ends processing.
-6. Resolve configured answers, including dates and supported uploads. Preserve an already selected answer when it matches the resolved option. Verify selection and required controls.
+3. Scan Pending and then the unfiltered inbox. Scroll the conversation list to its end and share inspected-thread keys across both passes. The run time budget still applies.
+4. Inspect threads from the last 24 hours. Count older and unknown-age threads separately. A relative label like Yesterday alone cannot establish a rolling 24-hour age.
+5. Verify the opened conversation shows the row's full job title and company. Inspect each screening widget in that conversation. Count an existing exact form receipt separately.
+6. Resolve configured answers and dates. Preserve an already selected answer when it matches the resolved option. Verify required controls. File questions without verified document context go to review.
 7. Unresolved answers block questionnaire submission and return review items.
 8. Click Submit once. If the same form asks “Responses cannot be changed after submission. Are you sure?”, click its Yes control once.
 9. Wait for Questionnaire submitted! or Your response has been recorded. A missing receipt leaves the questionnaire unconfirmed. Application and questionnaire confirmation remain separate.
-10. Save the after-state and return unresolved question items to the orchestrator for bounded, deduplicated review persistence.
+10. Save the after-state and queue every distinct unresolved question for review. Report questionnaire submissions, existing receipts, unresolved questions and unconfirmed attempts separately from applications.
 
 Free-form recruiter questions go to review. The general chat composer is separate from form submission. The application path does not answer questions before Send or immediately after Send.
 
@@ -43,7 +43,7 @@ Free-form recruiter questions go to review. The general chat composer is separat
 - The sweep selects fresh threads from Pending and the inbox. It does not verify every thread against the agent's application records and current job eligibility.
 - Shared answer-engine fallbacks still need a caller-by-caller integrity review.
 - The adapter treats an unresolved résumé mapping differently from a configured file that cannot be verified. A configured file mismatch blocks Send, but the absence of a mapping is not itself proof that the existing résumé is the right one.
-- An unconfirmed questionnaire without explicit unanswered items can produce a diagnostic warning without creating a question-review row.
+- Unsupported thread layouts and unconfirmed attempts appear in the sweep report. Threads that arrive after the sweep can be picked up on the next run if still within the age window.
 
 ## Evidence
 

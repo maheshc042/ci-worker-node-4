@@ -508,7 +508,7 @@ class FilterEngine:
                 for part in match
                 if part
             )
-            if paren_contents and _contains_any(paren_contents, rules.title_must_include_any):
+            if paren_contents:
                 head = re.sub(r"\([^()]*\)|\[[^\[\]]*\]", " ", job.title)
                 if not _contains_any(head, rules.title_must_include_any):
                     non_tech_head = _contains_any(head, NON_TECH_HEADS)

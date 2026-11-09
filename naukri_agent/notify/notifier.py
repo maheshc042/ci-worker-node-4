@@ -239,6 +239,16 @@ def format_run_summary(
                 f"{external} external | {scraped} scraped | {rejected} plan-rejected"
             )
 
+    if stats.questionnaire_stats:
+        q = stats.questionnaire_stats
+        lines.append(
+            f"  • Cutshort questionnaires (24h) — {q.get('checked', 0)} threads checked | "
+            f"{q.get('submitted', 0)} submitted | {q.get('already_submitted', 0)} already submitted | "
+            f"{q.get('questions', 0)} questions to review ({q.get('queued', 0)} queued) | "
+            f"{q.get('unconfirmed', 0)} unconfirmed | {q.get('stale', 0)} older | "
+            f"{q.get('unknown_age', 0)} unknown age"
+        )
+
     if stats.walkin_alerts:
         lines.append("")
         lines.append(f"{_walkin_radar_title()} ({len(stats.walkin_alerts)}):")

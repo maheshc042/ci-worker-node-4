@@ -3,13 +3,15 @@ Cutshort Platform Implementation (Direct-Action & Inbox Message Handler).
 """
 from __future__ import annotations
 
+import asyncio
 import re
+from time import monotonic
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlsplit
 
-from playwright.async_api import Page
+from playwright.async_api import Locator, Page
 
 from ..browser.artifacts import ArtifactStore
 from ..browser.resilience import (
@@ -219,7 +221,7 @@ class CutshortChatbot:
 
     def __init__(
         self,
-        page: Page,
+        page: Page | Locator,
         answers: AnswerEngine,
         max_questions: int = 10,
         resume_path: Path | None = None,
@@ -238,15 +240,13 @@ class CutshortChatbot:
         self.unanswered: list[dict] = []
 
     def _queue_unanswered(self, text: str, kind: str, options: list) -> None:
-        """Record an unanswerable question for human review (bounded)."""
+        """Record a distinct unanswerable question for human review."""
         text = (text or "").strip()[:500]
         if not text:
             return
-        if len(self.unanswered) >= 20:
-            return
         if any(u.get("text") == text for u in self.unanswered):
             return
-        self.unanswered.append({"text": text, "kind": kind, "options": list(options or [])[:12]})
+        self.unanswered.append({"text": text, "kind": kind, "options": list(options or [])})
 
     def _match_chip(self, chip_text: str, resolved_val: str) -> bool:
         """Match the resolved option or an explicit boolean answer."""
@@ -334,7 +334,7 @@ class CutshortChatbot:
                     await opt.evaluate("el => { el.focus && el.focus(); }")
                     for key in ("Space", "Enter"):
                         try:
-                            await self.page.keyboard.press(key)
+                            await opt.press(key)
                         except Exception as exc:
                             log.debug(
                                 "cutshort.chatbot.chip_click_failed",
@@ -418,18 +418,26 @@ class CutshortChatbot:
         """Returns (success, questions_answered, error_message)."""
         answered = 0
         self.unanswered = []
+        self.submitted = False
+        self.already_submitted = False
         receipt_selectors = [
-            ":is(:text-is('Questionnaire submitted!'), :text-is('Your response has been recorded'))",
+            ":text-is('Questionnaire submitted!')",
+            ":text-is('Your response has been recorded')",
         ]
 
         for attempt in range(self.max_questions):
             await human_pause(1200, 2000)
 
-            # Phase 1: Cutshort Form-based Questionnaires (Textareas + Fieldset Radios)
-            form_loc = self.page.locator("form:has(fieldset), form:has(textarea), form:has(button[type='submit'])").first
+            # The observed receipt replaces the questions inside this form.
+            form_loc = self.page.locator(
+                "form:has(fieldset), form:has(textarea), form:has(button:text-is('Submit')), "
+                "form:has(button:text-is('Send response')), form:has(:text-is('Questionnaire submitted!')), "
+                "form:has(:text-is('Your response has been recorded'))"
+            ).first
             form_present = await form_loc.count() > 0 and await form_loc.is_visible()
-            receipt_scope = form_loc if form_present else self.page
-            if await first_visible(receipt_scope, receipt_selectors, timeout_ms=600) is not None:
+            if form_present and await first_visible(form_loc, receipt_selectors, timeout_ms=600) is not None:
+                self.already_submitted = True
+                log.info("cutshort.chatbot.already_submitted")
                 return True, answered, ""
 
             # 1A0. DATE inputs (run 642: notice-period end date rendered as
@@ -1051,49 +1059,37 @@ class CutshortChatbot:
                 empty_required = await self._count_empty_required()
                 if empty_required:
                     return False, answered, f"{empty_required} required input(s) still empty before submit"
+                if not form_present:
+                    return False, answered, "Questionnaire form unavailable"
                 submit_btn = await first_visible(
-                    form_loc if form_present else self.page,
-                    [
-                        "button[type='submit']:text-is('Submit')",
-                        "button:text-is('Submit')",
-                        "button:text-is('Send response')",
-                    ],
-                    timeout_ms=2500,
+                    form_loc, ["button:text-is('Submit')", "button:text-is('Send response')"], timeout_ms=2500,
                 )
                 if submit_btn is None:
                     return False, answered, "Questionnaire submit control unavailable"
                 try:
-                    valid = await submit_btn.evaluate("el => el.form ? el.form.checkValidity() : true")
-                    if valid is False:
+                    if not await submit_btn.evaluate("el => Boolean(el.form && el.form.checkValidity())"):
                         return False, answered, "Questionnaire has invalid or empty required fields"
+                except Exception:
+                    return False, answered, "Questionnaire validity could not be verified"
+                try:
                     await submit_btn.click(timeout=3000)
                 except Exception as exc:
-                    log.warning("cutshort.chatbot.submit_failed", error=str(exc)[:120])
-                    return False, answered, "Questionnaire submit click could not be verified"
+                    log.warning("cutshort.chatbot.submit_click_uncertain", error=str(exc)[:120])
 
-                log.info("cutshort.chatbot.submit_clicked", answered=answered)
-                if form_present:
-                    confirmation = await first_visible(
-                        form_loc,
-                        [":text-is('Responses cannot be changed after submission. Are you sure?')"],
-                        timeout_ms=3000,
-                    )
-                    if confirmation is not None:
-                        yes = await first_visible(
-                            form_loc, ["button[type='submit']:text-is('Yes')"], timeout_ms=1500,
-                        )
-                        if yes is None:
-                            return False, answered, "Questionnaire confirmation button unavailable"
-                        try:
-                            await yes.click(timeout=3000)
-                        except Exception as exc:
-                            log.warning("cutshort.chatbot.confirm_click_uncertain", error=str(exc)[:120])
-                confirm_marker = await first_visible(
-                    self.page,
-                    receipt_selectors,
-                    timeout_ms=15000,
+                confirmation = await first_visible(
+                    form_loc, [":text-is('Responses cannot be changed after submission. Are you sure?')"],
+                    timeout_ms=3000,
                 )
-                if confirm_marker is not None:
+                if confirmation is not None:
+                    yes = await first_visible(form_loc, ["button:text-is('Yes')"], timeout_ms=1500)
+                    if yes is None:
+                        return False, answered, "Questionnaire confirmation button unavailable"
+                    try:
+                        await yes.click(timeout=3000)
+                    except Exception as exc:
+                        log.warning("cutshort.chatbot.confirm_click_uncertain", error=str(exc)[:120])
+                if await first_visible(form_loc, receipt_selectors, timeout_ms=15000) is not None:
+                    self.submitted = True
                     log.info("cutshort.chatbot.submitted_form", answered=answered)
                     return True, answered, ""
                 log.warning("cutshort.chatbot.submit_unconfirmed")
@@ -2138,62 +2134,32 @@ class CutshortPlatform(BaseJobPlatform):
 
         modal_text = (await safe_text(modal)).strip() if modal else ""
 
-        norm_title = re.sub(r"[–—−]", "-", " ".join(job.title.split()))
-        norm_comp = " ".join(job.company.split())
-        title_esc = re.escape(norm_title)
-        comp_esc = re.escape(norm_comp)
-        heading = re.compile(rf"^You are applying for {title_esc} at {comp_esc}$", re.IGNORECASE)
+        # Only treat typographic dashes as equivalent. Match the full role and employer.
+        heading_text = " ".join(f"You are applying for {job.title} at {job.company}".split())
+        heading = re.compile(r"^" + "".join(
+            "[-–—−]" if c in "-–—−" else r"\s+" if c == " " else re.escape(c)
+            for c in heading_text
+        ) + r"$", re.IGNORECASE)
         modal_matches_job = modal is not None and await modal.get_by_text(heading).first.is_visible()
-        if modal is not None and not modal_matches_job:
-            # Fallback: handle Cutshort UI truncation (e.g. trailing "onl") or dash substitutions
-            norm_modal_text = re.sub(r"[–—−]", "-", modal_text)
-            norm_modal_text = re.sub(r"\s+", " ", norm_modal_text)
-            core_title = norm_title.split("-")[0].split("(")[0].strip()
-            if (
-                "you are applying for" in norm_modal_text.lower()
-                and (norm_comp.lower() in norm_modal_text.lower() or job.company.lower() in norm_modal_text.lower())
-                and (core_title.lower() in norm_modal_text.lower() or norm_title.lower() in norm_modal_text.lower())
-            ):
-                modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)
         resume_verified = resume_path is None
         if modal_matches_job and resume_path is not None and resume_path.is_file():
-            # Cutshort displays the filename stem, optionally with its upload ID.
             filename = re.escape(resume_path.stem)
-            clean_stem = re.escape(resume_path.stem.rstrip("_"))
-            resume_re = re.compile(
-                rf"(?:^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$|^{clean_stem}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$|\b{clean_stem}\b|cv_mahesh_chitakoti)",
-                re.IGNORECASE,
-            )
-            selected_resume = modal.get_by_text(resume_re).first
+            selected_resume = modal.get_by_text(
+                re.compile(rf"^{filename}(?:_[A-Za-z0-9]{{4}})?(?:[.]pdf)?$", re.IGNORECASE)
+            ).first
             try:
                 if not await selected_resume.is_visible():
-                    radio = modal.locator('[role="radio"], input[type="radio"]').filter(has_text=resume_re).first
-                    if await radio.count() > 0:
-                        await radio.click()
-                    else:
-                        file_inp = modal.locator("input[type='file']").first
-                        if await file_inp.count() == 0:
-                            file_inp = self.page.locator("input[type='file']").first
-                        if await file_inp.count() > 0:
-                            await file_inp.set_input_files(str(resume_path))
-                        else:
-                            upload = modal.locator("text=/upload (?:another|new) resume/i, button:has-text('Upload')").first
-                            if await upload.count() == 0:
-                                upload = self.page.locator("text=/upload (?:another|new) resume/i, button:has-text('Upload')").first
-                            if await upload.count() > 0:
-                                async with self.page.expect_file_chooser(timeout=3000) as chooser:
-                                    await upload.click(timeout=2500)
-                                await (await chooser.value).set_files(str(resume_path), timeout=3000)
+                    upload = modal.get_by_text("Upload another resume", exact=True)
+                    async with self.page.expect_file_chooser(timeout=3000) as chooser:
+                        await upload.click(timeout=2500)
+                    await (await chooser.value).set_files(str(resume_path), timeout=3000)
                 await selected_resume.wait_for(state="visible", timeout=12000)
                 resume_verified = True
             except Exception as exc:
-                if bool(resume_re.search(modal_text)):
-                    resume_verified = True
-                else:
-                    log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
-                    await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
+                log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
+                await self.artifacts.capture_failure(self.page, "cutshort-resume-unverified", profile_name, job.job_id)
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)
@@ -2492,340 +2458,150 @@ class CutshortPlatform(BaseJobPlatform):
     # ---------------------------------------------------------
     # Phase 2 Message Handling (Questionnaire Sweep)
     # ---------------------------------------------------------
-    _CHAT_CLOSE_SELECTORS = [
-        "button[aria-label='Close']",
-        "button.close",
-        "span.close",
-        "svg[class*='close']",
-        "button:has-text('Close')",
-    ]
-
-    async def handle_messages(self) -> list[dict]:
-        """
-        Questionnaire sweep — runs once after ALL applications are sent.
-
-        Verified from saved DOM (__NEXT_DATA__ + tab markup): pending employer
-        questionnaires render at candidate-conversations?stage=awaiting under
-        the "Pending" tab — <button role="tab" id="tab-awaiting">Pending</button>
-        with rows inside <div role="tabpanel" id="tabpanel-awaiting">. The
-        default/unread stages render "( '.' ) No conversations here." even when
-        questionnaires are pending, which is why earlier sweeps found nothing.
-
-        Returns unanswered questions (each {text, kind, options}) for the
-        review queue; the orchestrator persists them under the sweep profile.
-        """
+    async def handle_messages(self, *, deadline: float | None = None) -> list[dict]:
+        """Scan the last 24 hours of Pending and the inbox within the run budget."""
         self.require_mutation("messages.answer_flow")
+        self.questionnaire_stats = dict(checked=0, submitted=0, already_submitted=0,
+                                        stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
+        processed: set[tuple[str, str]] = set()
+        unanswered: list[dict] = []
+        base_url = "https://cutshort.io/profile/candidate-conversations"
         log.info("cutshort.messages.start")
-        processed: set[str] = set()
-        unanswered: list[dict] = []
-
-        # Source A (primary): Pending / awaiting stage
-        try:
-            await self.page.goto(
-                "https://cutshort.io/profile/candidate-conversations?stage=awaiting",
-                wait_until="domcontentloaded",
-            )
-            await human_pause(2500, 4000)
-            await self._open_awaiting_tab()
-            unanswered.extend(await self._process_questionnaire_rows(processed))
-        except Exception as exc:
-            log.error("cutshort.messages.awaiting_error", error=str(exc)[:150])
-
-        # Source B (fallback): unfiltered inbox for recruiter threads without
-        # the [Questionnaire] tag. Shares `processed` to avoid double answers.
-        try:
-            await self.page.goto(
-                "https://cutshort.io/profile/candidate-conversations", wait_until="domcontentloaded"
-            )
-            await human_pause(2500, 4000)
-            unanswered.extend(await self._process_inbox_threads(processed))
-        except Exception as exc:
-            log.error("cutshort.messages.inbox_error", error=str(exc)[:150])
-
-        try:
-            dump_path = self.artifacts.dir / "cutshort-messages.html"
-            dump_path.write_text(await self.page.content(), encoding="utf-8")
-        except Exception:
-            pass
-
-        log.info("cutshort.messages.done", processed=len(processed),
-                 unanswered=len(unanswered))
+        for pending in (True, False):
+            if deadline is not None and monotonic() >= deadline:
+                self.questionnaire_stats["incomplete"] = 1
+                break
+            try:
+                url = f"{base_url}?stage=awaiting" if pending else base_url
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                if pending:
+                    tab = self.page.locator("#tab-awaiting")
+                    await tab.wait_for(state="visible", timeout=8000)
+                    if await tab.get_attribute("aria-selected") != "true":
+                        await tab.click(timeout=3000)
+                panel = self.page.locator("#tabpanel-awaiting:visible" if pending else "div[role='tabpanel']:visible").first
+                await panel.wait_for(state="visible", timeout=8000)
+                remaining = max(0, deadline - monotonic()) if deadline is not None else None
+                async with asyncio.timeout(remaining):
+                    await self._scan_message_rows(panel, processed, unanswered, deadline)
+            except Exception as exc:
+                self.questionnaire_stats["incomplete"] = 1
+                log.warning("cutshort.messages.scan_failed", pending=pending, error=str(exc)[:150])
+        self.questionnaire_stats["questions"] = len(unanswered)
+        log.info("cutshort.messages.done", **self.questionnaire_stats)
         return unanswered
 
-    async def _open_awaiting_tab(self) -> None:
-        """Focuses the Pending tab if it isn't already active."""
-        tab = self.page.locator("#tab-awaiting")
-        try:
-            if await tab.count() > 0 and await tab.is_visible():
-                if (await tab.get_attribute("aria-selected")) != "true":
-                    await tab.click()
-                    await human_pause(1500, 2500)
-                    log.info("cutshort.messages.pending_tab_opened")
-        except Exception as exc:
-            log.debug("cutshort.messages.tab_click_failed", error=str(exc))
-
-    async def _answer_current_chat(self, key: str, index: int) -> list[dict]:
-        """Dumps the opened thread and runs the chatbot against it.
-
-        Returns unanswered questions for the review queue (possibly empty).
-        """
-        try:
-            dump_path = self.artifacts.dir / f"cutshort-thread-{index}.html"
-            dump_path.write_text(await self.page.content(), encoding="utf-8")
-        except Exception:
-            pass
-
-        # Resolve candidate track résumé dynamically for chat file inputs
-        resume_path, _ = _track_resume_for(Job(job_id="cutshort-chat", title=key, company="", location="", platform="cutshort"))
-        chatbot = CutshortChatbot(
-            self.page,
-            self.answers,
-            resume_path=resume_path,
-        )
-        success, answered, error_msg = await chatbot.run()
-
-        # Post-chatbot dump for debugging run-652-style phantom clicks:
-        # verified chip selections show up here as aria-checked /
-        # selected classes; unverified queues leave chips untouched.
-        try:
-            after_path = self.artifacts.dir / f"cutshort-thread-{index}-after.html"
-            after_path.write_text(await self.page.content(), encoding="utf-8")
-        except Exception:
-            pass
-
-        if success and answered > 0:
-            log.info("cutshort.messages.success", thread=key[:60], answered=answered)
-        elif not success:
-            log.warning("cutshort.messages.unconfirmed", thread=key[:60], reason=(error_msg or "")[:100])
-        return list(chatbot.unanswered)
-
-    async def _close_chat_overlay(self) -> None:
-        """Closes an opened chat panel/overlay, or escapes back to the list."""
-        close_btn = await first_visible(self.page, self._CHAT_CLOSE_SELECTORS, timeout_ms=800)
-        if close_btn:
-            try:
-                await close_btn.click()
-                await human_pause(600, 1200)
-                return
-            except Exception:
-                pass
-        try:
-            await self.page.keyboard.press("Escape")
-        except Exception:
-            pass
-        await human_pause(400, 800)
-
-    def _clean_thread_key(self, text: str) -> str:
-        """Strips relative timestamps and status tags so key remains invariant across rounds."""
-        clean = re.sub(
-            r"\b(?:just now|yesterday|a few seconds ago|(?:an?|\d+)\s*(?:sec|second|min|minute|hour|hr|day|week|month)s?\s*ago)\b",
-            "",
+    @staticmethod
+    def _message_age_hours(text: str) -> float | None:
+        text = text.strip().lower()
+        if text in {"just now", "today"} or re.fullmatch(r"a few (?:seconds|minutes) ago", text):
+            return 0
+        if text == "yesterday":
+            return None  # A calendar label alone cannot establish a rolling 24-hour age.
+        match = re.fullmatch(
+            r"(an?|\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|[smhdwy])\s*ago",
             text,
-            flags=re.IGNORECASE,
         )
-        clean = clean.replace("[Questionnaire]", "")
-        return " ".join(clean.split())[:160]
-
-    def _is_stale_thread(self, text: str, max_age_days: int = 3) -> bool:
-        """
-        Returns True if thread relative timestamp indicates it is older than max_age_days
-        (e.g., '2 weeks ago', '1 month ago', or '4 days ago').
-        Fresh threads ('seconds ago', 'minutes ago', 'hours ago', '<= 3 days ago') return False.
-        """
-        match = re.search(r"\b(\d+)\s+(second|minute|hour|day|week|month)s?\s+ago\b", text, flags=re.IGNORECASE)
         if not match:
-            return False
-        amount, unit = int(match.group(1)), match.group(2).lower()
-        if unit in ("second", "minute", "hour"):
-            return False
-        if unit == "day":
-            return amount > max_age_days
-        if unit in ("week", "month"):
-            return True
-        return False
+            return None
+        amount = 1 if match[1] in {"a", "an"} else int(match[1])
+        unit = match[2]
+        if unit.startswith("mo"):
+            return amount * 720
+        return amount * {"s": 1 / 3600, "m": 1 / 60, "h": 1, "d": 24,
+                         "w": 168, "y": 8760}[unit[0]]
 
-    async def _process_questionnaire_rows(self, processed: set[str]) -> list[dict]:
-        """Opens every fresh [Questionnaire] row under the Pending (#tabpanel-awaiting) tab."""
-        cfg = AgentConfig.load()
-        unanswered: list[dict] = []
-        configured_limit = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
-        max_rounds = max(60, configured_limit)
-
-        for _round in range(max_rounds):  # Dynamic cap ensuring all pending questionnaires are checked
-            # Always ensure the Pending tab is focused and its panel is mounted
-            await self._open_awaiting_tab()
-
-            rows = self.page.locator("#tabpanel-awaiting div[role='button']")
-            if await rows.count() == 0:
-                rows = self.page.locator("div[role='button']").filter(has_text="[Questionnaire]")
-            count = await rows.count()
-
-            target = None
-            key = ""
-            for i in range(count):
-                row = rows.nth(i)
-                try:
-                    if not await row.is_visible():
-                        continue
-                except Exception:
+    async def _scan_message_rows(
+        self, panel: Locator, processed: set[tuple[str, str]], unanswered: list[dict], deadline: float | None,
+    ) -> None:
+        rows = panel.locator("ul[role='list'] > div[role='button']")
+        failed_here: set[tuple[str, str]] = set()
+        at_end = False
+        # Use the conversation row's company and full job title, not its changing preview.
+        while deadline is None or monotonic() < deadline:
+            opened = False
+            for row in await rows.all():
+                if not await row.is_visible():
                     continue
-                txt = (await safe_text(row)).strip()
-                key = self._clean_thread_key(txt)
-                if not key or key in processed:
+                if deadline is not None and monotonic() >= deadline:
+                    self.questionnaire_stats["incomplete"] = 1
+                    return
+                title = (await safe_text(row.get_by_text(re.compile(r"^For job .+$")).first)).strip()
+                avatar = row.locator("img[alt$=' profile picture']").first
+                company = (await avatar.get_attribute("alt", timeout=800) or "").removesuffix(" profile picture").strip() if await avatar.count() else ""
+                date_label = await safe_text(row.locator(".conversation-date").first)
+                key = (company, title)
+                if not all(key):
+                    # A visible conversation row with no exact identity needs investigation.
+                    log.warning("cutshort.messages.row_identity_unavailable")
+                    self.questionnaire_stats["incomplete"] = 1
                     continue
-
-                # Freshness Guard: Skip stale questionnaires older than 3 days
-                if self._is_stale_thread(txt, max_age_days=3):
-                    log.info("cutshort.messages.skip_stale_questionnaire", item=key[:60], age=">3 days old")
+                if key in processed or key in failed_here:
+                    continue
+                age = self._message_age_hours(date_label)
+                if age is None or age >= 24:
+                    self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
                     processed.add(key)
                     continue
-
-                target = row
-                break
-
-            if target is None:
                 try:
-                    # Scroll container or last row into view
-                    if count > 0:
-                        try:
-                            await rows.last.scroll_into_view_if_needed()
-                            await human_pause(400, 800)
-                        except Exception:
-                            pass
-
-                    # Scroll the left-pane scrollable container or list
-                    await self.page.evaluate(
-                        """() => {
-                            const list = document.querySelector("#tabpanel-awaiting ul[role='list']")
-                                || document.querySelector("#tabpanel-awaiting [class*='jifhRO']")
-                                || document.querySelector("#tabpanel-awaiting")
-                                || document.querySelector("div[role='tabpanel']");
-                            if (list && list.scrollHeight > list.clientHeight) {
-                                list.scrollBy(0, 500);
-                            } else {
-                                window.scrollBy(0, 500);
-                            }
-                        }"""
+                    expected_questionnaire = "[Questionnaire]" in await safe_text(row)
+                    await row.click(timeout=4000)
+                    pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
+                        has=self.page.get_by_text(title, exact=True),
+                    ).filter(has=self.page.get_by_text(company, exact=True))
+                    await pane.get_by_text("View full job description", exact=True).wait_for(
+                        state="visible", timeout=6000,
                     )
-                    await human_pause(1000, 2000)
-                    rows = self.page.locator("#tabpanel-awaiting div[role='button']")
-                    if await rows.count() == 0:
-                        rows = self.page.locator("div[role='button']").filter(has_text="[Questionnaire]")
-                    for i in range(await rows.count()):
-                        row = rows.nth(i)
-                        if not await row.is_visible():
-                            continue
-                        txt = (await safe_text(row)).strip()
-                        key = self._clean_thread_key(txt)
-                        if not key or key in processed:
-                            continue
-
-                        if self._is_stale_thread(txt, max_age_days=3):
-                            log.info("cutshort.messages.skip_stale_questionnaire", item=key[:60], age=">3 days old")
-                            processed.add(key)
-                            continue
-
-                        target = row
-                        break
-                except Exception:
-                    pass
-
-            if target is None:
-                log.info("cutshort.messages.no_more_pending_questionnaires", processed=len(processed))
-                break
-
-            processed.add(key)
-            log.info("cutshort.messages.opening_questionnaire", item=key[:80], round=_round + 1)
-            url_before = self.page.url
-            try:
-                await target.scroll_into_view_if_needed()
-                await human_pause(300, 600)
-                await target.click()
-                await human_pause(2000, 3500)
-                for _uq in await self._answer_current_chat(key, len(processed)):
-                    if _uq.get("text") and all(
-                        _uq.get("text") != _seen.get("text") for _seen in unanswered
-                    ):
-                        unanswered.append(_uq)
-            except Exception as exc:
-                log.error("cutshort.messages.row_error", item=key[:60], error=str(exc)[:120])
-            finally:
-                # Allow in-flight submission network requests to settle cleanly
-                await human_pause(1500, 2500)
-                # Only re-navigate if the page navigated completely away from candidate-conversations
-                if "candidate-conversations" not in self.page.url:
-                    try:
-                        await self.page.goto(
-                            "https://cutshort.io/profile/candidate-conversations?stage=awaiting",
-                            wait_until="domcontentloaded",
-                        )
-                        await human_pause(2000, 3500)
-                        await self._open_awaiting_tab()
-                    except Exception:
-                        break
-                else:
-                    await self._close_chat_overlay()
-                    await self._open_awaiting_tab()
-        return unanswered
-
-    async def _process_inbox_threads(self, processed: set[str]) -> list[dict]:
-        """Opens every fresh conversation thread in the (unfiltered) inbox list."""
-        cfg = AgentConfig.load()
-        unanswered: list[dict] = []
-        max_rounds = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
-
-        thread_selector = (
-            "div[role='button']:has(p.conversation-date), div[role='button']:has([class*='conversation']), "
-            "div[class*='onversation'], div[class*='hread'], li[class*='hread'], "
-            "div[class*='hat-item'], a[class*='onversation']"
-        )
-        for _round in range(max_rounds):
-            candidates = []
-            for el in await self.page.locator(thread_selector).all():
-                try:
-                    if not await el.is_visible():
-                        continue
-                except Exception:
-                    continue
-                txt = " ".join((await safe_text(el)).split())
-                if len(txt) < 10 or txt.lower() in ("messages", "inbox"):
-                    continue
-                key = self._clean_thread_key(txt)
-                if not key or key in processed:
-                    continue
-
-                # Freshness Guard: Skip stale threads older than 3 days
-                if self._is_stale_thread(txt, max_age_days=3):
-                    log.debug("cutshort.messages.skip_stale_inbox_thread", thread=key[:60])
+                    await self._answer_current_chat(pane, key, unanswered, expected_questionnaire)
                     processed.add(key)
+                except Exception as exc:
+                    self.questionnaire_stats["unconfirmed"] += 1
+                    log.warning("cutshort.messages.thread_unverified", item=key, error=str(exc)[:120])
+                    failed_here.add(key)
                     continue
-
-                candidates.append((el, key))
-
-            if not candidates:
+                opened = True
                 break
+            if opened:
+                continue
+            # Scroll the actual row container. At its end there is no further batch.
+            moved = await rows.count() > 0 and await rows.last.evaluate("""row => {
+                let box = row.parentElement;
+                while (box && box.scrollHeight <= box.clientHeight + 1) box = box.parentElement;
+                if (!box) return false;
+                const before = box.scrollTop;
+                box.scrollTop += Math.max(box.clientHeight - 40, 100);
+                return box.scrollTop > before;
+            }""")
+            if not moved and at_end:
+                return
+            at_end = not moved
+            await human_pause(400, 750)
+        self.questionnaire_stats["incomplete"] = 1
 
-            target, key = candidates[0]
-            processed.add(key)
-            log.info("cutshort.messages.opening_thread", thread=key[:80])
-            url_before = self.page.url
-            try:
-                await target.click()
-                await human_pause(2000, 3500)
-                for _uq in await self._answer_current_chat(key, len(processed)):
-                    if _uq.get("text") and all(
-                        _uq.get("text") != _seen.get("text") for _seen in unanswered
-                    ):
-                        unanswered.append(_uq)
-            except Exception as exc:
-                log.error("cutshort.messages.thread_error", thread=key[:60], error=str(exc)[:120])
-            finally:
-                if self.page.url != url_before:
-                    try:
-                        await self.page.goto(url_before, wait_until="domcontentloaded")
-                        await human_pause(2000, 3500)
-                    except Exception:
-                        break
-                else:
-                    await self._close_chat_overlay()
-        return unanswered
+    async def _answer_current_chat(
+        self, pane: Locator, key: tuple[str, str], unanswered: list[dict], expected_questionnaire: bool,
+    ) -> None:
+        """Inspect only the verified conversation pane."""
+        self.questionnaire_stats["checked"] += 1
+        index = self.questionnaire_stats["checked"]
+        await self.artifacts.dump_html(self.page, "questionnaire-before", "Cutshort", str(index))
+        widgets = pane.locator("div:has(> #message_response_type_screening)")
+        if expected_questionnaire:
+            await widgets.first.wait_for(state="visible", timeout=5000)
+        scopes = [widget for widget in await widgets.all() if await widget.is_visible()]
+        for scope in scopes or [pane]:
+            # A conversation row does not establish which résumé a file question asks for.
+            chatbot = CutshortChatbot(scope, self.answers, resume_path=None)
+            success, answered, error_msg = await chatbot.run()
+            if chatbot.submitted:
+                self.questionnaire_stats["submitted"] += 1
+                log.info("cutshort.messages.success", thread=key, answered=answered)
+            elif chatbot.already_submitted:
+                self.questionnaire_stats["already_submitted"] += 1
+            elif not chatbot.unanswered and (not success or scopes):
+                self.questionnaire_stats["unconfirmed"] += 1
+                log.warning("cutshort.messages.unconfirmed", thread=key, reason=error_msg or "questionnaire form missing")
+            for question in chatbot.unanswered:
+                if question not in unanswered:
+                    unanswered.append(question)
+        await self.artifacts.dump_html(self.page, "questionnaire-after", "Cutshort", str(index))

@@ -235,6 +235,7 @@ class RunStats:
     external_jobs: list[dict[str, str]] = field(default_factory=list)
     walkin_alerts: list[dict[str, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    questionnaire_stats: dict[str, int] = field(default_factory=dict)
 
     def bump(self, profile: str, key: str, amount: int = 1, platform: str | None = None) -> None:
         setattr(self, key, getattr(self, key, 0) + amount)
