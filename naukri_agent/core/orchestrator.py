@@ -1885,7 +1885,7 @@ class Orchestrator:
             # A per-job cap bounds hung navigations (one job once ate 6 minutes).
             # Wellfound queues delivery behind a five-minute Undo window.
             # Keep room for that observed state to settle without resubmitting.
-            job_cap_s = 420.0 if platform_name == "wellfound" else 300.0
+            job_cap_s = 420.0 if platform_name.lower() == "wellfound" else 300.0
             try:
                 outcome = await asyncio.wait_for(
                     platform.apply_to_job(
@@ -1898,7 +1898,7 @@ class Orchestrator:
                 log.warning("job.time_cap_exceeded", job_id=job.job_id, cap_s=job_cap_s)
                 outcome = ApplyOutcome(
                     status=ApplicationStatus.FAILED,
-                    reason=SkipReason.SUBMISSION_UNCONFIRMED if platform_name == "wellfound" else None,
+                    reason=SkipReason.SUBMISSION_UNCONFIRMED if platform_name.lower() == "wellfound" else None,
                     detail=f"job time cap exceeded ({job_cap_s:g}s)",
                     screenshot_path=shot,
                 )

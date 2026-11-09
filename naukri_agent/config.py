@@ -1380,6 +1380,7 @@ class AgentConfig(_Model):
                     search_terms.append(t)
 
         hc_limit = max((p.platform_limits.get("hiringcafe", 25) for p in active), default=25)
+        max_exp = max((p.filters.experience.max_years for p in active if p.filters and p.filters.experience), default=3.5)
 
         merged_answers: dict[str, str] = {}
         for p in reversed(active):

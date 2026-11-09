@@ -33,6 +33,7 @@ REMOTE_KEYWORDS = ("remote", "work from home", "wfh", "hybrid remote")
 def _normalise_str(text: str) -> str:
     """Normalize string and unify tech synonyms like Dot Net / .NET / dot.net -> dotnet, reactjs -> react, nodejs -> node."""
     low = (text or "").lower()
+    low = re.sub(r"\bai\s*(?:&|and|/|-|\+)\s*ml\b", "ai/ml", low)
     low = re.sub(r"\baiml\b", "ai/ml", low)
     low = re.sub(r"\bdot[\s.-]?net\b|(?<!\w)\.net\b", "dotnet", low)
     # Bare "NET" means .NET only when tech-adjacent ("TypeScript NET",
@@ -104,7 +105,7 @@ DISJOINT_SPECIALIZATIONS = (
     # term ("software engineer", "engineer") sitting inside one of these titles
     # does not make it a software role (e.g. "Embedded Software Engineer").
     "embedded", "embedded systems", "firmware", "vlsi", "hardware",
-    "mechanical", "electrical", "civil",
+    "mechanical", "electrical", "civil", "robot", "robotics", "robotic",
     # Non-software QA professions: lab/food testing shares only the "QA"
     # letters (run 368 applied to a "QA Executive - Microbiologist" food-lab
     # role). Surgical tokens — healthcare-IT (HL7, informatics) stays eligible.
@@ -393,6 +394,13 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("frontend", "frontend developer", "frontend engineer", "front end", "front end developer", "front end engineer", "front-end developer", "front-end engineer") and _contains_any(title, ["full stack", "fullstack", "full-stack", "backend"]):
                     is_override = True
+                elif hit in ("machine learning", "machine learning engineer") and _contains_any(title, ["backend", "back end", "infrastructure", "platform"]):
+                    if not self.candidate or "ai" in getattr(self.candidate, "name", "").lower() or "python" in getattr(self.candidate, "name", "").lower():
+                        is_override = True
+                elif hit in ("security engineer", "security specialist", "security analyst") and _contains_any(title, ["ai", "agentic", "automation", "generative ai", "genai", "llm"]):
+                    is_override = True
+                elif hit in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
+                    is_override = True
 
                 if not is_override:
                     return FilterDecision(
@@ -406,13 +414,20 @@ class FilterEngine:
         # candidates without prior domain experience, exhausting daily platform quotas.
         hit_disjoint = _contains_any(title, DISJOINT_SPECIALIZATIONS)
         if hit_disjoint:
-            candidate_skills = getattr(self.candidate, "core_skills", []) or []
-            if not any(hit_disjoint in s.lower() for s in candidate_skills):
-                return FilterDecision(
-                    False,
-                    SkipReason.FILTER_TITLE,
-                    f"title contains disjoint specialization '{hit_disjoint}' (candidate lacks requisite experience; recruiter will reject)",
-                )
+            is_disjoint_override = False
+            if hit_disjoint in ("security engineer", "cyber security", "cybersecurity", "infosec", "soc analyst") and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic", "automation"]):
+                is_disjoint_override = True
+            elif hit_disjoint in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
+                is_disjoint_override = True
+
+            if not is_disjoint_override:
+                candidate_skills = getattr(self.candidate, "core_skills", []) or []
+                if not any(hit_disjoint in s.lower() for s in candidate_skills):
+                    return FilterDecision(
+                        False,
+                        SkipReason.FILTER_TITLE,
+                        f"title contains disjoint specialization '{hit_disjoint}' (candidate lacks requisite experience; recruiter will reject)",
+                    )
 
         # Bare Naukri testing titles need the full JD to distinguish software QA from other testing work.
         ambiguous_qa = (
@@ -438,15 +453,23 @@ class FilterEngine:
                     title_variants.append(sde_equiv)
                 title_variants.extend(["sde", "software development engineer", "software engineer"])
 
-            if "/" in job.title:
-                parts = [p.strip().lower() for p in re.split(r"\s*/\s*", job.title) if p.strip()]
+            if _contains_any(title, ["machine learning", "machine learning engineer"]) and _contains_any(title, ["backend", "back end"]):
+                title_variants.extend(["ai backend", "ai backend engineer", "python backend engineer"])
+
+            if "/" in job.title or "&" in job.title:
+                compound_delims = r"\s*(?:/|&)\s*"
+                parts = [p.strip().lower() for p in re.split(compound_delims, job.title) if p.strip()]
                 if len(parts) >= 2:
-                    suffix_match = re.search(r"\b(engineer|developer|specialist|architect|consultant|analyst|lead)\b", parts[-1])
+                    suffix_match = re.search(r"\b(engineers?|developers?|specialists?|architects?|consultants?|analysts?|leads?)\b", parts[-1])
                     if suffix_match:
-                        suffix = suffix_match.group(0)
+                        raw_suffix = suffix_match.group(0)
+                        suffix = raw_suffix[:-1] if raw_suffix.endswith("s") and not raw_suffix.endswith("ss") else raw_suffix
                         for part in parts[:-1]:
                             title_variants.append(f"{part} {suffix}")
-                    title_variants.extend(parts)
+                    for part in parts:
+                        title_variants.append(part)
+                        if part.endswith("s") and not part.endswith("ss"):
+                            title_variants.append(part[:-1])
 
             matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
             if not matched_title_term and not ambiguous_qa:
