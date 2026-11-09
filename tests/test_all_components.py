@@ -6910,3 +6910,53 @@ class TestCutshortConversationReceipt(unittest.IsolatedAsyncioTestCase):
             thread.url = "https://cutshort.io/profile/candidate-conversations?thread=other"
             self.assertFalse(await platform._verify_job_conversation(thread_url, job_url))
         self.assertEqual(thread.close.await_count, 3)
+
+
+class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
+    async def test_process_questionnaire_rows_handles_multiple_threads_and_reopens_tab(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.platforms import cutshort
+
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.page = MagicMock()
+        platform.page.url = "https://cutshort.io/profile/candidate-conversations?stage=awaiting"
+        platform._open_awaiting_tab = AsyncMock()
+        platform._close_chat_overlay = AsyncMock()
+        platform._answer_current_chat = AsyncMock(return_value=[])
+
+        # Create 3 mock rows representing 3 pending questionnaire cards
+        def make_row(title_text):
+            r = MagicMock()
+            r.count = AsyncMock(return_value=1)
+            r.is_visible = AsyncMock(return_value=True)
+            r.inner_text = AsyncMock(return_value=title_text)
+            r.click = AsyncMock()
+            r.scroll_into_view_if_needed = AsyncMock()
+            return r
+
+        row1 = make_row("Techjays For job AI Quality Engineer 28 minutes ago [Questionnaire]")
+        row2 = make_row("Incubyte For job Data Craftsperson - I 29 minutes ago [Questionnaire]")
+        row3 = make_row("TrueBlue For job Software Engineer 30 minutes ago [Questionnaire]")
+
+        locator_mock = MagicMock()
+        locator_mock.count = AsyncMock(return_value=3)
+        locator_mock.nth = MagicMock(side_effect=lambda idx: [row1, row2, row3][idx])
+        platform.page.locator = MagicMock(return_value=locator_mock)
+
+        processed = set()
+        with patch.object(cutshort.AgentConfig, "load") as mock_cfg:
+            mock_profile = MagicMock(enabled=True, platform_limits={"cutshort": 3})
+            mock_cfg.return_value.profiles = [mock_profile]
+            
+            # Run the sweep
+            unanswered = await platform._process_questionnaire_rows(processed)
+
+        # Verified: all 3 rows were clicked and processed
+        self.assertEqual(len(processed), 3)
+        self.assertEqual(row1.click.await_count, 1)
+        self.assertEqual(row2.click.await_count, 1)
+        self.assertEqual(row3.click.await_count, 1)
+        # Verified: _open_awaiting_tab was invoked repeatedly across rounds
+        self.assertGreaterEqual(platform._open_awaiting_tab.await_count, 3)
+        self.assertEqual(platform._answer_current_chat.await_count, 3)
+

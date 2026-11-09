@@ -2138,10 +2138,23 @@ class CutshortPlatform(BaseJobPlatform):
 
         modal_text = (await safe_text(modal)).strip() if modal else ""
 
-        title = re.escape(" ".join(job.title.split()))
-        company = re.escape(" ".join(job.company.split()))
-        heading = re.compile(rf"^You are applying for {title} at {company}$", re.IGNORECASE)
+        norm_title = re.sub(r"[–—−]", "-", " ".join(job.title.split()))
+        norm_comp = " ".join(job.company.split())
+        title_esc = re.escape(norm_title)
+        comp_esc = re.escape(norm_comp)
+        heading = re.compile(rf"^You are applying for {title_esc} at {comp_esc}$", re.IGNORECASE)
         modal_matches_job = modal is not None and await modal.get_by_text(heading).first.is_visible()
+        if modal is not None and not modal_matches_job:
+            # Fallback: handle Cutshort UI truncation (e.g. trailing "onl") or dash substitutions
+            norm_modal_text = re.sub(r"[–—−]", "-", modal_text)
+            norm_modal_text = re.sub(r"\s+", " ", norm_modal_text)
+            core_title = norm_title.split("-")[0].split("(")[0].strip()
+            if (
+                "you are applying for" in norm_modal_text.lower()
+                and (norm_comp.lower() in norm_modal_text.lower() or job.company.lower() in norm_modal_text.lower())
+                and (core_title.lower() in norm_modal_text.lower() or norm_title.lower() in norm_modal_text.lower())
+            ):
+                modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)
         resume_verified = resume_path is None
@@ -2562,12 +2575,12 @@ class CutshortPlatform(BaseJobPlatform):
         except Exception:
             pass
 
+        # Resolve candidate track résumé dynamically for chat file inputs
+        resume_path, _ = _track_resume_for(Job(job_id="cutshort-chat", title=key, company="", location="", platform="cutshort"))
         chatbot = CutshortChatbot(
             self.page,
             self.answers,
-            # No job context in a chat thread → no resume to upload; file
-            # inputs here are queued for review by the chatbot (fail closed).
-            resume_path=None,
+            resume_path=resume_path,
         )
         success, answered, error_msg = await chatbot.run()
 
@@ -2635,9 +2648,13 @@ class CutshortPlatform(BaseJobPlatform):
         """Opens every fresh [Questionnaire] row under the Pending (#tabpanel-awaiting) tab."""
         cfg = AgentConfig.load()
         unanswered: list[dict] = []
-        max_rounds = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
+        configured_limit = max([p.platform_limits.get("cutshort", 150) for p in cfg.profiles if p.enabled] or [150])
+        max_rounds = max(60, configured_limit)
 
-        for _round in range(max_rounds):  # Dynamic cap matching Cutshort limit
+        for _round in range(max_rounds):  # Dynamic cap ensuring all pending questionnaires are checked
+            # Always ensure the Pending tab is focused and its panel is mounted
+            await self._open_awaiting_tab()
+
             rows = self.page.locator("#tabpanel-awaiting div[role='button']")
             if await rows.count() == 0:
                 rows = self.page.locator("div[role='button']").filter(has_text="[Questionnaire]")
@@ -2668,8 +2685,29 @@ class CutshortPlatform(BaseJobPlatform):
 
             if target is None:
                 try:
-                    await self.page.evaluate("window.scrollBy(0, 600)")
-                    await human_pause(800, 1500)
+                    # Scroll container or last row into view
+                    if count > 0:
+                        try:
+                            await rows.last.scroll_into_view_if_needed()
+                            await human_pause(400, 800)
+                        except Exception:
+                            pass
+
+                    # Scroll the left-pane scrollable container or list
+                    await self.page.evaluate(
+                        """() => {
+                            const list = document.querySelector("#tabpanel-awaiting ul[role='list']")
+                                || document.querySelector("#tabpanel-awaiting [class*='jifhRO']")
+                                || document.querySelector("#tabpanel-awaiting")
+                                || document.querySelector("div[role='tabpanel']");
+                            if (list && list.scrollHeight > list.clientHeight) {
+                                list.scrollBy(0, 500);
+                            } else {
+                                window.scrollBy(0, 500);
+                            }
+                        }"""
+                    )
+                    await human_pause(1000, 2000)
                     rows = self.page.locator("#tabpanel-awaiting div[role='button']")
                     if await rows.count() == 0:
                         rows = self.page.locator("div[role='button']").filter(has_text="[Questionnaire]")
@@ -2693,12 +2731,15 @@ class CutshortPlatform(BaseJobPlatform):
                     pass
 
             if target is None:
+                log.info("cutshort.messages.no_more_pending_questionnaires", processed=len(processed))
                 break
 
             processed.add(key)
-            log.info("cutshort.messages.opening_questionnaire", item=key[:80])
+            log.info("cutshort.messages.opening_questionnaire", item=key[:80], round=_round + 1)
             url_before = self.page.url
             try:
+                await target.scroll_into_view_if_needed()
+                await human_pause(300, 600)
                 await target.click()
                 await human_pause(2000, 3500)
                 for _uq in await self._answer_current_chat(key, len(processed)):
@@ -2711,14 +2752,20 @@ class CutshortPlatform(BaseJobPlatform):
             finally:
                 # Allow in-flight submission network requests to settle cleanly
                 await human_pause(1500, 2500)
-                if self.page.url != url_before:
+                # Only re-navigate if the page navigated completely away from candidate-conversations
+                if "candidate-conversations" not in self.page.url:
                     try:
-                        await self.page.goto(url_before, wait_until="domcontentloaded")
+                        await self.page.goto(
+                            "https://cutshort.io/profile/candidate-conversations?stage=awaiting",
+                            wait_until="domcontentloaded",
+                        )
                         await human_pause(2000, 3500)
+                        await self._open_awaiting_tab()
                     except Exception:
                         break
                 else:
                     await self._close_chat_overlay()
+                    await self._open_awaiting_tab()
         return unanswered
 
     async def _process_inbox_threads(self, processed: set[str]) -> list[dict]:

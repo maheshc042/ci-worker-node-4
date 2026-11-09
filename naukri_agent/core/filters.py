@@ -221,6 +221,7 @@ TECH_ALIASES = (
     (r"\brest\s*api\b", "restapi"),
     (r"\bllm\s*ops\b", "llmops"),
     (r"\bgen\s*ai\b", "genai"),
+    (r"\bal(?=[\s/&+-]*(?:ml|engineer|developer|specialist|ops|agent))\b", "ai"),
 )
 
 
@@ -364,6 +365,8 @@ class FilterEngine:
         # space once, up front — every gate below matches on the cleaned
         # text; downstream lead matches still use the original job.title.
         title = re.sub(r"[\s_]+", " ", job.title.lower()).strip()
+        # Correct OCR and recruiter font typos where lowercase 'l' was typed instead of uppercase 'I' (e.g. 'al/ml', 'al engineer')
+        title = re.sub(r"\bal(?=[\s/&+-]*(?:ml|engineer|developer|specialist|ops|agent))\b", "ai", title)
         company = job.company.lower()
         location = (job.location or "").lower()
 
@@ -398,6 +401,8 @@ class FilterEngine:
                     if not self.candidate or "ai" in getattr(self.candidate, "name", "").lower() or "python" in getattr(self.candidate, "name", "").lower():
                         is_override = True
                 elif hit in ("security engineer", "security specialist", "security analyst") and _contains_any(title, ["ai", "agentic", "automation", "generative ai", "genai", "llm"]):
+                    is_override = True
+                elif hit in ("mlops", "mlops engineer") and _contains_any(title, ["llmops", "llm ops", "llm", "genai", "generative ai", "agentic"]):
                     is_override = True
                 elif hit in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
                     is_override = True
@@ -470,6 +475,18 @@ class FilterEngine:
                         title_variants.append(part)
                         if part.endswith("s") and not part.endswith("ss"):
                             title_variants.append(part[:-1])
+
+            if "(" in job.title and ")" in job.title:
+                parens = re.findall(r"\(([^()]+)\)", job.title)
+                head_match = re.search(r"\b(engineers?|developers?|specialists?|architects?|consultants?|analysts?|leads?)\b", job.title.lower().split("(")[0])
+                head_suffix = head_match.group(0) if head_match else "engineer"
+                if head_suffix.endswith("s") and not head_suffix.endswith("ss"):
+                    head_suffix = head_suffix[:-1]
+                for p in parens:
+                    sub_parts = [sp.strip().lower() for sp in re.split(r",|&|\band\b|/", p) if sp.strip()]
+                    for sp in sub_parts:
+                        title_variants.append(sp)
+                        title_variants.append(f"{sp} {head_suffix}")
 
             matched_title_term = any(_contains_any(v, rules.title_must_include_any) for v in title_variants)
             if not matched_title_term and not ambiguous_qa:
