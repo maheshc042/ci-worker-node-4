@@ -329,7 +329,9 @@ CHATBOT_QUESTION = [
 CHATBOT_TEXT_INPUT = [
     "div.textArea[contenteditable='true']",
     "div[contenteditable='true']",
+    "div[contenteditable]",
     "textarea.textArea",
+    "textarea",
     "input.textInput",
     "input[type='text']",
     "input[type='number']",
@@ -345,6 +347,11 @@ CHATBOT_TEXT_INPUT = [
     "div.chatInput",
     "div[class*='chat'] input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
     "div[class*='chat'] textarea",
+    "div[class*='inputWrapper'] input",
+    "div[class*='InputWrapper'] input",
+    "div[class*='InputWrapper'] textarea",
+    "div[class*='textArea']",
+    "div[class*='textInput']",
     "div.botItem input:not([type='hidden']):not([type='checkbox']):not([type='radio'])",
 ]
 CHATBOT_SEND = [
@@ -359,11 +366,17 @@ CHATBOT_RADIO_OPTIONS = [
     "label.ssrc__label",
     "div.radioOption label",
     "div[class*='radio'] label",
+    "div[role='radiogroup'] [role='radio']",
+    "[role='radio']",
+    "div[class*='radio-wrap'] label",
+    "label[class*='radio']",
 ]
 CHATBOT_CHECKBOX_OPTIONS = [
     "div.multi-checkbox-container label",
     "div.msrc__checkbox-container label",
     "label.mcrc__label",
+    "div[class*='checkbox'] label",
+    "label[class*='checkbox']",
 ]
 CHATBOT_CHIPS = [
     "div.chatbot_Chip",
@@ -374,6 +387,15 @@ CHATBOT_CHIPS = [
     "div.chipsContainer div.chip",
     "div.chip-container div",
     "div.chips-wrapper div",
+    "button.chatbot_Chip",
+    "button.chipItem",
+    "button[class*='chip']",
+    "button[class*='Chip']",
+    "button[class*='option']",
+    "button[class*='Option']",
+    "div[class*='chip']",
+    "div[class*='pill']",
+    "button[class*='pill']",
 ]
 CHATBOT_DROPDOWN = ["select.dropdownWrapper", "select[class*='dropdown']", "select"]
 CHATBOT_COMBOBOX_TRIGGER = [
