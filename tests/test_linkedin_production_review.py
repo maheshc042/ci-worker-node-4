@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from naukri_agent.config import AgentConfig
 from naukri_agent.core.answers import AnswerEngine
 from naukri_agent.core.mailer import ColdEmailer
-from naukri_agent.core.models import Job, ScreeningQuestion
+from naukri_agent.core.models import Job, ScreeningQuestion, ApplicationStatus, SkipReason
 from naukri_agent.linkedin.analyzer import campaign_profile_mismatch, is_experience_match, is_abroad_onsite, post_content, advertised_role
 from naukri_agent.linkedin.campaign import _get_resume_path
 from naukri_agent.platforms import linkedin
@@ -260,3 +260,28 @@ class TestLinkedInReceiptScope(unittest.IsolatedAsyncioTestCase):
         res_join = answers.resolve(ScreeningQuestion(text="When did you join your current employer? (Year/Month)", kind="text"))
         self.assertIsNotNone(res_join)
         self.assertEqual(res_join.value, "2023/06")
+
+    async def test_closed_job_returns_stale_job_status(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.page = MagicMock(url='https://www.linkedin.com/jobs/view/4487942897/')
+        platform.page.goto = AsyncMock()
+        platform.evaluate_job_suitability = MagicMock(return_value=(True, "Matched", 90))
+        platform.config = MagicMock(profiles=[])
+        platform._metrics = None
+        platform._submission_attempts = set()
+        platform._screening_review = []
+        job = Job('linkedin-4487942897', 'Backend developer', 'Appzlogic', 'https://www.linkedin.com/jobs/view/4487942897/')
+        job.description = "Backend developer role with XML and MarkLogic"
+
+        # Mock first_visible:
+        # 1. desc_el (lines 1327-1331) -> desc_el with text
+        # 2. apply_btn -> None
+        # 3. applied check -> None
+        # 4. stale/closed check -> found visible closed indicator
+        desc_el = MagicMock()
+        stale_el = MagicMock()
+        with patch.object(linkedin, 'first_visible', new=AsyncMock(side_effect=[desc_el, None, None, stale_el])), \
+             patch.object(linkedin, 'safe_text', new=AsyncMock(return_value=job.description)):
+            outcome = await platform.apply_to_job(job, "Full Stack / Web Developer", pre_submit_check=lambda j: MagicMock(passed=True))
+            self.assertEqual(outcome.status, ApplicationStatus.SKIPPED)
+            self.assertEqual(outcome.reason, SkipReason.STALE_JOB)

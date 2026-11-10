@@ -1171,6 +1171,10 @@ class LinkedInPlatform(BaseJobPlatform):
         "button[data-tracking-control-name*='apply']",
         ".jobs-details button:has-text('Apply')",
         ".scaffold-layout__detail button:has-text('Apply')",
+        "button:has-text('Apply on company website')",
+        "button:has-text('Apply')",
+        "a:has-text('Apply on company website')",
+        "a:has-text('Apply')",
     ]
     _INTERSTITIAL_CONTINUE_SELECTORS = [
         "button:has-text('Continue')",
@@ -1424,16 +1428,51 @@ class LinkedInPlatform(BaseJobPlatform):
         apply_btn = await first_visible(
             self.page,
             [
-                "main button:text-is('Easy Apply'), main button[aria-label='Easy Apply' i], "
-                "main button[aria-label^='Easy Apply to ' i]",
+                "button.jobs-apply-button:has-text('Easy Apply')",
+                ".jobs-apply-button--top-card button:has-text('Easy Apply')",
+                "main button:has-text('Easy Apply')",
+                "button:has-text('Easy Apply')",
+                "button[aria-label*='Easy Apply' i]",
+                "a.jobs-apply-button:has-text('Easy Apply')",
             ],
             timeout_ms=12000,
         )
 
         if not apply_btn:
-            if await first_visible(self.page, ["main button:text-is('Applied'), main span:text-is('Application submitted')"], timeout_ms=800):
+            if await first_visible(
+                self.page,
+                [
+                    "button:has-text('Applied')",
+                    "span:has-text('Application submitted')",
+                    "button[aria-label*='Applied' i]",
+                    "main button:text-is('Applied')",
+                    "main span:text-is('Application submitted')",
+                ],
+                timeout_ms=800,
+            ):
                 _record_timing()
                 return ApplyOutcome(status=ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
+
+            # Check if job was closed / no longer accepting applications
+            if await first_visible(
+                self.page,
+                [
+                    "div:has-text('No longer accepting applications')",
+                    "span:has-text('No longer accepting applications')",
+                    "p:has-text('No longer accepting applications')",
+                    "div:has-text('This job is no longer available')",
+                    "span:has-text('This job is no longer available')",
+                    "div:has-text('This job is closed')",
+                ],
+                timeout_ms=800,
+            ):
+                _record_timing()
+                return ApplyOutcome(
+                    status=ApplicationStatus.SKIPPED,
+                    reason=SkipReason.STALE_JOB,
+                    detail="LinkedIn job is closed / no longer accepting applications",
+                )
+
             # Company-site job: resolve the employer's actual ATS link by
             # opening it (link-out only — nothing is submitted on LinkedIn's
             # side). Sidekick rejects raw linkedin.com listing links, so an
@@ -2097,11 +2136,11 @@ class LinkedInPlatform(BaseJobPlatform):
                     if await lbl.count() > 0:
                         cb_label = (await safe_text(lbl)).strip()
                 if not cb_label:
-                    lbl = cb.locator("xpath=ancestor::label[1], xpath=following-sibling::label[1]").first
+                    lbl = cb.locator("xpath=ancestor::label[1] | following-sibling::label[1]").first
                     if await lbl.count() > 0:
                         cb_label = (await safe_text(lbl)).strip()
                 if not cb_label:
-                    p = cb.locator("xpath=following-sibling::p | xpath=parent::div/following-sibling::p | xpath=following-sibling::span | xpath=parent::div/following-sibling::span").first
+                    p = cb.locator("xpath=following-sibling::p | parent::div/following-sibling::p | following-sibling::span | parent::div/following-sibling::span").first
                     if await p.count() > 0:
                         cb_label = (await safe_text(p)).strip()
 
@@ -2112,24 +2151,39 @@ class LinkedInPlatform(BaseJobPlatform):
                     if await leg.count() > 0:
                         fs_legend = (await safe_text(leg)).strip()
                     if not fs_legend:
-                        pre_p = fs.locator("xpath=preceding-sibling::p[1] | xpath=preceding-sibling::div//p[1]").first
+                        pre_p = fs.locator("xpath=preceding-sibling::p[1] | preceding-sibling::div//p[1]").first
                         if await pre_p.count() > 0:
                             fs_legend = (await safe_text(pre_p)).strip()
                 if not fs_legend:
-                    container_p = cb.locator("xpath=ancestor::div[contains(@componentkey, 'easyApplyFieldFocus')]//p[1] | xpath=ancestor::div[contains(@class, 'jobs-easy-apply-form-section__grouping')]//p[1]").first
+                    container_p = cb.locator("xpath=ancestor::div[contains(@componentkey, 'easyApplyFieldFocus')]//p[1] | ancestor::div[contains(@class, 'jobs-easy-apply-form-section__grouping')]//p[1]").first
                     if await container_p.count() > 0:
                         fs_legend = (await safe_text(container_p)).strip()
 
                 cb_label_low = cb_label.lower()
                 is_checked = await cb.is_checked()
                 lookup_text = fs_legend if (cb_label_low in ("yes", "") and fs_legend) else cb_label
+
+                async def _check_cb_target(target_cb: Locator) -> None:
+                    try:
+                        await target_cb.check(timeout=1500)
+                    except Exception:
+                        try:
+                            await target_cb.check(force=True, timeout=1500)
+                        except Exception:
+                            _id = await target_cb.get_attribute("id") or ""
+                            lbl_el = modal.locator(f"label[for='{_id}']").first if _id else None
+                            if lbl_el and await lbl_el.count() > 0:
+                                await lbl_el.click(timeout=1500)
+                            else:
+                                await target_cb.click(force=True, timeout=1500)
+
                 resolved = resolve_screening(ScreeningQuestion(text=lookup_text, kind="checkbox")) if lookup_text else None
                 if resolved and resolved.source in {"profile", "kb", "profile-override"}:
                     if self.answers._polarity(resolved.value) is True and not is_checked:
-                        await cb.check(timeout=1500)
+                        await _check_cb_target(cb)
                 elif any(w in (lookup_text or "").lower() for w in ("consent", "terms", "agree", "privacy", "certify", "acknowledge", "authorize")):
                     if not is_checked:
-                        await cb.check(timeout=1500)
+                        await _check_cb_target(cb)
                 elif "follow" in cb_label_low:
                     if is_checked:
                         try:
