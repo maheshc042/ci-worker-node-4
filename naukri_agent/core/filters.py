@@ -458,6 +458,19 @@ class FilterEngine:
                     title_variants.append(sde_equiv)
                 title_variants.extend(["sde", "software development engineer", "software engineer"])
 
+            if re.search(r"\bdev\b", tech_norm):
+                dev_equiv = re.sub(r"\bdev\b", "developer", tech_norm)
+                if dev_equiv not in title_variants:
+                    title_variants.append(dev_equiv)
+            if re.search(r"\bengineering\b", tech_norm):
+                eng_equiv = re.sub(r"\bengineering\b", "engineer", tech_norm)
+                if eng_equiv not in title_variants:
+                    title_variants.append(eng_equiv)
+            if re.search(r"\bdev\b", tech_norm) and re.search(r"\bengineering\b", tech_norm):
+                both_equiv = re.sub(r"\bengineering\b", "engineer", re.sub(r"\bdev\b", "developer", tech_norm))
+                if both_equiv not in title_variants:
+                    title_variants.append(both_equiv)
+
             if _contains_any(title, ["machine learning", "machine learning engineer"]) and _contains_any(title, ["backend", "back end"]):
                 title_variants.extend(["ai backend", "ai backend engineer", "python backend engineer"])
 

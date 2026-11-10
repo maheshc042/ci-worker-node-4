@@ -6,7 +6,9 @@ No browser or DB needed.
 import unittest
 
 from naukri_agent.core.answers import AnswerEngine, ExperienceAnswers
-from naukri_agent.core.models import ScreeningQuestion
+from naukri_agent.core.filters import FilterEngine, FilterRules, Job, impute_seniority
+from naukri_agent.core.models import ScreeningQuestion, SkipReason
+from naukri_agent.core.ranking import CandidateProfile
 
 # Geography tests supply their own home city fixture; production always
 # passes `candidate.location` from config.
@@ -414,6 +416,48 @@ class TestFluencyAndRating(unittest.TestCase):
         self.assertIsNotNone(res)
         assert res is not None
         self.assertEqual(res.value, "8")
+
+
+class TestTitleDevAndEngineeringEquivalence(unittest.TestCase):
+    """Verify 'dev' <-> 'developer' and 'engineering' <-> 'engineer' title normalisation."""
+
+    def setUp(self):
+        self.rules = FilterRules(
+            title_must_include_any=[
+                "ai developer", "ai full stack developer", "platform engineer"
+            ],
+            title_must_exclude_any=["manager", "lead"],
+        )
+        self.candidate = CandidateProfile(
+            title_keywords=["ai", "python"],
+            core_skills=["python", "fastapi"],
+            secondary_skills=["react"],
+            target_experience_years=2.5,
+        )
+        self.engine = FilterEngine(self.rules, self.candidate)
+
+    def test_dev_suffix_matches_developer(self):
+        job = Job(job_id="t1", platform="linkedin", title="Junior AI full stack dev", company="C", url="http://x")
+        dec = self.engine.evaluate_card(job)
+        self.assertTrue(dec.passed)
+
+    def test_engineering_suffix_matches_engineer(self):
+        job = Job(job_id="t2", platform="linkedin", title="AI Platform Engineering (B2B Integration)", company="C", url="http://x")
+        dec = self.engine.evaluate_card(job)
+        self.assertTrue(dec.passed)
+
+    def test_senior_level_3_still_rejected_by_experience(self):
+        # Even when title is included (e.g. software engineer), level-3 seniority rejects by experience ceiling
+        rules_swe = FilterRules(
+            title_must_include_any=["software engineer", "software development engineer"],
+            title_must_exclude_any=["manager", "lead"],
+        )
+        engine_swe = FilterEngine(rules_swe, self.candidate)
+        job = Job(job_id="t3", platform="linkedin", title="Software Development Engineer - 3 (Backend)", company="C", url="http://x")
+        impute_seniority(job)
+        dec = engine_swe.evaluate_card(job)
+        self.assertFalse(dec.passed)
+        self.assertEqual(dec.reason, SkipReason.FILTER_EXPERIENCE)
 
 
 if __name__ == "__main__":
