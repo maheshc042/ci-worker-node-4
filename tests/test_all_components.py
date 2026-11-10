@@ -6938,6 +6938,21 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         job = Job("cutshort-python", "Python developer", "Example", "https://cutshort.io/job/example")
         path, track = _track_resume_for(job)
         self.assertEqual(track, "AI / Python Engineer")
+
+        # Complex Python titles must map to AI / Python Engineer
+        for py_title in [
+            "Senior Backend Developer (Python) - 3-6 years",
+            "Python / Django Developer",
+            "Django Developer",
+            "Backend Engineer (Go / Python / Java)",
+        ]:
+            _, py_track = _track_resume_for(Job("cutshort-py", py_title, "Ex", "https://cutshort.io/job/ex"))
+            self.assertEqual(py_track, "AI / Python Engineer", f"Failed for {py_title}")
+
+        # Pure web / frontend / fullstack roles without Python/AI map to Full Stack
+        _, fs_track = _track_resume_for(Job("cutshort-fs", "FullStack Developer", "Ex", "https://cutshort.io/job/ex"))
+        self.assertEqual(fs_track, "Full Stack Engineer")
+
         full_stack = path.with_stem(path.stem + "_1_")
         self.assertTrue(_resume_label_pattern(full_stack).fullmatch(full_stack.stem + "_X9aB.pdf"))
         self.assertTrue(_resume_label_pattern(full_stack).fullmatch(full_stack.stem.rstrip("_") + "_X9aB"))

@@ -194,7 +194,7 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
             for k in ["genai", "machine learning", "chatbot", "fastapi"]
         )
         is_ai_job |= bool(re.search(r"\b(?:ai|ml|llms?|gpt|rag|agents?|nlp)\b", text_for_resume))
-        is_ai_job |= bool(re.search(r"\bpython\s+(?:(?:backend|software)\s+)?(?:developer|engineer)\b", job.title, re.I))
+        is_ai_job |= bool(re.search(r"\bpython\b|\b(?:fastapi|django|flask)\b", job.title, re.I))
         profiles = [
             p for p in (getattr(cfg, "profiles", []) or [])
             if p.enabled and getattr(p, "resume_file", None)
