@@ -2149,7 +2149,23 @@ class CutshortPlatform(BaseJobPlatform):
             "[-–—−]" if c in "-–—−" else r"\s+" if c == " " else re.escape(c)
             for c in heading_text
         ) + r"$", re.IGNORECASE)
-        modal_matches_job = modal is not None and await modal.get_by_text(heading).first.is_visible()
+        modal_matches_job = False
+        if modal is not None:
+            try:
+                modal_matches_job = await modal.get_by_text(heading).first.is_visible()
+            except Exception:
+                pass
+            if not modal_matches_job and modal_text:
+                if heading.search(modal_text):
+                    modal_matches_job = True
+                elif "you are applying for" in modal_text.lower():
+                    clean_modal = re.sub(r"[^\w\s]", "", modal_text).lower()
+                    norm_company = re.sub(r"[^\w\s]", "", job.company).lower()
+                    if not norm_company or norm_company in clean_modal:
+                        title_tokens = [w for w in re.sub(r"[^\w\s]", "", job.title).lower().split() if len(w) > 2]
+                        matched_tokens = sum(1 for w in title_tokens if w in clean_modal)
+                        if not title_tokens or (matched_tokens / len(title_tokens)) >= 0.5:
+                            modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)
         resume_verified = resume_path is None
