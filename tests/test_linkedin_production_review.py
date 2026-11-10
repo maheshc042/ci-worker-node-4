@@ -221,3 +221,42 @@ class TestLinkedInReceiptScope(unittest.IsolatedAsyncioTestCase):
         with patch.object(linkedin, 'first_visible', new=AsyncMock(return_value=MagicMock())) as find:
             self.assertFalse(await platform._verify_submit(MagicMock(), job))
         find.assert_not_awaited()
+
+    def test_run753_screening_resolution(self):
+        from naukri_agent.config import load_config
+        from naukri_agent.core.answers import AnswerEngine
+        from naukri_agent.core.models import ScreeningQuestion
+
+        cfg = load_config(Path("config/config.yaml"))
+        answers = AnswerEngine(
+            kb=[],
+            profile_answers=cfg.answers,
+            strict=False,
+            experience=cfg.experience_for(cfg.profiles[0]),
+            home_location=cfg.candidate.location,
+        )
+
+        # Q#602: remote setting
+        res_602 = answers.resolve(ScreeningQuestion(text="Are you comfortable working in a remote setting?", kind="radio", options=["Yes", "No"]))
+        self.assertIsNotNone(res_602)
+        self.assertEqual(res_602.value, "Yes")
+
+        # Q#603: MarkLogic
+        res_603 = answers.resolve(ScreeningQuestion(text="How many years of work experience do you have with MarkLogic?", kind="text"))
+        self.assertIsNotNone(res_603)
+        self.assertEqual(res_603.value, "0")
+
+        # Q#604: Energy Exemplar consent
+        res_604 = answers.resolve(ScreeningQuestion(text="Energy Exemplar has my consent to collect, store, and process my data for the purpose of considering me for employment, and for up to 365 days thereafter.*", kind="checkbox"))
+        self.assertIsNotNone(res_604)
+        self.assertEqual(res_604.value, "Yes")
+
+        # Q#608: Expected CTC
+        res_608 = answers.resolve(ScreeningQuestion(text="(Base + Bonus)* 3/127 3 of 127 characters What is your Expected CTC in LPA?", kind="text"))
+        self.assertIsNotNone(res_608)
+        self.assertEqual(res_608.value, "7")
+
+        # Join date
+        res_join = answers.resolve(ScreeningQuestion(text="When did you join your current employer? (Year/Month)", kind="text"))
+        self.assertIsNotNone(res_join)
+        self.assertEqual(res_join.value, "2023/06")

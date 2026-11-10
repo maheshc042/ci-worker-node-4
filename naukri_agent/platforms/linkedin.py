@@ -2100,12 +2100,35 @@ class LinkedInPlatform(BaseJobPlatform):
                     lbl = cb.locator("xpath=ancestor::label[1], xpath=following-sibling::label[1]").first
                     if await lbl.count() > 0:
                         cb_label = (await safe_text(lbl)).strip()
+                if not cb_label:
+                    p = cb.locator("xpath=following-sibling::p | xpath=parent::div/following-sibling::p | xpath=following-sibling::span | xpath=parent::div/following-sibling::span").first
+                    if await p.count() > 0:
+                        cb_label = (await safe_text(p)).strip()
+
+                fs_legend = ""
+                fs = cb.locator("xpath=ancestor::fieldset[1]").first
+                if await fs.count() > 0:
+                    leg = fs.locator("legend").first
+                    if await leg.count() > 0:
+                        fs_legend = (await safe_text(leg)).strip()
+                    if not fs_legend:
+                        pre_p = fs.locator("xpath=preceding-sibling::p[1] | xpath=preceding-sibling::div//p[1]").first
+                        if await pre_p.count() > 0:
+                            fs_legend = (await safe_text(pre_p)).strip()
+                if not fs_legend:
+                    container_p = cb.locator("xpath=ancestor::div[contains(@componentkey, 'easyApplyFieldFocus')]//p[1] | xpath=ancestor::div[contains(@class, 'jobs-easy-apply-form-section__grouping')]//p[1]").first
+                    if await container_p.count() > 0:
+                        fs_legend = (await safe_text(container_p)).strip()
 
                 cb_label_low = cb_label.lower()
                 is_checked = await cb.is_checked()
-                resolved = resolve_screening(ScreeningQuestion(text=cb_label, kind="checkbox")) if cb_label else None
+                lookup_text = fs_legend if (cb_label_low in ("yes", "") and fs_legend) else cb_label
+                resolved = resolve_screening(ScreeningQuestion(text=lookup_text, kind="checkbox")) if lookup_text else None
                 if resolved and resolved.source in {"profile", "kb", "profile-override"}:
                     if self.answers._polarity(resolved.value) is True and not is_checked:
+                        await cb.check(timeout=1500)
+                elif any(w in (lookup_text or "").lower() for w in ("consent", "terms", "agree", "privacy", "certify", "acknowledge", "authorize")):
+                    if not is_checked:
                         await cb.check(timeout=1500)
                 elif "follow" in cb_label_low:
                     if is_checked:
@@ -2341,12 +2364,32 @@ class LinkedInPlatform(BaseJobPlatform):
                                 except ValueError:
                                     continue
                         ans = _parsed.strftime(_fmt) if _parsed else ""
-                    elif inp_type == "date" or any(k in label_low for k in ["start date", "joining date", "available date", "date of", "last working", "lwd", "relieving"]):
+                    elif "year/month" in label_low or "(year/month)" in label_low or "yyyy/mm" in label_low or "yyyy-mm" in label_low:
+                        _fmt = "%Y/%m" if ("/" in label_low or "year/month" in label_low) else "%Y-%m"
+                        _parsed = None
+                        if ans:
+                            for _in_fmt in (
+                                "%Y/%m", "%Y-%m", "%m/%Y", "%m-%Y",
+                                "%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d",
+                                "%d/%m/%y", "%d-%m-%y", "%d%m%y",
+                            ):
+                                try:
+                                    _parsed = datetime.datetime.strptime(
+                                        ans.strip(), _in_fmt
+                                    ).date()
+                                    break
+                                except ValueError:
+                                    continue
+                        elif any(k in label_low for k in ["join", "current employer", "joining"]):
+                            _parsed = datetime.date(2023, 6, 1)
+                        ans = _parsed.strftime(_fmt) if _parsed else ans
+                    elif inp_type == "date" or any(k in label_low for k in ["start date", "joining date", "available date", "date of", "last working", "lwd", "relieving", "when did you join"]):
                         # Dates are identity facts: convert a configured answer
                         # to ISO, otherwise never substitute today's date.
                         _parsed = None
                         if ans:
                             for _in_fmt in (
+                                "%Y/%m", "%Y-%m", "%m/%Y", "%m-%Y",
                                 "%d/%m/%Y", "%d-%m-%Y", "%d%m%Y", "%Y-%m-%d",
                                 "%d/%m/%y", "%d-%m-%y", "%d%m%y",
                             ):
