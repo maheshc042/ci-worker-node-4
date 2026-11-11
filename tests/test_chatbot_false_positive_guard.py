@@ -325,6 +325,35 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
             outcome = await engine._handle_chatbot_result(job, "P", 1, res)
         self.assertIsNone(outcome)
 
+    async def test_chatbot_scopes_classify_input_inside_drawer(self):
+        """Background JD industry chips on page must never bleed into chatbot _classify_input."""
+        from naukri_agent.naukri import chatbot as cb_mod
+        from naukri_agent.core.run_policy import RunPolicy
+
+        page = MagicMock()
+        drawer = MagicMock()
+
+        # Page has background chips ("IT Services & Consulting"), drawer has NO radios/chips, only text input
+        bg_chip = MagicMock(is_visible=AsyncMock(return_value=True), inner_text=AsyncMock(return_value="IT Services & Consulting"))
+        page.locator.return_value.all = AsyncMock(return_value=[bg_chip])
+        drawer.locator.return_value.all = AsyncMock(return_value=[])
+
+        text_field = MagicMock(is_visible=AsyncMock(return_value=True))
+
+        async def fake_first_visible(root, selectors, timeout_ms=300):
+            if root is page:
+                return drawer  # _drawer_scope finds drawer
+            if root is drawer and any("textArea" in s or "textarea" in s for s in selectors):
+                return text_field  # text input exists inside drawer
+            return None
+
+        handler = cb_mod.ChatbotHandler(page, MagicMock(), RunPolicy(dry_run=True, side_effects_enabled=False))
+        with patch("naukri_agent.naukri.chatbot.first_visible", side_effect=fake_first_visible):
+            kind, opts = await handler._classify_input()
+
+        self.assertEqual(kind, "text")
+        self.assertEqual(opts, [])
+
 if __name__ == "__main__":
     unittest.main()
 

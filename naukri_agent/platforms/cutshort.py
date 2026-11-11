@@ -220,9 +220,9 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
 def _resume_label_pattern(path: Path) -> re.Pattern[str]:
     stem = path.stem.rstrip("_")
     # The rendered filename can omit the local trailing underscore or use
-    # it as the separator before Cutshort's four-character upload suffix.
-    suffix = r"(?:_{1,2}[A-Za-z0-9]{4}|_)?" if stem != path.stem else r"(?:_[A-Za-z0-9]{4})?"
-    return re.compile(rf"^{re.escape(stem)}{suffix}(?:[.]pdf)?$", re.IGNORECASE)
+    # it as the separator before Cutshort's upload suffix (4-12 chars).
+    suffix = r"(?:_{1,2}[A-Za-z0-9-]{4,12}|_)?" if stem != path.stem else r"(?:_[A-Za-z0-9-]{4,12})?"
+    return re.compile(rf"^{re.escape(stem)}{suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
 
 
 class CutshortChatbot:
@@ -2145,10 +2145,12 @@ class CutshortPlatform(BaseJobPlatform):
 
         # Only treat typographic dashes as equivalent. Match the full role and employer.
         heading_text = " ".join(f"You are applying for {job.title} at {job.company}".split())
-        heading = re.compile(r"^" + "".join(
+        heading_body = "".join(
             "[-–—−]" if c in "-–—−" else r"\s+" if c == " " else re.escape(c)
             for c in heading_text
-        ) + r"$", re.IGNORECASE)
+        )
+        heading = re.compile(rf"^{heading_body}$", re.IGNORECASE)
+        heading_sub = re.compile(heading_body, re.IGNORECASE)
         modal_matches_job = False
         if modal is not None:
             try:
@@ -2156,13 +2158,20 @@ class CutshortPlatform(BaseJobPlatform):
             except Exception:
                 pass
             if not modal_matches_job and modal_text:
-                if heading.search(modal_text):
+                if heading_sub.search(modal_text):
                     modal_matches_job = True
-                elif "you are applying for" in modal_text.lower():
-                    clean_modal = re.sub(r"[^\w\s]", "", modal_text).lower()
-                    norm_company = re.sub(r"[^\w\s]", "", job.company).lower()
-                    if not norm_company or norm_company in clean_modal:
-                        title_tokens = [w for w in re.sub(r"[^\w\s]", "", job.title).lower().split() if len(w) > 2]
+                else:
+                    clean_modal = re.sub(r"[^\w\s]", " ", modal_text).lower()
+                    clean_modal_squashed = re.sub(r"\s+", "", clean_modal)
+                    norm_company = re.sub(r"[^\w\s]", " ", job.company).lower().strip()
+                    norm_company_squashed = re.sub(r"\s+", "", norm_company)
+                    company_ok = (
+                        not norm_company
+                        or norm_company in clean_modal
+                        or (norm_company_squashed and norm_company_squashed in clean_modal_squashed)
+                    )
+                    if company_ok:
+                        title_tokens = [w for w in re.sub(r"[^\w\s]", " ", job.title).lower().split() if len(w) > 2]
                         matched_tokens = sum(1 for w in title_tokens if w in clean_modal)
                         if not title_tokens or (matched_tokens / len(title_tokens)) >= 0.5:
                             modal_matches_job = True
@@ -2171,15 +2180,44 @@ class CutshortPlatform(BaseJobPlatform):
         resume_verified = resume_path is None
         resume_failure_path = None
         if modal_matches_job and resume_path is not None and resume_path.is_file():
-            selected_resume = modal.get_by_text(_resume_label_pattern(resume_path)).first
+            resume_pattern = _resume_label_pattern(resume_path)
+            selected_resume = modal.get_by_text(resume_pattern).first
+            stem_base = resume_path.stem.rstrip("_")
+            # Substring pattern that still preserves distinct AI (_2026) vs FullStack (_2026_1) tracks
+            distinct_sub = (
+                re.compile(re.escape(stem_base), re.IGNORECASE)
+                if stem_base != resume_path.stem or "_1" in stem_base
+                else re.compile(rf"{re.escape(stem_base)}(?!_1\b)", re.IGNORECASE)
+            )
+            broad_resume = modal.get_by_text(distinct_sub).first
             try:
-                if not await selected_resume.is_visible():
-                    upload = modal.get_by_text("Upload another resume", exact=True)
-                    async with self.page.expect_file_chooser(timeout=3000) as chooser:
+                is_vis = await selected_resume.is_visible()
+                if not is_vis:
+                    try:
+                        is_vis = await broad_resume.is_visible()
+                    except Exception:
+                        is_vis = False
+                if not is_vis:
+                    upload = await first_visible(
+                        modal,
+                        [
+                            "text='Upload another resume'",
+                            "text='Upload new resume'",
+                            "text='Upload resume'",
+                        ],
+                        timeout_ms=2500,
+                    )
+                    if upload is None:
+                        upload = modal.get_by_text("Upload another resume", exact=True)
+                    async with self.page.expect_file_chooser(timeout=4000) as chooser:
                         await upload.click(timeout=2500)
-                    await (await chooser.value).set_files(str(resume_path), timeout=3000)
-                await selected_resume.wait_for(state="visible", timeout=12000)
-                resume_verified = True
+                    await (await chooser.value).set_files(str(resume_path), timeout=4000)
+                try:
+                    await selected_resume.wait_for(state="visible", timeout=8000)
+                    resume_verified = True
+                except Exception:
+                    await broad_resume.wait_for(state="visible", timeout=5000)
+                    resume_verified = True
             except Exception as exc:
                 log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
                 resume_failure_path = await self.artifacts.capture_failure(
@@ -2534,6 +2572,12 @@ class CutshortPlatform(BaseJobPlatform):
             if deadline is not None and monotonic() >= deadline:
                 self.questionnaire_stats["incomplete"] = 1
                 break
+            phase_deadline = deadline
+            if pending and deadline is not None:
+                rem = max(0.0, deadline - monotonic())
+                # Keep up to 25% (max 3m) for Inbox so a large Pending backlog
+                # cannot starve fresh 24h inbox questionnaires.
+                phase_deadline = deadline - min(180.0, rem * 0.25)
             try:
                 url = f"{base_url}?stage=awaiting" if pending else base_url
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -2544,7 +2588,7 @@ class CutshortPlatform(BaseJobPlatform):
                         await tab.click(timeout=3000)
                 panel = self.page.locator("#tabpanel-awaiting:visible" if pending else "div[role='tabpanel']:visible").first
                 await panel.wait_for(state="visible", timeout=8000)
-                remaining = max(0, deadline - monotonic()) if deadline is not None else None
+                remaining = max(0, phase_deadline - monotonic()) if phase_deadline is not None else None
                 async with asyncio.timeout(remaining):
                     ready = await first_visible(panel, [
                         "ul[role='list'] > div[role='button']",
@@ -2554,12 +2598,13 @@ class CutshortPlatform(BaseJobPlatform):
                     if ready is None:
                         raise ValueError("Cutshort conversation rows or empty state did not load")
                     await self._scan_message_rows(
-                        panel, set(), unanswered, deadline, pending=pending, seen_jobs=seen_jobs,
+                        panel, set(), unanswered, phase_deadline, pending=pending, seen_jobs=seen_jobs,
                     )
             except TimeoutError:
                 self.questionnaire_stats["incomplete"] = 1
                 log.warning("cutshort.messages.time_budget_exhausted", phase="pending" if pending else "inbox")
-                break
+                if not pending or (deadline is not None and monotonic() >= deadline):
+                    break
             except Exception as exc:
                 self.questionnaire_stats["incomplete"] = 1
                 log.warning("cutshort.messages.scan_failed", pending=pending, error=str(exc)[:150])
@@ -2594,6 +2639,66 @@ class CutshortPlatform(BaseJobPlatform):
         return amount * {"s": 1 / 3600, "m": 1 / 60, "h": 1, "d": 24,
                          "w": 168, "y": 8760}[unit[0]]
 
+    async def _resolve_message_pane(
+        self, title: str, company: str, prev_href: str = "", timeout_ms: int = 6000,
+    ) -> tuple[Locator, str]:
+        """Locate the active conversation pane matching (title, company), handling
+        anonymized agency threads ('undefined') and whitespace variance."""
+        base_pane = self.page.locator("div[class*='sc-259ba717-13']:visible")
+        title_pane = base_pane.filter(has=self.page.get_by_text(title, exact=True))
+        strict_pane = title_pane.filter(has=self.page.get_by_text(company, exact=True))
+        company_low = company.strip().lower()
+        norm_company = " ".join(company_low.split())
+        pane_deadline = monotonic() + timeout_ms / 1000.0
+        matched_pane: Locator | None = None
+
+        while monotonic() < pane_deadline:
+            if company_low != "undefined" and await strict_pane.count() > 0:
+                matched_pane = strict_pane.first
+                break
+            if await title_pane.count() > 0:
+                cand = title_pane.first
+                info = await cand.evaluate("""el => {
+                    const norm = s => (s || '').trim().replace(/\\s+/g, ' ').toLowerCase();
+                    const vjd = [...el.querySelectorAll('a, button, span, div')]
+                        .find(n => (n.textContent || '').trim() === 'View full job description');
+                    const href = vjd ? (vjd.getAttribute('href') || '') : '';
+                    return {
+                        text: norm(el.innerText || el.textContent),
+                        href,
+                    };
+                }""")
+                cur_href = (info or {}).get("href") or ""
+                pane_text = (info or {}).get("text") or ""
+                # Only treat a title-only pane as switched once its href moves
+                # off prev_href (when prev_href was populated) OR company/agency fits.
+                href_switched = (not prev_href) or (bool(cur_href) and cur_href != prev_href)
+                if company_low == "undefined" and href_switched and ("agency job" in pane_text or cur_href):
+                    matched_pane = cand
+                    break
+                if norm_company and norm_company in pane_text and href_switched:
+                    matched_pane = cand
+                    break
+            await asyncio.sleep(0.15)
+
+        if matched_pane is None:
+            raise ValueError(f"Cutshort conversation pane did not load for {company} | {title}")
+
+        vjd = matched_pane.get_by_text("View full job description", exact=True)
+        if await vjd.count() == 0:
+            vjd_deadline = monotonic() + 1.5
+            while monotonic() < vjd_deadline:
+                if await vjd.count() > 0:
+                    break
+                await asyncio.sleep(0.15)
+        if await vjd.count() > 0:
+            href = await vjd.first.get_attribute("href", timeout=2000) or ""
+        else:
+            # Closed or deleted job threads keep the conversation pane without a
+            # job-description link; proceed only if conversation content exists.
+            href = ""
+        return matched_pane, href
+
     async def _scan_message_rows(
         self, panel: Locator, processed: set[tuple[str, str]], unanswered: list[dict], deadline: float | None,
         *, pending: bool = False, seen_jobs: set[str] | None = None,
@@ -2605,18 +2710,23 @@ class CutshortPlatform(BaseJobPlatform):
         # Use the conversation row's company and full job title, not its changing preview.
         while deadline is None or monotonic() < deadline:
             previous_count = len(processed)
-            batch = await rows.evaluate_all(r"""rows => rows.filter(row => row.getClientRects().length).map(row => {
+            batch = await rows.evaluate_all(r"""rows => rows.map((row, domIdx) => {
+                if (!row.getClientRects().length) return null;
                 const normalize = text => text.trim().replace(/\s+/g, ' ');
                 const title = [...row.querySelectorAll('div')].find(
                     el => el.children.length === 0 && normalize(el.textContent).startsWith('For job ')
                 );
+                const img = row.querySelector("img[alt$=' profile picture']");
+                const rawAlt = img ? (img.getAttribute('alt') || img.alt || '') : '';
                 return {
                     title: title ? normalize(title.textContent) : '',
-                    company: row.querySelector("img[alt$=' profile picture']")?.alt.replace(/ profile picture$/, '').trim() || '',
+                    company: rawAlt.replace(/ profile picture$/, '').trim(),
+                    alt: rawAlt,
                     age: row.querySelector('.conversation-date')?.textContent || '',
                     questionnaire: row.innerText.includes('[Questionnaire]'),
+                    dom_idx: domIdx,
                 };
-            })""")
+            }).filter(Boolean)""")
             for item in batch:
                 if deadline is not None and monotonic() >= deadline:
                     self.questionnaire_stats["incomplete"] = 1
@@ -2638,17 +2748,49 @@ class CutshortPlatform(BaseJobPlatform):
                         self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
                         continue
                 try:
+                    alt_label = item.get("alt") or f"{company} profile picture"
                     row = rows.filter(has=self.page.get_by_text(title, exact=True)).filter(
-                        has=self.page.get_by_alt_text(f"{company} profile picture", exact=True),
+                        has=self.page.get_by_alt_text(alt_label, exact=True),
                     )
-                    await row.click(timeout=4000)
-                    pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
-                        has=self.page.get_by_text(title, exact=True),
-                    ).filter(has=self.page.get_by_text(company, exact=True))
-                    href = await pane.get_by_text("View full job description", exact=True).get_attribute(
-                        "href", timeout=6000,
+                    row_count = await row.count() if isinstance(row, Locator) else None
+                    if isinstance(row_count, int):
+                        prev_href = ""
+                        cur_vjd = self.page.locator("div[class*='sc-259ba717-13']:visible").get_by_text(
+                            "View full job description", exact=True,
+                        ).first
+                        try:
+                            if await cur_vjd.count() > 0:
+                                prev_href = await cur_vjd.get_attribute("href", timeout=500) or ""
+                        except Exception:
+                            prev_href = ""
+                        click_target = row
+                        if row_count != 1:
+                            if "dom_idx" in item:
+                                click_target = rows.nth(item["dom_idx"])
+                            elif row_count > 1:
+                                click_target = row.first
+                        try:
+                            await click_target.click(timeout=4000)
+                        except Exception as click_exc:
+                            if "strict mode violation" in str(click_exc).lower():
+                                await click_target.first.click(timeout=4000)
+                            else:
+                                await click_target.scroll_into_view_if_needed(timeout=1500)
+                                await click_target.evaluate("el => el.click()")
+                        pane, href = await self._resolve_message_pane(title, company, prev_href=prev_href)
+                    else:
+                        await row.click(timeout=4000)
+                        pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(
+                            has=self.page.get_by_text(title, exact=True),
+                        ).filter(has=self.page.get_by_text(company, exact=True))
+                        href = await pane.get_by_text("View full job description", exact=True).get_attribute(
+                            "href", timeout=6000,
+                        )
+                    job_path = (
+                        self._message_job_path(href)
+                        if href
+                        else (f"thread:{company}:{title}" if isinstance(row_count, int) else self._message_job_path(""))
                     )
-                    job_path = self._message_job_path(href or "")
                     if job_path not in seen_jobs and await self._answer_current_chat(
                         pane, key, unanswered, expected_questionnaire,
                     ):
@@ -2656,6 +2798,14 @@ class CutshortPlatform(BaseJobPlatform):
                 except Exception as exc:
                     self.questionnaire_stats["unconfirmed"] += 1
                     log.warning("cutshort.messages.thread_unverified", item=key, error=str(exc)[:120])
+                    if self.questionnaire_stats["unconfirmed"] <= 3:
+                        try:
+                            await self.artifacts.dump_html(
+                                self.page, "messages-unverified", "Cutshort",
+                                str(self.questionnaire_stats["unconfirmed"]),
+                            )
+                        except Exception:
+                            pass
             if len(processed) > previous_count:
                 at_end = False
                 continue

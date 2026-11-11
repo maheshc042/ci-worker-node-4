@@ -459,6 +459,239 @@ class TestTitleDevAndEngineeringEquivalence(unittest.TestCase):
         self.assertFalse(dec.passed)
         self.assertEqual(dec.reason, SkipReason.FILTER_EXPERIENCE)
 
+    def test_negative_answer_maps_to_skip_checkbox(self):
+        """Review #613 shape: explicit 'No' maps to 'Skip this question' when checklist lacks 'No'."""
+        eng = AnswerEngine(
+            kb=[],
+            profile_answers={"do you have the experience in below industry/ domain": "No"},
+            strict=True,
+            home_location=_HOME,
+        )
+        q = ScreeningQuestion(
+            text="Do you have the experience in below industry/ Domain",
+            kind="checkbox",
+            options=["Healthcare", "Bio", "Medical", "Hospitality", "Clinical", "Drug", "Skip this question"],
+        )
+        res = eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Skip this question")
+        self.assertEqual(res.source, "option-match-skip")
+
+    def test_manual_testing_compound_override_and_qa_variants(self):
+        """Run #756 fix: compound automation + manual testing titles and QA variants pass."""
+        rules_qa = FilterRules(
+            title_must_include_any=[
+                "qa engineer", "test engineer", "testing engineer", "qa tester",
+                "frontend qa", "qa specialist", "database tester", "qa manual test engineer",
+            ],
+            title_must_exclude_any=["manual testing", "manual test"],
+        )
+        engine_qa = FilterEngine(rules_qa, self.candidate)
+        for title in (
+            "QA Engineer - Automation & Manual testing WITH Product Company",
+            "Qa Manual Test Engineer",
+            "Frontend QA",
+            "QA Tester",
+            "Testing Engineer I",
+            "Sr QA Specialist",
+            "Database Tester",
+        ):
+            job = Job(job_id="qa-1", platform="naukri", title=title, company="Corp", url="http://x", min_experience=1.0, max_experience=3.0)
+            self.assertTrue(engine_qa.evaluate_card(job).passed, f"Expected pass for {title}")
+
+    def test_cutshort_resume_pattern_extended_suffix(self):
+        from pathlib import Path
+        from naukri_agent.platforms.cutshort import _resume_label_pattern
+        fs_path = Path("resumes/CV_Mahesh_Chitakoti_2026_1_.pdf")
+        ai_path = Path("resumes/CV_Mahesh_Chitakoti_2026.pdf")
+        self.assertIsNotNone(_resume_label_pattern(fs_path).fullmatch("CV_Mahesh_Chitakoti_2026_1_X9aB1234.pdf"))
+        self.assertIsNone(_resume_label_pattern(ai_path).fullmatch("CV_Mahesh_Chitakoti_2026_1_X9aB1234.pdf"))
+
+
+class TestRun758FilterFixes(unittest.TestCase):
+    """Run #758 filter audits: AI systems override, FDSE/DET inclusion, frontend guard."""
+
+    @classmethod
+    def setUpClass(cls):
+        from naukri_agent.config import AgentConfig
+        cls.cfg = AgentConfig.load()
+
+    def _eval(self, profile, title: str, platform: str = "naukri", min_exp: float = 2.0, max_exp: float = 4.0):
+        cand = profile.to_candidate_profile(self.cfg)
+        engine = FilterEngine(profile.filters, cand)
+        job = Job(
+            job_id=f"t-{title[:20]}",
+            platform=platform,
+            title=title,
+            company="TestCorp",
+            url="https://example.com/job/1",
+            min_experience=min_exp,
+            max_experience=max_exp,
+        )
+        impute_seniority(job)
+        return engine.evaluate_card(job)
+
+    def test_ai_systems_engineer_override_and_systems_guard(self):
+        ai_prof = next(p for p in self.cfg.profiles if p.name == "AI / Python Engineer")
+        profiles = [
+            ("naukri", ai_prof),
+            ("wellfound", self.cfg.get_unified_wellfound_profile()),
+            ("instahyre", self.cfg.get_unified_instahyre_profile()),
+            ("cutshort", self.cfg.get_unified_cutshort_profile()),
+        ]
+        for platform, prof in profiles:
+            dec = self._eval(prof, "AI Systems Engineer (3+ Years Experience)", platform=platform, min_exp=3.0, max_exp=5.0)
+            self.assertTrue(dec.passed, f"Expected pass on {platform}: {dec}")
+            for blocked in ("Systems Engineer", "Embedded Systems Engineer", "Senior Systems Engineer"):
+                blk = self._eval(prof, blocked, platform=platform, min_exp=2.0, max_exp=4.0)
+                self.assertFalse(blk.passed, f"Expected {blocked!r} blocked on {platform}")
+
+    def test_fdse_and_det_included_while_frontend_stays_blocked(self):
+        fs_prof = next(p for p in self.cfg.profiles if p.name == "Full Stack / Web Developer")
+        ai_prof = next(p for p in self.cfg.profiles if p.name == "AI / Python Engineer")
+        insta_prof = self.cfg.get_unified_instahyre_profile()
+
+        self.assertTrue(self._eval(ai_prof, "Forward Deployed Software Engineer", platform="naukri").passed)
+        self.assertTrue(self._eval(fs_prof, "Forward Deployed Software Engineer", platform="naukri").passed)
+        self.assertTrue(self._eval(insta_prof, "Senior Development Engineer in Test - 2", platform="instahyre").passed)
+
+        for blocked_fe in ("Frontend Engineer", "Front End Developer"):
+            blk = self._eval(fs_prof, blocked_fe, platform="naukri")
+            self.assertFalse(blk.passed, f"Intentional block violated for {blocked_fe!r}")
+
+
+class TestCutshortSweepFixes(unittest.IsolatedAsyncioTestCase):
+    """Verify real-DOM Cutshort sweep edge cases and Pending->Inbox time budget split."""
+
+    async def test_scan_message_rows_real_dom_leading_space_undefined_duplicates_closed(self):
+        from time import monotonic
+        from unittest.mock import AsyncMock, MagicMock
+        from playwright.async_api import async_playwright
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        html = """<!doctype html><html><body>
+        <div id="tabpanel-awaiting" role="tabpanel">
+          <ul role="list" style="height:600px;overflow:auto;">
+            <div role="button" data-idx="0">
+              <img alt=" Insurance advisory and distribution platform profile picture" />
+              <div> Insurance advisory and distribution platform</div>
+              <div>For job Senior Backend Engineer</div>
+              <span>[Questionnaire]</span>
+            </div>
+            <div role="button" data-idx="1">
+              <img alt="undefined profile picture" />
+              <div></div>
+              <div>For job Application Engineer</div>
+              <span>[Questionnaire]</span>
+            </div>
+            <div role="button" data-idx="2">
+              <img alt="Acme Corp profile picture" />
+              <div>Acme Corp</div>
+              <div>For job Full Stack Engineer</div>
+              <span>[Questionnaire]</span>
+            </div>
+            <div role="button" data-idx="3">
+              <img alt="Acme Corp profile picture" />
+              <div>Acme Corp</div>
+              <div>For job Full Stack Engineer</div>
+              <span>[Questionnaire]</span>
+            </div>
+            <div role="button" data-idx="4">
+              <img alt="OldStartup profile picture" />
+              <div>OldStartup</div>
+              <div>For job Python Developer</div>
+              <span>[Questionnaire]</span>
+            </div>
+          </ul>
+        </div>
+        <div id="pane" class="sc-259ba717-13">Select a thread</div>
+        <script>
+        const panes = {
+          "0": `<div>Insurance advisory and distribution platform</div><div>For job Senior Backend Engineer</div><a href="https://cutshort.io/job/ins-1">View full job description</a>`,
+          "1": `<div>adhesives</div><div>Agency job</div><div>For job Application Engineer</div><a href="https://cutshort.io/job/agency-2">View full job description</a>`,
+          "2": `<div>Acme Corp</div><div>For job Full Stack Engineer</div><a href="https://cutshort.io/job/acme-3">View full job description</a>`,
+          "3": `<div>Acme Corp</div><div>For job Full Stack Engineer</div><a href="https://cutshort.io/job/acme-3b">View full job description</a>`,
+          "4": `<div>OldStartup</div><div>For job Python Developer</div><div>Closed conversation thread</div>`,
+        };
+        document.querySelectorAll("div[role='button']").forEach(btn => {
+          btn.addEventListener("click", () => {
+            document.getElementById("pane").innerHTML = panes[btn.dataset.idx];
+          });
+        });
+        </script>
+        </body></html>"""
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content(html)
+                plat = object.__new__(CutshortPlatform)
+                plat.page = page
+                plat.artifacts = MagicMock(dump_html=AsyncMock())
+                plat.questionnaire_stats = dict(
+                    checked=0, submitted=0, already_submitted=0,
+                    stale=0, unknown_age=0, unconfirmed=0, incomplete=0,
+                )
+                opened = []
+
+                async def fake_answer(pane, key, unanswered, expected_questionnaire, **kwargs):
+                    opened.append(key)
+                    return True
+
+                plat._answer_current_chat = fake_answer
+                seen_jobs: set[str] = set()
+                await plat._scan_message_rows(
+                    page.locator("#tabpanel-awaiting"),
+                    set(),
+                    [],
+                    deadline=monotonic() + 20.0,
+                    pending=True,
+                    seen_jobs=seen_jobs,
+                )
+                self.assertEqual(plat.questionnaire_stats["unconfirmed"], 0)
+                self.assertIn(("Insurance advisory and distribution platform", "For job Senior Backend Engineer"), opened)
+                self.assertIn(("undefined", "For job Application Engineer"), opened)
+                self.assertIn(("Acme Corp", "For job Full Stack Engineer"), opened)
+                self.assertIn(("OldStartup", "For job Python Developer"), opened)
+                self.assertIn("thread:OldStartup:For job Python Developer", seen_jobs)
+            finally:
+                await browser.close()
+
+    async def test_handle_messages_pending_timeout_still_runs_inbox(self):
+        from time import monotonic
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from naukri_agent.core.run_policy import RunPolicy
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        plat = object.__new__(CutshortPlatform)
+        plat.policy = RunPolicy(dry_run=False, side_effects_enabled=True)
+        plat.page = MagicMock()
+        plat.page.goto = AsyncMock()
+        tab = MagicMock(wait_for=AsyncMock(), get_attribute=AsyncMock(return_value="true"), click=AsyncMock())
+        panel = MagicMock(wait_for=AsyncMock())
+
+        def locator_side_effect(selector: str):
+            if selector == "#tab-awaiting":
+                return tab
+            return MagicMock(first=panel)
+
+        plat.page.locator.side_effect = locator_side_effect
+        phases: list[bool] = []
+
+        async def fake_scan(p_loc, processed, unanswered, phase_deadline, *, pending=False, seen_jobs=None):
+            phases.append(pending)
+            if pending:
+                raise TimeoutError("pending backlog exhausted budget")
+
+        plat._scan_message_rows = fake_scan
+        with patch("naukri_agent.platforms.cutshort.first_visible", new=AsyncMock(return_value=MagicMock())):
+            await plat.handle_messages(deadline=monotonic() + 30.0)
+
+        self.assertEqual(phases, [True, False])
+        self.assertEqual(plat.questionnaire_stats["incomplete"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

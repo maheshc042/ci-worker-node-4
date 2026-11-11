@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from typing import Any
 
 from playwright.async_api import Page
 
@@ -109,13 +110,23 @@ class ChatbotHandler:
             pass
 
     # ------------------------------------------------------------------- read
+    async def _drawer_scope(self) -> Any:
+        drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=400)
+        return drawer or self.page
+
     async def _current_question(self) -> ScreeningQuestion | None:
         """The last bot bubble is the active question."""
+        scope = await self._drawer_scope()
         bubbles: list = []
         for selector in S.CHATBOT_QUESTION:
-            bubbles = await self.page.locator(selector).all()
+            bubbles = await scope.locator(selector).all()
             if bubbles:
                 break
+        if not bubbles and scope is not self.page:
+            for selector in S.CHATBOT_QUESTION:
+                bubbles = await self.page.locator(selector).all()
+                if bubbles:
+                    break
         if not bubbles:
             return None
 
@@ -128,25 +139,27 @@ class ChatbotHandler:
         if not text:
             return None
 
-        kind, options = await self._classify_input()
+        kind, options = await self._classify_input(scope=scope)
         return ScreeningQuestion(text=text, kind=kind, options=options)
 
-    async def _classify_input(self) -> tuple[str, list[str]]:
+    async def _classify_input(self, scope: Any = None) -> tuple[str, list[str]]:
         """Inspect which widget the drawer is currently rendering, allowing time for React hydration."""
+        if scope is None:
+            scope = await self._drawer_scope()
         for attempt in range(5):
-            radios = await self._option_texts(S.CHATBOT_RADIO_OPTIONS)
+            radios = await self._option_texts(S.CHATBOT_RADIO_OPTIONS, scope=scope)
             if radios:
                 return "radio", radios
 
-            checkboxes = await self._option_texts(S.CHATBOT_CHECKBOX_OPTIONS)
+            checkboxes = await self._option_texts(S.CHATBOT_CHECKBOX_OPTIONS, scope=scope)
             if checkboxes:
                 return "checkbox", checkboxes
 
-            chips = await self._option_texts(S.CHATBOT_CHIPS)
+            chips = await self._option_texts(S.CHATBOT_CHIPS, scope=scope)
             if chips:
                 return "radio", chips
 
-            dropdown = await first_visible(self.page, S.CHATBOT_DROPDOWN, timeout_ms=300)
+            dropdown = await first_visible(scope, S.CHATBOT_DROPDOWN, timeout_ms=300)
             if dropdown is not None:
                 option_texts = [
                     (await safe_text(option))
@@ -156,24 +169,28 @@ class ChatbotHandler:
                 if options:
                     return "dropdown", options
 
-            # Custom combobox / dropdown options
-            combobox_options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS)
+            # Custom combobox / dropdown options (check drawer first, then page for portal popups)
+            combobox_options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS, scope=scope)
+            if not combobox_options and scope is not self.page:
+                combobox_options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS, scope=self.page)
             if combobox_options:
                 return "combobox", combobox_options
 
-            combobox_trigger = await first_visible(self.page, S.CHATBOT_COMBOBOX_TRIGGER, timeout_ms=300)
+            combobox_trigger = await first_visible(scope, S.CHATBOT_COMBOBOX_TRIGGER, timeout_ms=300)
             if combobox_trigger is not None:
                 try:
                     await combobox_trigger.click(timeout=1_500)
                     await human_pause(200, 400)
-                    options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS)
+                    options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS, scope=scope)
+                    if not options and scope is not self.page:
+                        options = await self._option_texts(S.CHATBOT_DROPDOWN_OPTIONS, scope=self.page)
                     if options:
                         return "combobox", options
                 except Exception:
                     pass
                 return "combobox", []
 
-            if await first_visible(self.page, S.CHATBOT_TEXT_INPUT, timeout_ms=300):
+            if await first_visible(scope, S.CHATBOT_TEXT_INPUT, timeout_ms=300):
                 return "text", []
 
             if attempt < 4:
@@ -181,9 +198,10 @@ class ChatbotHandler:
 
         return "unknown", []
 
-    async def _option_texts(self, selectors: list[str]) -> list[str]:
+    async def _option_texts(self, selectors: list[str], scope: Any = None) -> list[str]:
+        target = scope or self.page
         for selector in selectors:
-            locators = await self.page.locator(selector).all()
+            locators = await target.locator(selector).all()
             if not locators:
                 continue
             texts: list[str] = []
@@ -403,12 +421,13 @@ class ChatbotHandler:
         if kind == "combobox":
             return await self._answer_combobox(value)
 
+        scope = await self._drawer_scope()
         val_clean = value.strip().lower()
         selectors = (
             S.CHATBOT_CHECKBOX_OPTIONS if kind == "checkbox" else S.CHATBOT_RADIO_OPTIONS
         ) + S.CHATBOT_CHIPS
         for selector in selectors:
-            locators = await self.page.locator(selector).all()
+            locators = await scope.locator(selector).all()
             for locator in locators:
                 text = (await safe_text(locator)).strip()
                 if text and self._match_option_text(text, val_clean):
@@ -438,7 +457,7 @@ class ChatbotHandler:
         texts = []
         vis_locators = []
         for selector in selectors:
-            for locator in await self.page.locator(selector).all():
+            for locator in await scope.locator(selector).all():
                 try:
                     if await locator.is_visible():
                         t = (await safe_text(locator)).strip()
@@ -459,7 +478,7 @@ class ChatbotHandler:
                 pass
 
         # dropdown fallback
-        dropdown = await first_visible(self.page, S.CHATBOT_DROPDOWN, timeout_ms=800)
+        dropdown = await first_visible(scope, S.CHATBOT_DROPDOWN, timeout_ms=800)
         if dropdown is not None:
             try:
                 self.policy.require_mutation("naukri.screening.answer")

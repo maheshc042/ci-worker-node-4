@@ -402,6 +402,8 @@ class FilterEngine:
                         is_override = True
                 elif hit in ("security engineer", "security specialist", "security analyst") and _contains_any(title, ["ai", "agentic", "automation", "generative ai", "genai", "llm"]):
                     is_override = True
+                elif hit == "systems engineer" and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
+                    is_override = True
                 elif hit in ("mlops", "mlops engineer") and _contains_any(title, ["llmops", "llm ops", "llm", "genai", "generative ai", "agentic"]):
                     is_override = True
                 elif hit in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
@@ -423,6 +425,8 @@ class FilterEngine:
         if hit_disjoint:
             is_disjoint_override = False
             if hit_disjoint in ("security engineer", "cyber security", "cybersecurity", "infosec", "soc analyst") and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic", "automation"]):
+                is_disjoint_override = True
+            elif hit_disjoint == "systems engineer" and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
                 is_disjoint_override = True
             elif hit_disjoint in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
                 is_disjoint_override = True

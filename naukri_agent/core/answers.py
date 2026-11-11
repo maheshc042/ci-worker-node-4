@@ -1597,6 +1597,16 @@ class AnswerEngine:
                      option=options[0][:60])
             return ResolvedAnswer(options[0], pattern, "option-match-skip")
 
+        # When answer polarity is explicitly False ("No") and no negative option
+        # ("No" / "None") exists in a checklist (e.g. industry checkboxes + "Skip this question"),
+        # selecting the explicit skip option accurately reflects non-applicability.
+        if polarity is False:
+            for option in options:
+                if _normalise(option) in _skip_only:
+                    log.info("answers.negative_maps_to_skip", question=question.text[:120],
+                             answer=answer[:40], option=option[:60])
+                    return ResolvedAnswer(option, pattern, "option-match-skip")
+
         if self.strict:
             return None
         return ResolvedAnswer(options[0], pattern, "option-match")
