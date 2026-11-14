@@ -219,10 +219,16 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
 
 def _resume_label_pattern(path: Path) -> re.Pattern[str]:
     stem = path.stem.rstrip("_")
+    stems = [stem]
+    if "_1" in stem or "fullstack" in stem.lower():
+        stems.append("Mahesh_Chitakoti_FullStack_Engineer")
+    elif "ai" in stem.lower() or ("2026" in stem and "_1" not in stem):
+        stems.append("Mahesh_Chitakoti_AI_Engineer")
+    stem_expr = "|".join(re.escape(s) for s in stems)
     # The rendered filename can omit the local trailing underscore or use
     # it as the separator before Cutshort's upload suffix (4-12 chars).
     suffix = r"(?:_{1,2}[A-Za-z0-9-]{4,12}|_)?" if stem != path.stem else r"(?:_[A-Za-z0-9-]{4,12})?"
-    return re.compile(rf"^{re.escape(stem)}{suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
+    return re.compile(rf"^(?:{stem_expr}){suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
 
 
 class CutshortChatbot:

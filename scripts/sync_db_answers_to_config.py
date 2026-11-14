@@ -32,18 +32,22 @@ async def sync_db_answers():
         raw_yaml = config_path.read_text(encoding="utf-8")
 
         current_answers = set(config.answers.keys())
+        SKIP_GLOBAL_PATTERNS = {
+            "what is your current in hand salary ?",
+            "please select your total additional months of experience:*",
+        }
 
         new_entries = {}
         for row in rows:
             q = row["question"].strip().lower()
             ans = row["answer"]
-            if q not in current_answers and q not in new_entries:
+            if q not in SKIP_GLOBAL_PATTERNS and q not in current_answers and q not in new_entries:
                 new_entries[q] = ans
 
         for row in kb_rows:
             p = row["pattern"].strip().lower()
             ans = row["answer"]
-            if p not in current_answers and p not in new_entries:
+            if p not in SKIP_GLOBAL_PATTERNS and p not in current_answers and p not in new_entries:
                 new_entries[p] = ans
 
         print(f"📊 Found {len(new_entries)} human-resolved answers to sync into config.yaml.")
@@ -61,7 +65,8 @@ async def sync_db_answers():
 
             if insert_idx != -1:
                 # Find end of global answers section or insert after line
-                formatted_new = [f"  \"{q}\": \"{a}\"" for q, a in new_entries.items()]
+                import json
+                formatted_new = [f"  {json.dumps(q)}: {json.dumps(a)}" for q, a in new_entries.items()]
                 lines[insert_idx+1:insert_idx+1] = formatted_new
                 config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
                 print(f"✅ Successfully appended {len(new_entries)} answers to config/config.yaml!")

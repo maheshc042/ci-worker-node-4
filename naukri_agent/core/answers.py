@@ -369,18 +369,24 @@ class AnswerEngine:
         # profile correction can ever win. Regex entries never shadow (their
         # match semantics differ from substring/token matching).
         _profile_toks = [
-            _tokenise(pattern)
+            (pattern, _tokenise(pattern))
             for pattern, _answer, source in raw
             if source == "profile" and pattern and not pattern.startswith("re:")
         ]
         if any(_profile_toks):
             _kept: list[tuple[str, str, str]] = []
             for pattern, answer, source in raw:
+                is_tenure = bool(_EXPERIENCE_INTENT.search(pattern))
                 if (
                     source == "kb"
                     and pattern
                     and not pattern.startswith("re:")
-                    and any(pt and pt <= _tokenise(pattern) for pt in _profile_toks)
+                    and any(
+                        pt
+                        and pt <= _tokenise(pattern)
+                        and (bool(_EXPERIENCE_INTENT.search(p_pat)) == is_tenure)
+                        for p_pat, pt in _profile_toks
+                    )
                 ):
                     log.debug("answers.shadowed", pattern=pattern[:80])
                     continue
