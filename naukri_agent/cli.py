@@ -402,6 +402,7 @@ def login(
                         console.print("[green]✓ Wellfound session persisted to Postgres and resumed![/green]")
 
                     elif p == "linkedin":
+                        await browser.restore_linkedin_session()
                         await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
                         await human_pause(2000, 3000)
 
@@ -446,8 +447,15 @@ def login(
                                 await asyncio.sleep(1)
                             if not logged_in:
                                 console.print("[red]✗ LinkedIn login timed out (120s).[/red]")
+                                if len(selected_platforms) == 1:
+                                    raise typer.Exit(2)
                                 continue
 
+                        if not await browser.persist_linkedin_session():
+                            console.print("[red]LinkedIn opened, but the runner session could not be saved.[/red]")
+                            if len(selected_platforms) == 1:
+                                raise typer.Exit(2)
+                            continue
                         await browser.persist_session()
                         await repo.resume_platform(target.key, "linkedin")
                         console.print("[green]✓ LinkedIn session persisted to Postgres and resumed![/green]")
@@ -499,7 +507,6 @@ def login(
                         console.print("[green]✓ Instahyre session persisted to Postgres and resumed![/green]")
 
                 await browser.persist_session()
-                console.print(f"\n[bold green]✓ All selected platform sessions saved under {target.session_key}![/bold green]")
                 if not page.is_closed():
                     await page.close()
         finally:

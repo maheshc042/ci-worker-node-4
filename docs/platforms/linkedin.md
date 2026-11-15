@@ -7,9 +7,10 @@ Workflow and implementation reference for LinkedIn Easy Apply and recruiter-post
 ## 1. Authentication & Safety Guardrails
 - **Target URL**: `https://www.linkedin.com/feed/`
 - **Session Verification ([`linkedin_signed_in`](../../naukri_agent/platforms/linkedin.py))**:
-  - Validates active profile markers: `img.global-nav__me-photo`, `.feed-identity-module`, `button.global-nav__me-menu-trigger`, or verified global nav elements.
+  - Requires signed-in identity controls or authenticated navigation. A Jobs link also appears on guest listings. A guest listing or authentication redirect encountered during application is reported as a session problem.
   - Observes the initial silent sign-in transition for up to 25 checks. The current navigation link is `/mynetwork`, without a required trailing slash. A temporary login URL alone is not a failed session.
   - A manual run explicitly selecting LinkedIn can recheck an authentication-only pause after the login is repaired. Successful authentication is still mandatory; challenge and rate-limit pauses are separate.
+  - Run `naukri-agent login --account primary --platform linkedin --headed` to refresh the runner session. Once the signed-in page is verified, the command saves LinkedIn cookies in a dedicated encrypted record. Other platform runs write the shared record. Easy Apply can still restore a verified older shared session when no dedicated record exists. `LINKEDIN_LI_AT` is optional and is used by the separate outreach campaign.
 - **Perimeter & Checkpoint Policy**:
   - Detects security challenges and checkpoints (`checkpoint`, `challenge`, `security-check`, `uas`, `authwall`).
   - **Headless Mode**: Immediately logs a warning and exits gracefully without hanging the run.

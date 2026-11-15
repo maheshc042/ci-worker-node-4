@@ -5588,6 +5588,30 @@ class TestHiringCafeCleanPageContract(unittest.IsolatedAsyncioTestCase):
             await manager.new_hiringcafe_page()
 
 
+class TestLinkedInSessionPersistence(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_linkedin_cookies_use_separate_storage(self):
+        from naukri_agent.browser.manager import BrowserManager, linkedin_session_key
+        from naukri_agent.config import BrowserConfig
+
+        cookie = {"name": "li_at", "value": "synthetic", "domain": ".linkedin.com"}
+        saved = {"cookies": [cookie], "origins": []}
+        repo = MagicMock(load_session=AsyncMock(return_value=saved), save_session=AsyncMock())
+        browser = BrowserManager(BrowserConfig(), repo, session_key="test:primary")
+        browser._context = MagicMock(add_cookies=AsyncMock(), cookies=AsyncMock(return_value=[cookie]))
+
+        await browser.restore_linkedin_session()
+        self.assertTrue(await browser.persist_linkedin_session())
+        key = linkedin_session_key("test:primary")
+        repo.load_session.assert_awaited_once_with(key)
+        browser.context.add_cookies.assert_awaited_once_with([cookie])
+        browser.context.cookies.assert_awaited_once_with("https://www.linkedin.com/")
+        repo.save_session.assert_awaited_once_with(key, saved)
+
+        browser.context.cookies.return_value = [{"name": "guest", "value": "synthetic"}]
+        self.assertFalse(await browser.persist_linkedin_session())
+        repo.save_session.assert_awaited_once_with(key, saved)
+
+
 class TestRunAccounting(unittest.IsolatedAsyncioTestCase):
     """Guards the run identity printed in every summary::
 

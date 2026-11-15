@@ -218,16 +218,25 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
 
 
 def _resume_label_pattern(path: Path) -> re.Pattern[str]:
-    stem = path.stem.rstrip("_")
-    stems = [stem]
-    if "_1" in stem or "fullstack" in stem.lower():
-        stems.append("Mahesh_Chitakoti_FullStack_Engineer")
-    elif "ai" in stem.lower() or ("2026" in stem and "_1" not in stem):
-        stems.append("Mahesh_Chitakoti_AI_Engineer")
-    stem_expr = "|".join(re.escape(s) for s in stems)
-    # The rendered filename can omit the local trailing underscore or use
-    # it as the separator before Cutshort's upload suffix (4-12 chars).
-    suffix = r"(?:_{1,2}[A-Za-z0-9-]{4,12}|_)?" if stem != path.stem else r"(?:_[A-Za-z0-9-]{4,12})?"
+    raw_stem = path.stem.rstrip("_")
+    stems = {raw_stem}
+    for s in list(stems):
+        if s.lower().startswith("cv_"):
+            stems.add(s[3:])
+        elif s.lower().startswith("resume_"):
+            stems.add(s[7:])
+        else:
+            stems.add(f"CV_{s}")
+            stems.add(f"Resume_{s}")
+    if "_1" in raw_stem or "fullstack" in raw_stem.lower():
+        stems.add("Mahesh_Chitakoti_FullStack_Engineer")
+        stems.add("CV_Mahesh_Chitakoti_FullStack_Engineer")
+    elif "ai" in raw_stem.lower() or ("2026" in raw_stem and "_1" not in raw_stem):
+        stems.add("Mahesh_Chitakoti_AI_Engineer")
+        stems.add("CV_Mahesh_Chitakoti_AI_Engineer")
+    stem_expr = "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True))
+    # Cutshort renders the filename with an optional suffix (e.g. _3XGe, _zNau, _1).
+    suffix = r"(?:_{1,2}[A-Za-z0-9-]{3,12}|_)?"
     return re.compile(rf"^(?:{stem_expr}){suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
 
 
@@ -1657,6 +1666,21 @@ class CutshortPlatform(BaseJobPlatform):
 
                 if await full_card.count() > 0:
                     card_text = (await safe_text(full_card)).strip()
+                    # Pre-scrape badge filtering: skip cards already marked Applied or View conversation
+                    applied_badge = await first_visible(
+                        full_card,
+                        [
+                            "button:text-is('Applied')",
+                            "a:text-is('View conversation')",
+                            "button:text-is('View conversation')",
+                            ":text-is('Already applied')",
+                            ":text-is('You have already applied')",
+                        ],
+                        timeout_ms=50,
+                    )
+                    if applied_badge is not None:
+                        seen_urls.add(url.rstrip("/"))
+                        continue
                 elif await card.count() > 0:
                     card_text = (await safe_text(card)).strip()
 
@@ -2160,7 +2184,10 @@ class CutshortPlatform(BaseJobPlatform):
         modal_matches_job = False
         if modal is not None:
             try:
-                modal_matches_job = await modal.get_by_text(heading).locator("visible=true").first.is_visible()
+                dialog_heading = modal.get_by_text(heading).locator("visible=true").first
+                if not await dialog_heading.is_visible():
+                    await dialog_heading.wait_for(state="visible", timeout=2500)
+                modal_matches_job = True
             except Exception:
                 pass
 
@@ -2199,9 +2226,11 @@ class CutshortPlatform(BaseJobPlatform):
                 resume_verified = True
             except Exception as exc:
                 resume_failure_detail = f" ({stage})"
+                displayed_files = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
                 log.warning(
                     "cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track,
-                    expected_file=resume_path.name, stage=stage, error=str(exc)[:350],
+                    expected_file=resume_path.name, displayed_files=displayed_files[:3],
+                    stage=stage, error=str(exc)[:350],
                 )
                 resume_failure_path = await self.artifacts.capture_failure(
                     self.page, "cutshort-resume-unverified", profile_name, job.job_id,
@@ -2423,9 +2452,14 @@ class CutshortPlatform(BaseJobPlatform):
 
             submission_attempted = True
             try:
-                await send_btn.click(timeout=5000)
+                await send_btn.scroll_into_view_if_needed(timeout=2500)
+                await send_btn.click(timeout=4000)
             except Exception as exc:
-                log.warning("cutshort.apply.send_click_uncertain", job_id=job.job_id, error=str(exc)[:120])
+                log.warning("cutshort.apply.send_click_fallback", job_id=job.job_id, error=str(exc)[:120])
+                try:
+                    await send_btn.dispatch_event("click")
+                except Exception as exc2:
+                    log.warning("cutshort.apply.send_click_uncertain", job_id=job.job_id, error=str(exc2)[:120])
 
             # Cutshort replaces the same card's actions with View conversation.
             # The listing can disappear if reopened, so observe this page only.
@@ -2465,9 +2499,11 @@ class CutshortPlatform(BaseJobPlatform):
                 detail="Cutshort Send attempted without a verified conversation for the exact job",
             )
         elif modal is not None and not modal_matches_job:
+            shot = await self.artifacts.capture_failure(self.page, "cutshort-pitch-heading-mismatch", profile_name, job.job_id)
             outcome = ApplyOutcome(
                 ApplicationStatus.FAILED,
                 detail=f"Cutshort pitch dialog did not identify {job.title} at {job.company}",
+                screenshot_path=shot,
             )
         elif not resume_verified:
             outcome = ApplyOutcome(

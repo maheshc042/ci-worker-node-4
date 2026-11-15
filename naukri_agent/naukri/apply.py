@@ -114,12 +114,12 @@ class ApplyEngine:
             pass
 
     @staticmethod
-    def _is_company_url(url: str | None) -> str | None:
+    def _is_company_url(url: Any) -> str | None:
         """Normalized employer link, or None for listing/blank URLs."""
-        if not url:
+        if not isinstance(url, str):
             return None
         clean = url.strip()
-        if not clean.lower().startswith("http"):
+        if not (clean.lower().startswith("http://") or clean.lower().startswith("https://")):
             return None
         if "naukri.com" in clean.lower():
             return None
@@ -178,6 +178,10 @@ class ApplyEngine:
         await human_pause(200, 500)
 
     async def _state(self) -> str:
+        # Check if the page has already redirected to an external employer ATS or aggregator
+        if self._is_company_url(self.page.url):
+            return "external"
+
         # Redirected-expiry fast path: a listing URL means no apply machinery
         # will ever render, and answering "unknown" burns three SLA probes on
         # nav-bar buttons before failing. Classify immediately as stale.

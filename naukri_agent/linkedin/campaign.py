@@ -181,7 +181,12 @@ async def run_campaign(
     # re-emailed once per search (run 291 sent 4 attempts to one address).
     attempted_this_run: set[str] = set()
     repo = await Repository.create()
-    shared_session = await repo.load_session(settings.account("primary").session_key)
+    from ..browser.manager import linkedin_session_key
+
+    primary_key = settings.account("primary").session_key
+    shared_session = await repo.load_session(linkedin_session_key(primary_key))
+    if shared_session is None:
+        shared_session = await repo.load_session(primary_key)
     hunter = LinkedInHunter(li_at_cookie=li_cookie, headless=headless, storage_state=shared_session)
 
     resume_dir = settings.resume_dir

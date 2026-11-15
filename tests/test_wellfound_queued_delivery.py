@@ -53,6 +53,14 @@ class TestWellfoundQueuedDelivery(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(sleep.await_args_list[0].args[0], 30)
         platform.page.click.assert_not_called()
 
+    async def test_initial_unknown_gets_bounded_read_only_rechecks(self):
+        platform = self.platform()
+        platform._application_state = AsyncMock(side_effect=[('unknown', None), ('unknown', None), ('applied', None)])
+        with patch.object(wellfound.asyncio, 'sleep', new=AsyncMock()):
+            self.assertEqual(await platform._verify_application(job()), 'applied')
+        self.assertEqual(platform.page.goto.await_count, 3)
+        platform.page.click.assert_not_called()
+
     async def test_cancelled_or_unavailable_send_never_becomes_applied(self):
         platform = self.platform()
         platform._application_state = AsyncMock(side_effect=[('pending', 2), ('unknown', None)])

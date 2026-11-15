@@ -919,13 +919,21 @@ class JobSearcher:
                 if div_term in card_full_text:
                     tags.append(div_term)
 
+            parsed_url = urlsplit(url)
             is_ext = any(
+                agg in parsed_url.netloc.lower() or agg in url.lower()
+                for agg in ("hirist.com", "hirist.tech", "iimjobs.com", "cutshort.io", "instahyre.com")
+            )
+            is_ext |= any(
                 term in card_full_text
                 for term in (
                     "apply on company site",
                     "company site",
                     "redirected to company site",
                     "apply via company website",
+                    "external site",
+                    "apply on hirist",
+                    "apply on iimjobs",
                 )
             )
 
@@ -948,8 +956,11 @@ class JobSearcher:
                 is_walkin=(
                     "walk-in" in haystack
                     or "walkin" in haystack
+                    or "walk in" in haystack
                     or "f2f" in haystack
                     or "face to face" in haystack
+                    or "walk-in interview" in haystack
+                    or "hiring drive" in haystack
                 ),
                 is_external=is_ext,
                 source_keyword=keyword,

@@ -42,6 +42,10 @@ log = get_logger(__name__)
 # overwrote account A's on every run, so the two logins fought each other.
 SESSION_KEY = "naukri:session:primary"
 
+
+def linkedin_session_key(account_session_key: str) -> str:
+    return f"{account_session_key}:linkedin"
+
 # Cloudflare cookie names. A cf_clearance minted under flagged automation
 # poisons every later run: presenting it forces re-validation loops no
 # checkbox can exit (runs 457/458: solved repeatedly, back at step 1 — while
@@ -375,6 +379,26 @@ class BrowserManager:
         return page
 
     # --------------------------------------------------------------- session
+    async def restore_linkedin_session(self) -> None:
+        if self.repo is None:
+            return
+        saved = await self.repo.load_session(linkedin_session_key(self.session_key))
+        if saved and saved.get("cookies"):
+            await self.context.add_cookies(saved["cookies"])
+            log.info("browser.linkedin_session_restored")
+
+    async def persist_linkedin_session(self) -> bool:
+        """Save LinkedIn's verified cookies under a key other platforms never write."""
+        if self.repo is None:
+            return False
+        cookies = await self.context.cookies("https://www.linkedin.com/")
+        if not any(cookie["name"] == "li_at" and cookie.get("value") for cookie in cookies):
+            log.warning("browser.linkedin_session_not_saved", reason="auth_cookie_missing")
+            return False
+        await self.repo.save_session(linkedin_session_key(self.session_key), {"cookies": cookies, "origins": []})
+        log.info("browser.linkedin_session_saved")
+        return True
+
     async def persist_session(self, only_if_trusted: bool = False) -> None:
         """
         Save cookies + localStorage so the next run skips the login form.

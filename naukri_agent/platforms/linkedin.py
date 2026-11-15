@@ -219,28 +219,38 @@ def _is_linkedin_host(hostname: str | None) -> bool:
     return h == "linkedin.com" or h.endswith(".linkedin.com")
 
 
-async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
-    current = urllib.parse.urlsplit(page.url)
-    if not _is_linkedin_host(current.hostname) or any(
+def _linkedin_auth_wall(url: str) -> bool:
+    current = urllib.parse.urlsplit(url)
+    return not _is_linkedin_host(current.hostname) or any(
         segment in {"login", "uas", "checkpoint", "authwall", "challenge", "security-check"}
         for segment in current.path.lower().split("/")
-    ):
+    )
+
+
+_LINKEDIN_GUEST_NAV = "a.nav__button-secondary:text-is('Sign in')"
+
+
+async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
+    if _linkedin_auth_wall(page.url):
         return False
     markers = [
-        "nav.global-nav__nav",
-        "#global-nav",
-        "header.global-nav",
-        "a[href*='/messaging']",
+        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
+        "button[aria-label*='Home' i]",
+        "button[aria-label*='Messaging' i]",
+        "button[aria-label*='Notifications' i]",
+        "button[aria-label*='Me' i]",
+        "a[aria-label*='Network' i]",
+        "a[aria-label*='Jobs' i]",
         "a[href*='/mynetwork']",
         "a[href*='/jobs']",
-        "input.search-global-typeahead__input",
-        "button[aria-label*='Me' i]",
-        "button.global-nav__me-menu-trigger",
-        "img.global-nav__me-photo",
-        ".feed-identity-module",
-        ".feed-identity-widget",
+        "a[href*='/notifications']",
+        "[data-testid='typeahead-input']",
+        "input[placeholder*='job' i]",
         "button:has-text('Start a post')",
-        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
+        "main button:has-text('Start a post')",
+        "button.global-nav__me-menu-trigger",
+        "nav.global-nav__nav",
+        "#global-nav",
     ]
     return await first_visible(page, markers, timeout_ms=timeout_ms) is not None
 
@@ -1338,6 +1348,8 @@ class LinkedInPlatform(BaseJobPlatform):
             await self.page.goto(listing_url, wait_until="domcontentloaded", timeout=25000)
         except Exception as exc:
             return ApplyOutcome(ApplicationStatus.FAILED, detail=f"LinkedIn listing navigation failed: {exc!s}")
+        if _linkedin_auth_wall(self.page.url):
+            return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn listing redirected to sign-in or a security check")
         current = urllib.parse.urlsplit(self.page.url)
         if not _is_linkedin_host(current.hostname) or current.path.rstrip("/") != f"/jobs/view/{raw_id}":
             return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn did not open the exact target listing")
@@ -1359,7 +1371,15 @@ class LinkedInPlatform(BaseJobPlatform):
         )
         job.description = await safe_text(desc_el)
         if not job.description:
-            return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn target job description did not load")
+            guest = await first_visible(self.page, [_LINKEDIN_GUEST_NAV], timeout_ms=1000)
+            shot = await self.artifacts.capture_failure(
+                self.page, "linkedin-detail-unavailable", profile_name, job.job_id,
+            ) if getattr(self, "artifacts", None) else None
+            return ApplyOutcome(
+                ApplicationStatus.FAILED,
+                detail="LinkedIn served a signed-out listing" if guest else "LinkedIn target job description did not load",
+                screenshot_path=shot,
+            )
         # Persist form links + recruiter emails (return value was discarded).
         links, emails = extract_description_metadata(job.description)
         job.form_links = links
@@ -1566,6 +1586,34 @@ class LinkedInPlatform(BaseJobPlatform):
             modal = await self._resolve_modal()
 
         if not await self._modal_visible(modal):
+            # Check if clicking the apply button opened an external ATS page in another tab or navigated
+            pages = self.page.context.pages
+            for p in pages:
+                if p != self.page and not _is_linkedin_host(urllib.parse.urlsplit(p.url).hostname):
+                    ext_url = p.url
+                    try:
+                        await p.close()
+                    except Exception:
+                        pass
+                    _record_timing()
+                    log.info("linkedin.apply.external_tab_opened", job_id=job.job_id, url=ext_url)
+                    return ApplyOutcome(
+                        ApplicationStatus.EXTERNAL,
+                        reason=SkipReason.EXTERNAL_APPLY,
+                        detail="LinkedIn Easy Apply routed to an external ATS page",
+                        external_url=ext_url,
+                    )
+            current_host = urllib.parse.urlsplit(self.page.url).hostname or ""
+            if not _is_linkedin_host(current_host):
+                ext_url = self.page.url
+                _record_timing()
+                log.info("linkedin.apply.external_redirect", job_id=job.job_id, url=ext_url)
+                return ApplyOutcome(
+                    ApplicationStatus.EXTERNAL,
+                    reason=SkipReason.EXTERNAL_APPLY,
+                    detail="LinkedIn Easy Apply routed to an external ATS page",
+                    external_url=ext_url,
+                )
             _record_timing()
             return ApplyOutcome(status=ApplicationStatus.FAILED, detail="Modal not visible")
 
@@ -2125,20 +2173,75 @@ class LinkedInPlatform(BaseJobPlatform):
                         target_val = _pick_ctc_option(opt_texts, self._ctc_want_lpa(low_q)) or ""
 
                 if not target_val:
+                    # Fuzzy match standard screening / gating questions if unanswered
+                    if re.search(r"\b(?:require|need)\b.*\b(?:sponsorship|visa)\b|\b(?:visa|sponsorship)\b.*\b(?:require|need)\b", low_q):
+                        for o in opt_texts:
+                            if o.lower() in {"no", "false"}:
+                                target_val = o
+                                break
+                    elif re.search(r"\bauthorized\b.*\bwork\b|\blegally\b.*\bwork\b|\bright to work\b", low_q):
+                        for o in opt_texts:
+                            if o.lower() in {"yes", "true"}:
+                                target_val = o
+                                break
+                    elif re.search(r"\b(?:commute|relocate|relocation|on-?site|hybrid|in-?office)\b", low_q):
+                        for o in opt_texts:
+                            if o.lower() in {"yes", "true"}:
+                                target_val = o
+                                break
+                    elif re.search(r"\b(?:background check|drug test|drug screen|18 years of age|at least 18)\b", low_q):
+                        for o in opt_texts:
+                            if o.lower() in {"yes", "true"}:
+                                target_val = o
+                                break
+                    elif re.search(r"\b(?:disability|handicap|veteran|gender|race|ethnicity|hispanic|latino)\b", low_q):
+                        for o in opt_texts:
+                            if any(k in o.lower() for k in ["decline", "prefer not", "wish not", "not specify", "choose not"]):
+                                target_val = o
+                                break
+                        if not target_val and opt_texts:
+                            for o in opt_texts:
+                                if o.lower() in {"no", "false"}:
+                                    target_val = o
+                                    break
+
+                if not target_val:
                     continue
 
                 for opt, label in zip(options, option_labels):
                     if " ".join(label.casefold().split()) == " ".join(target_val.casefold().split()):
                         if native_radios:
+                            checked = False
                             try:
-                                await opt.check(timeout=1500)
+                                await opt.check(timeout=1500, force=True)
+                                checked = await opt.is_checked()
                             except Exception:
+                                pass
+                            if not checked:
+                                try:
+                                    await opt.dispatch_event("click")
+                                    checked = await opt.is_checked()
+                                except Exception:
+                                    pass
+                            if not checked:
+                                try:
+                                    row = opt.locator("xpath=ancestor::div[contains(@class,'fa4ivr') or contains(@class,'fb-dash-radio') or contains(@class,'radio')][1]")
+                                    if await row.count() > 0:
+                                        await row.click(timeout=1500)
+                                        checked = await opt.is_checked()
+                                except Exception:
+                                    pass
+                            if not checked:
                                 radio_id = await opt.get_attribute("id")
                                 label_control = opt.locator("xpath=following-sibling::label[1]")
                                 if radio_id and await label_control.count() and await label_control.get_attribute("for") == radio_id:
-                                    await label_control.click(timeout=1500)
-                            if not await opt.is_checked():
-                                log.warning("linkedin.apply.radio_selection_unverified")
+                                    try:
+                                        await label_control.click(timeout=1500, force=True)
+                                        checked = await opt.is_checked()
+                                    except Exception:
+                                        pass
+                            if not checked:
+                                log.warning("linkedin.apply.radio_selection_unverified", question=q_text[:80])
                         else:
                             await opt.click(timeout=1500)
                         await human_pause(200, 400)

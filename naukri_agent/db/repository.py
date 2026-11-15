@@ -102,8 +102,9 @@ class Repository:
     async def _execute_with_retry(self, query: str, *args: Any, retries: int = 3) -> Any:
         for attempt in range(1, retries + 1):
             try:
-                return await self.pool.execute(query, *args)
-            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                async with asyncio.timeout(30.0):
+                    return await self.pool.execute(query, *args)
+            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError, TimeoutError, asyncio.TimeoutError) as exc:
                 if attempt == retries:
                     log.warning("db.execute_failed_after_retries", error=str(exc), attempt=attempt)
                     raise
@@ -113,8 +114,9 @@ class Repository:
     async def _fetchrow_with_retry(self, query: str, *args: Any, retries: int = 3) -> Any:
         for attempt in range(1, retries + 1):
             try:
-                return await self.pool.fetchrow(query, *args)
-            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                async with asyncio.timeout(30.0):
+                    return await self.pool.fetchrow(query, *args)
+            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError, TimeoutError, asyncio.TimeoutError) as exc:
                 if attempt == retries:
                     log.warning("db.fetchrow_failed_after_retries", error=str(exc), attempt=attempt)
                     raise
@@ -124,8 +126,9 @@ class Repository:
     async def _fetch_with_retry(self, query: str, *args: Any, retries: int = 3) -> Any:
         for attempt in range(1, retries + 1):
             try:
-                return await self.pool.fetch(query, *args)
-            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                async with asyncio.timeout(30.0):
+                    return await self.pool.fetch(query, *args)
+            except (OSError, socket.gaierror, asyncpg.PostgresError, asyncpg.InterfaceError, TimeoutError, asyncio.TimeoutError) as exc:
                 if attempt == retries:
                     log.warning("db.fetch_failed_after_retries", error=str(exc), attempt=attempt)
                     raise
@@ -379,26 +382,27 @@ class Repository:
                 out["detail"] = f"[{profile}] {detail}".strip()
             prepped.append(out)
         try:
-            await self.pool.executemany(
-                _AUDIT_UPSERT_SQL,
-                [
-                    (
-                        run_id,
-                        r["job_id"],
-                        platform,
-                        r.get("title", ""),
-                        r.get("company", ""),
-                        r.get("outcome", "scraped"),
-                        r.get("filter_reason", ""),
-                        (r.get("detail") or "")[:500],
-                        r.get("rank_score"),
-                        r.get("location", ""),
-                        r.get("experience_text", ""),
-                        r.get("salary_text", ""),
-                    )
-                    for r in prepped
-                ],
-            )
+            async with asyncio.timeout(30.0):
+                await self.pool.executemany(
+                    _AUDIT_UPSERT_SQL,
+                    [
+                        (
+                            run_id,
+                            r["job_id"],
+                            platform,
+                            r.get("title", ""),
+                            r.get("company", ""),
+                            r.get("outcome", "scraped"),
+                            r.get("filter_reason", ""),
+                            (r.get("detail") or "")[:500],
+                            r.get("rank_score"),
+                            r.get("location", ""),
+                            r.get("experience_text", ""),
+                            r.get("salary_text", ""),
+                        )
+                        for r in prepped
+                    ],
+                )
         except Exception as exc:
             log.warning("db.audit_batch_failed", error=str(exc)[:120], count=len(rows))
 

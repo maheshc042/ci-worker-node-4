@@ -32,9 +32,17 @@ from .base import BaseJobPlatform
 log = get_logger(__name__)
 
 _APPLIED_CARD_MARKERS = [
-    "button:text-is('Applied')",
-    "span.applied-badge:text-is('Applied')",
-    ".application-status-box .status-label:text-is('Applied')",
+    "div.apply.applied button",
+    "div.apply-sourced.applied button",
+    "div.apply.applied",
+    "div.apply-sourced.applied",
+    "button[ui-tooltip*='already applied' i]",
+    "button:has-text('Application Sent')",
+    "button:has-text('Applied')",
+    "span.applied-badge:has-text('Applied')",
+    ".application-status-box .status-label:has-text('Applied')",
+    ".application-status-box",
+    "div.application-status-applied",
 ]
 _SKILL_INPUTS = [
     "#skills-drop-select-job-search-selectized", "#skills-selectized",
@@ -757,6 +765,16 @@ class InstahyrePlatform(BaseJobPlatform):
                 if job_id in exclude_job_ids or legacy_id in exclude_job_ids or job_id in seen_ids:
                     continue
 
+                # Pre-scrape badge filtering: skip cards already marked Applied/Application Sent
+                try:
+                    if await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=50):
+                        log.debug("instahyre.fetch.card_already_applied", company=company, title=title, job_id=job_id)
+                        seen_ids.add(job_id)
+                        exclude_job_ids.add(job_id)
+                        continue
+                except Exception:
+                    pass
+
                 seen_ids.add(job_id)
                 jobs.append(
                     Job(
@@ -1383,13 +1401,33 @@ class InstahyrePlatform(BaseJobPlatform):
         except Exception as exc:
             log.warning("instahyre.apply.click_uncertain", job_id=job.job_id, error=str(exc)[:120])
 
+        confirmed = False
+        try:
+            # Post-click confirmation fallback: check if in-modal button flipped or status box rendered
+            post_click_check = await first_visible(modal, _APPLIED_CARD_MARKERS, timeout_ms=4000)
+            if post_click_check is not None:
+                confirmed = True
+                log.info("instahyre.apply.in_modal_confirmed", job_id=job.job_id)
+        except Exception:
+            pass
+
+        if not confirmed and card is not None:
+            try:
+                card_check = await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=2000)
+                if card_check is not None:
+                    confirmed = True
+                    log.info("instahyre.apply.card_confirmed", job_id=job.job_id)
+            except Exception:
+                pass
+
         await self._ensure_modal_closed()
         await self._dismiss_modals()
-        try:
-            confirmed = await self._verify_target_applied(job)
-        except Exception as exc:
-            log.warning("instahyre.apply.verification_failed", job_id=job.job_id, error=str(exc)[:160])
-            confirmed = False
+        if not confirmed:
+            try:
+                confirmed = await self._verify_target_applied(job)
+            except Exception as exc:
+                log.warning("instahyre.apply.verification_failed", job_id=job.job_id, error=str(exc)[:160])
+                confirmed = False
         _record_timing()
         if confirmed:
             return ApplyOutcome(

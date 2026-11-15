@@ -623,6 +623,7 @@ class Orchestrator:
                         elif p_name == "wellfound":
                             platform = WellfoundPlatform(page, self.account, artifacts, self.policy, config=self.config, metrics=self.metrics)
                         elif p_name == "linkedin":
+                            await browser.restore_linkedin_session()
                             if answers is None:
                                 answers = await self._build_answer_engine(profiles[0])
                             platform = LinkedInPlatform(
@@ -681,6 +682,8 @@ class Orchestrator:
                             continue
 
                         # Persist session cookies and unpause platform upon confirmed authentication
+                        if platform.platform_name == "linkedin":
+                            await browser.persist_linkedin_session()
                         await browser.persist_session()
                         if pause_reason and not self.dry_run:
                             await self.repo.resume_platform(self.account_key, platform.platform_name)

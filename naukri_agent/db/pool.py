@@ -16,6 +16,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import asyncio
 import ssl as ssl_module
 from typing import Any
 
@@ -51,20 +52,34 @@ async def get_pool() -> asyncpg.Pool:
     async def _init(conn: asyncpg.Connection) -> None:
         await conn.execute(f'SET search_path TO "{schema}", public')
 
-    _pool = await asyncpg.create_pool(
-        dsn=settings.asyncpg_dsn,
-        ssl=_ssl_context(settings),
-        min_size=settings.db_pool_min_size,
-        max_size=settings.db_pool_max_size,
-        statement_cache_size=0,
-        max_inactive_connection_lifetime=60.0,
-        command_timeout=30.0,
-        init=_init,
-        server_settings={
-            "application_name": "naukri-agent",
-            "search_path": f'"{schema}", public',
-        },
-    )
+    max_retries = 3
+    base_delay = 2.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            _pool = await asyncpg.create_pool(
+                dsn=settings.asyncpg_dsn,
+                ssl=_ssl_context(settings),
+                min_size=max(2, settings.db_pool_min_size),
+                max_size=max(10, settings.db_pool_max_size),
+                statement_cache_size=0,
+                max_inactive_connection_lifetime=300.0,
+                command_timeout=30.0,
+                timeout=25.0,
+                init=_init,
+                server_settings={
+                    "application_name": "naukri-agent",
+                    "search_path": f'"{schema}", public',
+                },
+            )
+            break
+        except (OSError, TimeoutError, asyncio.TimeoutError, asyncpg.PostgresError) as exc:
+            if attempt == max_retries:
+                log.error("db.pool_connect_failed_final", attempt=attempt, error=str(exc))
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            log.warning("db.pool_connect_retry", attempt=attempt, delay=delay, error=str(exc))
+            await asyncio.sleep(delay)
+
     log.info("db.pool_ready", schema=schema, max_size=settings.db_pool_max_size)
     return _pool
 

@@ -149,8 +149,10 @@ _INR_COMPENSATION = re.compile(
     re.IGNORECASE,
 )
 _APPLIED_JOB_MARKERS = [
-    "button[data-test='Button']:not(nav button):text-matches('^[✓✔  ]*Applied$', 'i')",
-    "button:not(nav button):text-is('Applied')",
+    "button[data-test='Button']:not(nav button):text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
+    "button:not(nav button):text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
+    "button[class*='applyButton']:text-matches('Applied', 'i')",
+    "button[disabled]:text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
     "main :text-matches('^You applied (on|.{0,20}ago)', 'i')",
 ]
 _UNDO_APPLICATION = "button[data-test='JobApplicationUndoButton']"
@@ -666,6 +668,23 @@ class WellfoundPlatform(BaseJobPlatform):
                 seen_job_ids.add(job_id)
 
                 raw_text = await safe_text(link)
+                # Pre-scrape badge filtering: skip cards already marked Applied
+                if "applied" in raw_text.lower():
+                    card_container = link.locator(
+                        "xpath=ancestor::div[contains(@class,'styles_jobListing__') or contains(@class,'styles_component__')][1]"
+                    )
+                    if await card_container.count() > 0:
+                        card_applied = await first_visible(
+                            card_container,
+                            [
+                                "button[disabled]:text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
+                                "button:text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
+                            ],
+                            timeout_ms=50,
+                        )
+                        if card_applied is not None:
+                            drop_seen += 1
+                            continue
                 lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
                 if not lines:
                     drop_chrome += 1
@@ -858,11 +877,19 @@ class WellfoundPlatform(BaseJobPlatform):
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 330
+        unknown_rechecks = iter((2, 5))
+        pending_seen = False
         while True:
             await self.page.goto(job.url, wait_until="domcontentloaded", timeout=25000)
             state, remaining = await self._application_state(job)
+            if state == "unknown" and wait_pending and not pending_seen and _wellfound_job_page(self.page.url, job.job_id):
+                delay = next(unknown_rechecks, None)
+                if delay is not None and loop.time() + delay < deadline:
+                    await asyncio.sleep(delay)
+                    continue
             if state != "pending" or not wait_pending:
                 return state
+            pending_seen = True
             budget = deadline - loop.time()
             if budget <= 0:
                 return "pending"
@@ -1196,6 +1223,21 @@ class WellfoundPlatform(BaseJobPlatform):
         try:
             await submit_btn.click(timeout=4000)
             await human_pause(1500, 3000)
+
+            # Check for immediate in-dialog or in-page confirmation before full reload
+            instant_confirmation = await first_visible(
+                self.page,
+                [
+                    _UNDO_APPLICATION,
+                    "button[disabled]:text-matches('^[✓✔\\s\\u00a0]*Applied$', 'i')",
+                    "button[class*='applyButton']:text-matches('Applied', 'i')",
+                    ":text-is('Application submitted')",
+                    ":text-is('Your application was sent')",
+                ],
+                timeout_ms=3000,
+            )
+            if instant_confirmation is not None:
+                log.info("wellfound.apply.instant_confirmation_seen", job_id=job.job_id)
 
             # Reopen the exact listing and verify the persisted application state.
             state = await self._verify_application(job)
