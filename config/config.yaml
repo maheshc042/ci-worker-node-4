@@ -182,6 +182,9 @@ answers:
   "rate your understanding and expertise in e2e testing out of 5.": "4"
   "rate your english speaking skills out of 5. a screening call would be conducted, so rate accordingly.": "5"
   "how did you implement rag and multi agent orchestration in your projects?": "Implemented RAG using PostgreSQL (pgvector HNSW) and Qdrant hybrid search (dense embeddings + BM25) with Redis semantic caching. For multi-agent orchestration, utilized LangGraph with state graphs, conditional edges, tool calling, and Pydantic structured output validation."
+  "github actions?": "Yes, 3 years"
+  "github actions": "Yes, 3 years"
+  "have you independently developed an end-to-end rag pipeline?": "Yes"
   "what is your current fixed and variable component?": "Fixed: 3.9 LPA, Variable: 0 LPA"
   "current designation": "Full Stack & AI Engineer"
   "do you have experience on computer graphics?": "No"
@@ -203,6 +206,8 @@ answers:
   "may i know your education specialization ? (must have cse background)": "Yes"
   "are you comfortable for f2f interview for all rounds in bangalore office?(mandatory)": "Yes"
   "have you, in the past, been employed by berkadia or any other berkadia entity?": "No"
+  "have you worked as a full-time employee with infoedge?": "No"
+  "have you worked as a full-time employee with infoedge": "No"
   "how many years of experience do you have in cicd?": "3"
   "have you been promoted in your current company?": "No"
   "what is your bachelor's gpa on a /10 scale?": "6"
@@ -1309,7 +1314,7 @@ profiles:
       # staff titles are still safe: the orchestrator runs impute_seniority
       # before filtering, which imputes 5-10y for title-corroborated senior
       # markers, so the 0-3.5y ceiling (max_years) backstops them.
-      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, technical support, support engineer, product support, application support, desktop support, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, power bi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
+      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, technical support, support engineer, product support, application support, desktop support, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, power bi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
         # Explicit mandatory requirements observed in runs 702/703.
@@ -1418,6 +1423,10 @@ profiles:
         "(Chennai/Coimbatore)* Yes No This field is required Back Next 0 notifications": "Yes"
       reco-031126000483:
         "Which AI agent system have you personally built and deployed?": "Working AI agent with API and tool integrations"
+      reco-131126032606:
+        "GIthub Actions?": "Yes, 3 years"
+      reco-131126033607:
+        "Have you independently developed an end-to-end RAG pipeline?": "Yes"
     platform_limits:
       naukri: 35
       linkedin: 35
@@ -1453,7 +1462,7 @@ profiles:
       # gates, not the title string. Un-banded senior/staff titles are still
       # rejected: impute_seniority (run before filtering) imputes 5-10y from
       # the title markers, and the 0-3.5y ceiling (max_years) backstops them.
-      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, power bi, content writer, seo, android, ios, react native, mobile developer, mobile engineer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, automation anywhere, rpa, uipath, ui path, blue prism, blueprism, power automate, flexcube, machine learning, deep learning, nlp, computer vision, prompt engineer, ai researcher, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, desktop support, ux, designer, scala, sugar crm, sugarcrm, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
+      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, power bi, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, automation anywhere, rpa, uipath, ui path, blue prism, blueprism, power automate, flexcube, machine learning, deep learning, nlp, computer vision, prompt engineer, ai researcher, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, desktop support, ux, designer, scala, sugar crm, sugarcrm, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
         "years of experience in the water industry", "years of water industry experience",
@@ -1518,6 +1527,9 @@ profiles:
       experience in pytorch: "0"
       experience in transformers: "0"
       experience in rag: "2"
+      "github actions?": "Yes, 3 years"
+      "github actions": "Yes, 3 years"
+      "have you independently developed an end-to-end rag pipeline?": "Yes"
       experience in mlops: "0"
       experience in hugging face: "0"
       experience in openai: "2"

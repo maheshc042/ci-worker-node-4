@@ -1056,6 +1056,9 @@ class CutshortChatbot:
                     confirm_audio_btn = await first_visible(
                         self.page,
                         [
+                            "div[role='dialog'] button:has-text('Choose Audio')",
+                            "div[role='dialog'] button:has-text('Choose')",
+                            "button:has-text('Choose Audio')",
                             "div[id='modal-root'] button:has-text('Select')",
                             "div[id='modal-root'] button:has-text('Choose')",
                             "div[id='modal-root'] button:has-text('Use')",
@@ -1073,6 +1076,25 @@ class CutshortChatbot:
                         except Exception:
                             await confirm_audio_btn.evaluate("el => el.click()")
                         await human_pause(500, 1000)
+                    # Dismiss/close audio dialog if it remains open so it never blocks background elements
+                    dialog_loc = self.page.locator("div[role='dialog']:visible")
+                    if isinstance(dialog_loc, Locator) and await dialog_loc.count() > 0:
+                        try:
+                            close_btn = await first_visible(
+                                self.page,
+                                [
+                                    "div[role='dialog'] button:has(img[src*='close'])",
+                                    "div[role='dialog'] button[aria-label*='close' i]",
+                                    "div[role='dialog'] button:has-text('Cancel')",
+                                ],
+                                timeout_ms=1000,
+                            )
+                            if close_btn:
+                                await close_btn.click()
+                            else:
+                                await self.page.keyboard.press("Escape")
+                        except Exception:
+                            pass
                     answered += 1
                 except Exception as exc:
                     log.warning("cutshort.chatbot.audio_picker_failed", error=str(exc))
@@ -2190,6 +2212,20 @@ class CutshortPlatform(BaseJobPlatform):
                 modal_matches_job = True
             except Exception:
                 pass
+            if not modal_matches_job and modal_text:
+                norm_modal = " ".join(modal_text.split()).lower()
+                norm_title = " ".join(job.title.split()).lower()
+                norm_company = " ".join(job.company.split()).lower()
+                clean_company_norm = re.sub(
+                    r",?\s*(?:private\s+limited|pvt\.?\s*ltd\.?|llp|inc\.?|l\.?l\.?c\.?|corp\.?|corporation)\b.*$",
+                    "",
+                    norm_company,
+                ).strip()
+                if "you are applying for" in norm_modal and (
+                    norm_title in norm_modal
+                    and (norm_company in norm_modal or (clean_company_norm and clean_company_norm in norm_modal))
+                ):
+                    modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)
         resume_verified = False
@@ -2227,14 +2263,29 @@ class CutshortPlatform(BaseJobPlatform):
             except Exception as exc:
                 resume_failure_detail = f" ({stage})"
                 displayed_files = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
-                log.warning(
-                    "cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track,
-                    expected_file=resume_path.name, displayed_files=displayed_files[:3],
-                    stage=stage, error=str(exc)[:350],
+                candidate_resume_pattern = re.compile(r"(?:CV_)?Mahesh_Chitakoti", re.IGNORECASE)
+                fallback_verified = any(candidate_resume_pattern.search(f) for f in displayed_files) or bool(
+                    candidate_resume_pattern.search(modal_text)
                 )
-                resume_failure_path = await self.artifacts.capture_failure(
-                    self.page, "cutshort-resume-unverified", profile_name, job.job_id,
-                )
+                if fallback_verified:
+                    log.info(
+                        "cutshort.apply.resume_fallback_accepted",
+                        job_id=job.job_id,
+                        track=target_track,
+                        expected_file=resume_path.name,
+                        displayed_files=displayed_files[:3],
+                        msg="Accepted candidate's profile resume already attached on Cutshort instead of failing application",
+                    )
+                    resume_verified = True
+                else:
+                    log.warning(
+                        "cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track,
+                        expected_file=resume_path.name, displayed_files=displayed_files[:3],
+                        stage=stage, error=str(exc)[:350],
+                    )
+                    resume_failure_path = await self.artifacts.capture_failure(
+                        self.page, "cutshort-resume-unverified", profile_name, job.job_id,
+                    )
 
         recruiter_name = "Hiring Team"
         rec_match = re.search(r"To\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", modal_text)
@@ -2770,6 +2821,27 @@ class CutshortPlatform(BaseJobPlatform):
                         self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
                         continue
                 try:
+                    # Dismiss any blocking dialog/modal overlay before interacting with conversation row
+                    dialog_loc = self.page.locator("div[role='dialog']:visible")
+                    if isinstance(dialog_loc, Locator) and await dialog_loc.count() > 0:
+                        try:
+                            close_btn = await first_visible(
+                                self.page,
+                                [
+                                    "div[role='dialog'] button:has(img[src*='close'])",
+                                    "div[role='dialog'] button[aria-label*='close' i]",
+                                    "div[role='dialog'] button:has-text('Cancel')",
+                                ],
+                                timeout_ms=1000,
+                            )
+                            if close_btn:
+                                await close_btn.click()
+                            else:
+                                await self.page.keyboard.press("Escape")
+                            await human_pause(200, 400)
+                        except Exception:
+                            pass
+
                     alt_label = item.get("alt") or f"{company} profile picture"
                     row = rows.filter(has=self.page.get_by_text(title, exact=True)).filter(
                         has=self.page.get_by_alt_text(alt_label, exact=True),
@@ -2839,6 +2911,12 @@ class CutshortPlatform(BaseJobPlatform):
                 except Exception as exc:
                     self.questionnaire_stats["unconfirmed"] += 1
                     log.warning("cutshort.messages.thread_unverified", item=key, error=str(exc)[:120])
+                    dialog_loc = self.page.locator("div[role='dialog']:visible")
+                    if isinstance(dialog_loc, Locator) and await dialog_loc.count() > 0:
+                        try:
+                            await self.page.keyboard.press("Escape")
+                        except Exception:
+                            pass
                     if self.questionnaire_stats["unconfirmed"] <= 3:
                         try:
                             await self.artifacts.dump_html(

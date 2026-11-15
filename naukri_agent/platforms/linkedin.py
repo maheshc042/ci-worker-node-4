@@ -222,7 +222,7 @@ def _is_linkedin_host(hostname: str | None) -> bool:
 def _linkedin_auth_wall(url: str) -> bool:
     current = urllib.parse.urlsplit(url)
     return not _is_linkedin_host(current.hostname) or any(
-        segment in {"login", "uas", "checkpoint", "authwall", "challenge", "security-check"}
+        segment in {"login", "uas", "checkpoint", "authwall", "challenge", "security-check", "signup"}
         for segment in current.path.lower().split("/")
     )
 
@@ -242,13 +242,12 @@ async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
         "a[aria-label*='Network' i]",
         "a[aria-label*='Jobs' i]",
         "a[href*='/mynetwork']",
-        "a[href*='/jobs']",
+        "a.global-nav__primary-link[href*='/jobs']",
         "a[href*='/notifications']",
-        "[data-testid='typeahead-input']",
-        "input[placeholder*='job' i]",
         "button:has-text('Start a post')",
         "main button:has-text('Start a post')",
         "button.global-nav__me-menu-trigger",
+        "img.global-nav__me-photo",
         "nav.global-nav__nav",
         "#global-nav",
     ]

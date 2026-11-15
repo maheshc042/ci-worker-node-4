@@ -1130,7 +1130,7 @@ class AgentConfig(_Model):
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
             "oracle dba", "content writer", "seo",
             # Pure mobile development (no candidate skills)
-            "android", "ios", "react native", "mobile developer", "mobile engineer",
+            "android", "ios", "react native", "mobile", "mobile app", "mobile developer", "mobile engineer", "mobile application developer",
             "flutter", "swift", "kotlin",
             # Infra-only roles stay out; DevOps/Cloud/SRE are in scope.
             "infrastructure engineer",
@@ -1261,7 +1261,7 @@ class AgentConfig(_Model):
             "data scientist", "etl", "big data", "snowflake", "teradata", "bi developer",
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
             "oracle dba", "content writer", "seo",
-            "android", "ios", "react native", "mobile developer", "mobile engineer",
+            "android", "ios", "react native", "mobile", "mobile app", "mobile developer", "mobile engineer", "mobile application developer",
             "flutter", "swift", "kotlin",
             # Infra-only roles stay out; DevOps/Cloud/SRE are in scope.
             "infrastructure engineer",
@@ -1508,7 +1508,7 @@ class AgentConfig(_Model):
             "data scientist", "etl", "big data", "snowflake", "teradata", "bi developer",
             "powerbi", "tableau", "data warehousing", "databricks", "dba", "database administrator",
             "oracle dba", "content writer", "seo",
-            "android", "ios", "react native", "mobile developer", "mobile engineer",
+            "android", "ios", "react native", "mobile", "mobile app", "mobile developer", "mobile engineer", "mobile application developer",
             "flutter", "swift", "kotlin",
             "infrastructure engineer",
             "phd", "ph.d", "research scientist", "ai researcher",
