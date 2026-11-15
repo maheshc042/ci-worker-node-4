@@ -212,20 +212,35 @@ def _pick_ctc_option(opt_texts: list[str], expected_lpa: float | None) -> str | 
     return None
 
 
+def _is_linkedin_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    h = hostname.lower()
+    return h == "linkedin.com" or h.endswith(".linkedin.com")
+
+
 async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
     current = urllib.parse.urlsplit(page.url)
-    if current.hostname not in {"www.linkedin.com", "linkedin.com"} or any(
+    if not _is_linkedin_host(current.hostname) or any(
         segment in {"login", "uas", "checkpoint", "authwall", "challenge", "security-check"}
         for segment in current.path.lower().split("/")
     ):
         return False
     markers = [
-        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
+        "nav.global-nav__nav",
+        "#global-nav",
+        "header.global-nav",
+        "a[href*='/messaging']",
+        "a[href*='/mynetwork']",
+        "a[href*='/jobs']",
+        "input.search-global-typeahead__input",
+        "button[aria-label*='Me' i]",
+        "button.global-nav__me-menu-trigger",
         "img.global-nav__me-photo",
         ".feed-identity-module",
-        "button.global-nav__me-menu-trigger",
-        "button[aria-label*='Me ' i]",
         ".feed-identity-widget",
+        "button:has-text('Start a post')",
+        "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
     ]
     return await first_visible(page, markers, timeout_ms=timeout_ms) is not None
 
@@ -1324,14 +1339,23 @@ class LinkedInPlatform(BaseJobPlatform):
         except Exception as exc:
             return ApplyOutcome(ApplicationStatus.FAILED, detail=f"LinkedIn listing navigation failed: {exc!s}")
         current = urllib.parse.urlsplit(self.page.url)
-        if current.hostname != "www.linkedin.com" or current.path.rstrip("/") != f"/jobs/view/{raw_id}":
+        if not _is_linkedin_host(current.hostname) or current.path.rstrip("/") != f"/jobs/view/{raw_id}":
             return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn did not open the exact target listing")
 
         # Extract description from right pane
         desc_el = await first_visible(
             self.page,
-            ["h2:text-is('About the job') >> xpath=../following-sibling::*[1] >> [data-testid=expandable-text-box]", "#job-details", ".jobs-description__content", ".jobs-box__html-content"],
-            timeout_ms=2500,
+            [
+                "#job-details",
+                ".jobs-description__content",
+                ".jobs-box__html-content",
+                "article.jobs-description__container",
+                "div.jobs-description-content__text",
+                "div[data-testid='expandable-text-box']",
+                "div[class*='jobs-description']",
+                "h2:text-is('About the job') >> xpath=../following-sibling::*[1] >> [data-testid=expandable-text-box]",
+            ],
+            timeout_ms=10000,
         )
         job.description = await safe_text(desc_el)
         if not job.description:
@@ -2540,7 +2564,7 @@ class LinkedInPlatform(BaseJobPlatform):
         try:
             job_id = job.job_id.removeprefix("linkedin-")
             current = urllib.parse.urlsplit(self.page.url)
-            if not job_id.isdecimal() or current.hostname != "www.linkedin.com" or current.path.rstrip("/") != f"/jobs/view/{job_id}":
+            if not job_id.isdecimal() or not _is_linkedin_host(current.hostname) or current.path.rstrip("/") != f"/jobs/view/{job_id}":
                 return False
             confirmation = await first_visible(
                 self.page,
@@ -2559,7 +2583,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 return True
             job_id = job.job_id.removeprefix("linkedin-")
             current = urllib.parse.urlsplit(self.page.url)
-            if current.hostname == "www.linkedin.com" and current.path.rstrip("/") == f"/jobs/view/{job_id}":
+            if _is_linkedin_host(current.hostname) and current.path.rstrip("/") == f"/jobs/view/{job_id}":
                 markers = ["main button:text-is('Applied')", "main span:text-is('Application submitted')", "main p:text-is('Application submitted')"]
                 if await first_visible(
                     self.page,
@@ -2571,7 +2595,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 # only the exact target; never click Submit a second time.
                 await self.page.goto(f"https://www.linkedin.com/jobs/view/{job_id}/", wait_until="domcontentloaded", timeout=25000)
                 reopened = urllib.parse.urlsplit(self.page.url)
-                if reopened.hostname == "www.linkedin.com" and reopened.path.rstrip("/") == f"/jobs/view/{job_id}":
+                if _is_linkedin_host(reopened.hostname) and reopened.path.rstrip("/") == f"/jobs/view/{job_id}":
                     return await first_visible(self.page, markers, timeout_ms=6000) is not None
         except Exception as exc:
             log.debug("linkedin.apply.verify_submit_failed", error=str(exc)[:120])

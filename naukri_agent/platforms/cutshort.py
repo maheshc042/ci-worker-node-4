@@ -205,7 +205,7 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
                 is_ai = any(k in (p.name or "").lower() for k in ["ai", "python", "ml", "llm"])
                 if is_ai == want_ai:
                     return p.resume_file
-            return profiles[0].resume_file if profiles else ""
+            return ""
 
         if is_ai_job:
             rel = _track_resume(True)
@@ -1982,7 +1982,9 @@ class CutshortPlatform(BaseJobPlatform):
                     ["button:text-is('Apply now')", "button:text-is('Apply to this job')"],
                     timeout_ms=2500,
                 )
-                if not apply_btn and await first_visible(card, ["button:has-text('Applied')", "a:has-text('View conversation')", "button:has-text('View conversation')"]):
+                if not apply_btn and await first_visible(card, [
+                    "button:text-is('Applied')", "a:text-is('View conversation')", "button:text-is('View conversation')",
+                ]):
                     return ApplyOutcome(ApplicationStatus.ALREADY_APPLIED, reason=SkipReason.ALREADY_APPLIED)
 
                 if apply_btn:
@@ -2033,12 +2035,11 @@ class CutshortPlatform(BaseJobPlatform):
             already_applied_marker = await first_visible(
                 self.page,
                 [
-                    "button:has-text('Applied')",
-                    "a:has-text('View conversation')",
-                    "button:has-text('View conversation')",
-                    "text=Already applied",
-                    "text=You have already applied",
-                    "div:has-text('Already applied')",
+                    "button:text-is('Applied')",
+                    "a:text-is('View conversation')",
+                    "button:text-is('View conversation')",
+                    ":text-is('Already applied')",
+                    ":text-is('You have already applied')",
                 ],
                 timeout_ms=1500,
             )
@@ -2156,54 +2157,27 @@ class CutshortPlatform(BaseJobPlatform):
             for c in heading_text
         )
         heading = re.compile(rf"^{heading_body}$", re.IGNORECASE)
-        heading_sub = re.compile(heading_body, re.IGNORECASE)
         modal_matches_job = False
         if modal is not None:
             try:
-                modal_matches_job = await modal.get_by_text(heading).first.is_visible()
+                modal_matches_job = await modal.get_by_text(heading).locator("visible=true").first.is_visible()
             except Exception:
                 pass
-            if not modal_matches_job and modal_text:
-                if heading_sub.search(modal_text):
-                    modal_matches_job = True
-                else:
-                    clean_modal = re.sub(r"[^\w\s]", " ", modal_text).lower()
-                    clean_modal_squashed = re.sub(r"\s+", "", clean_modal)
-                    norm_company = re.sub(r"[^\w\s]", " ", job.company).lower().strip()
-                    norm_company_squashed = re.sub(r"\s+", "", norm_company)
-                    company_ok = (
-                        not norm_company
-                        or norm_company in clean_modal
-                        or (norm_company_squashed and norm_company_squashed in clean_modal_squashed)
-                    )
-                    if company_ok:
-                        title_tokens = [w for w in re.sub(r"[^\w\s]", " ", job.title).lower().split() if len(w) > 2]
-                        matched_tokens = sum(1 for w in title_tokens if w in clean_modal)
-                        if not title_tokens or (matched_tokens / len(title_tokens)) >= 0.5:
-                            modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)
-        resume_verified = resume_path is None
+        resume_verified = False
         resume_failure_path = None
-        if modal_matches_job and resume_path is not None and resume_path.is_file():
+        resume_failure_detail = " (no résumé configured for this track)" if resume_path is None else ""
+        if modal_matches_job and resume_path is not None:
             resume_pattern = _resume_label_pattern(resume_path)
-            selected_resume = modal.get_by_text(resume_pattern).first
-            stem_base = resume_path.stem.rstrip("_")
-            # Substring pattern that still preserves distinct AI (_2026) vs FullStack (_2026_1) tracks
-            distinct_sub = (
-                re.compile(re.escape(stem_base), re.IGNORECASE)
-                if stem_base != resume_path.stem or "_1" in stem_base
-                else re.compile(rf"{re.escape(stem_base)}(?!_1\b)", re.IGNORECASE)
-            )
-            broad_resume = modal.get_by_text(distinct_sub).first
+            selected_resume = modal.get_by_text(resume_pattern).locator("visible=true").first
+            stage = "checking the selected filename"
             try:
-                is_vis = await selected_resume.is_visible()
-                if not is_vis:
-                    try:
-                        is_vis = await broad_resume.is_visible()
-                    except Exception:
-                        is_vis = False
-                if not is_vis:
+                if not await selected_resume.is_visible():
+                    stage = "locating the configured PDF"
+                    if not resume_path.is_file():
+                        raise FileNotFoundError(resume_path.name)
+                    stage = "locating the upload control"
                     upload = await first_visible(
                         modal,
                         [
@@ -2214,18 +2188,21 @@ class CutshortPlatform(BaseJobPlatform):
                         timeout_ms=2500,
                     )
                     if upload is None:
-                        upload = modal.get_by_text("Upload another resume", exact=True)
+                        raise ValueError("Cutshort did not display a supported résumé upload control")
+                    stage = "opening the file chooser"
                     async with self.page.expect_file_chooser(timeout=4000) as chooser:
                         await upload.click(timeout=2500)
-                    await (await chooser.value).set_files(str(resume_path), timeout=4000)
-                try:
-                    await selected_resume.wait_for(state="visible", timeout=8000)
-                    resume_verified = True
-                except Exception:
-                    await broad_resume.wait_for(state="visible", timeout=5000)
-                    resume_verified = True
+                    stage = "selecting the configured PDF"
+                    await (await chooser.value).set_files(str(resume_path), timeout=5000)
+                    stage = "waiting for Cutshort to display the uploaded filename"
+                    await selected_resume.wait_for(state="visible", timeout=15000)
+                resume_verified = True
             except Exception as exc:
-                log.warning("cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track, error=str(exc)[:120])
+                resume_failure_detail = f" ({stage})"
+                log.warning(
+                    "cutshort.apply.resume_unverified", job_id=job.job_id, track=target_track,
+                    expected_file=resume_path.name, stage=stage, error=str(exc)[:350],
+                )
                 resume_failure_path = await self.artifacts.capture_failure(
                     self.page, "cutshort-resume-unverified", profile_name, job.job_id,
                 )
@@ -2495,7 +2472,7 @@ class CutshortPlatform(BaseJobPlatform):
         elif not resume_verified:
             outcome = ApplyOutcome(
                 ApplicationStatus.FAILED,
-                detail=f"Cutshort could not verify the selected {target_track} résumé",
+                detail=f"Cutshort could not verify the selected {target_track} résumé{resume_failure_detail}",
                 screenshot_path=resume_failure_path,
             )
         elif await self._cloudflare_wall(blocked=True):
@@ -2647,6 +2624,7 @@ class CutshortPlatform(BaseJobPlatform):
 
     async def _resolve_message_pane(
         self, title: str, company: str, prev_href: str = "", timeout_ms: int = 6000,
+        *, unique_row_title: bool = False,
     ) -> tuple[Locator, str]:
         """Locate the active conversation pane matching (title, company), handling
         anonymized agency threads ('undefined') and whitespace variance."""
@@ -2666,7 +2644,7 @@ class CutshortPlatform(BaseJobPlatform):
                 cand = title_pane.first
                 info = await cand.evaluate("""el => {
                     const norm = s => (s || '').trim().replace(/\\s+/g, ' ').toLowerCase();
-                    const vjd = [...el.querySelectorAll('a, button, span, div')]
+                    const vjd = [...el.querySelectorAll('a[href]')]
                         .find(n => (n.textContent || '').trim() === 'View full job description');
                     const href = vjd ? (vjd.getAttribute('href') || '') : '';
                     return {
@@ -2679,7 +2657,9 @@ class CutshortPlatform(BaseJobPlatform):
                 # Only treat a title-only pane as switched once its href moves
                 # off prev_href (when prev_href was populated) OR company/agency fits.
                 href_switched = (not prev_href) or (bool(cur_href) and cur_href != prev_href)
-                if company_low == "undefined" and href_switched and ("agency job" in pane_text or cur_href):
+                if company_low == "undefined" and unique_row_title and cur_href:
+                    # Pending can preselect the agency conversation. Clicking
+                    # that same uniquely titled row leaves its job link unchanged.
                     matched_pane = cand
                     break
                 if norm_company and norm_company in pane_text and href_switched:
@@ -2690,7 +2670,7 @@ class CutshortPlatform(BaseJobPlatform):
         if matched_pane is None:
             raise ValueError(f"Cutshort conversation pane did not load for {company} | {title}")
 
-        vjd = matched_pane.get_by_text("View full job description", exact=True)
+        vjd = matched_pane.get_by_role("link", name="View full job description", exact=True)
         if await vjd.count() == 0:
             vjd_deadline = monotonic() + 1.5
             while monotonic() < vjd_deadline:
@@ -2770,20 +2750,39 @@ class CutshortPlatform(BaseJobPlatform):
                         except Exception:
                             prev_href = ""
                         click_target = row
-                        if row_count != 1:
-                            if "dom_idx" in item:
-                                click_target = rows.nth(item["dom_idx"])
-                            elif row_count > 1:
-                                click_target = row.first
-                        try:
-                            await click_target.click(timeout=4000)
-                        except Exception as click_exc:
-                            if "strict mode violation" in str(click_exc).lower():
-                                await click_target.first.click(timeout=4000)
+                        if row_count != 1 and "dom_idx" in item:
+                            indexed = rows.nth(item["dom_idx"])
+                            matches_snapshot = (
+                                await indexed.get_by_text(title, exact=True).count() == 1
+                                and await indexed.get_by_alt_text(alt_label, exact=True).count() == 1
+                            )
+                            if matches_snapshot:
+                                click_target = indexed
                             else:
-                                await click_target.scroll_into_view_if_needed(timeout=1500)
-                                await click_target.evaluate("el => el.click()")
-                        pane, href = await self._resolve_message_pane(title, company, prev_href=prev_href)
+                                raise ValueError("Cutshort conversation row changed before opening")
+                        elif row_count != 1:
+                            raise ValueError("Cutshort conversation row could not be identified uniquely")
+                        unique_row_title = False
+                        if company.lower() == "undefined":
+                            unique_row_title = await rows.filter(
+                                has=self.page.get_by_text(title, exact=True),
+                            ).count() == 1
+                        await click_target.click(timeout=4000)
+                        try:
+                            pane, href = await self._resolve_message_pane(
+                                title, company, prev_href=prev_href, unique_row_title=unique_row_title,
+                                timeout_ms=3000,
+                            )
+                        except ValueError:
+                            # Re-resolve by exact identity before retrying a read-only click.
+                            if await row.count() != 1:
+                                raise
+                            await row.click(timeout=4000)
+                            pane, href = await self._resolve_message_pane(
+                                title, company, prev_href=prev_href, unique_row_title=unique_row_title,
+                            )
+                        if row_count > 1 and (not href or href == prev_href):
+                            raise ValueError("Duplicate Cutshort conversation rows did not resolve to a new job link")
                     else:
                         await row.click(timeout=4000)
                         pane = self.page.locator("div[class*='sc-259ba717-13']:visible").filter(

@@ -263,6 +263,7 @@ class RunStats:
             "forwarded": self.forwarded,
             "already_applied": self.already_applied,
             "needs_review": self.needs_review,
+            "questionnaire_stats": self.questionnaire_stats,
             "per_profile": self.per_profile,
             "per_platform": self.per_platform,
             "applied_jobs": self.applied_jobs,

@@ -4735,7 +4735,7 @@ class TestCutshortPitchApplication(unittest.IsolatedAsyncioTestCase):
         target_btn = _button()
         send_btn = _button()
         modal = MagicMock()
-        modal.get_by_text.return_value.first.is_visible = AsyncMock(return_value=True)
+        modal.get_by_text.return_value.locator.return_value.first.is_visible = AsyncMock(return_value=True)
         modal.is_visible = AsyncMock(return_value=False)
         textarea = MagicMock()
         textarea.scroll_into_view_if_needed = AsyncMock()
@@ -4803,7 +4803,7 @@ class TestCutshortPitchApplication(unittest.IsolatedAsyncioTestCase):
              patch.object(cs_mod, "safe_text", new=AsyncMock(return_value="")), \
              patch.object(cs_mod, "human_pause", new=AsyncMock()), \
              patch.object(cs_mod, "CutshortChatbot") as chatbot, \
-             patch.object(cs_mod, "_track_resume_for", new=MagicMock(return_value=(None, None))), \
+             patch.object(cs_mod, "_track_resume_for", return_value=(Path("AI_Engineer.pdf"), "AI / Python Engineer")), \
              patch.object(cs_mod, "AgentConfig", new=fake_cfg), \
              patch("naukri_agent.core.gemini_writer.applicant_snapshot",
                    new=MagicMock(return_value=fake_who)):
@@ -6932,6 +6932,36 @@ class TestCutshortConversationReceipt(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
+    def test_missing_full_stack_mapping_does_not_use_ai_resume(self):
+        from types import SimpleNamespace
+        from naukri_agent.platforms import cutshort
+
+        config = SimpleNamespace(profiles=[
+            SimpleNamespace(enabled=True, name="AI / Python Engineer", resume_file="ai.pdf"),
+        ])
+        job = Job("cutshort-fs", "MERN Stack Developer", "Example", "https://cutshort.io/job/example")
+        with patch.object(cutshort.AgentConfig, "load", return_value=config):
+            self.assertEqual(cutshort._track_resume_for(job), (None, "Full Stack Engineer"))
+
+    async def test_preselected_unique_agency_thread_keeps_verified_job_link(self):
+        from naukri_agent.platforms.cutshort import CutshortPlatform
+
+        platform = object.__new__(CutshortPlatform)
+        platform.page = MagicMock()
+        pane = platform.page.locator.return_value.filter.return_value.first
+        platform.page.locator.return_value.filter.return_value.count = AsyncMock(return_value=1)
+        href = "/job/agency-role-AbCd1234"
+        pane.evaluate = AsyncMock(return_value={"text": "workwise for job ai engineer", "href": href})
+        link = pane.get_by_role.return_value
+        link.count = AsyncMock(return_value=1)
+        link.first.get_attribute = AsyncMock(return_value=href)
+
+        actual_pane, actual_href = await platform._resolve_message_pane(
+            "For job AI Engineer", "undefined", prev_href=href, unique_row_title=True,
+        )
+        self.assertIs(actual_pane, pane)
+        self.assertEqual(actual_href, href)
+
     def test_python_track_and_resume_label_keep_tracks_distinct(self):
         from naukri_agent.platforms.cutshort import _resume_label_pattern, _track_resume_for
 
