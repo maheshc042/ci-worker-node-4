@@ -185,6 +185,10 @@ answers:
   "github actions?": "Yes, 3 years"
   "github actions": "Yes, 3 years"
   "have you independently developed an end-to-end rag pipeline?": "Yes"
+  "do you hold any oci certifications?": "No"
+  "do you hold any oci certifications": "No"
+  "have you managed azure virtual machines (vms), virtual networks (vnets), and cloud storage?": "Yes"
+  "have you managed azure virtual machines (vms), virtual networks (vnets), and cloud storage": "Yes"
   "what is your current fixed and variable component?": "Fixed: 3.9 LPA, Variable: 0 LPA"
   "current designation": "Full Stack & AI Engineer"
   "do you have experience on computer graphics?": "No"
@@ -1427,6 +1431,10 @@ profiles:
         "GIthub Actions?": "Yes, 3 years"
       reco-131126033607:
         "Have you independently developed an end-to-end RAG pipeline?": "Yes"
+      reco-131026012648:
+        "Do you hold any OCI certifications?": "No"
+      reco-121126034759:
+        "Have you managed Azure Virtual Machines (VMs), Virtual Networks (VNets), and cloud storage?": "Yes"
     platform_limits:
       naukri: 35
       linkedin: 35
@@ -1530,6 +1538,9 @@ profiles:
       "github actions?": "Yes, 3 years"
       "github actions": "Yes, 3 years"
       "have you independently developed an end-to-end rag pipeline?": "Yes"
+      "do you hold any oci certifications?": "No"
+      "do you hold any oci certifications": "No"
+      "have you managed azure virtual machines (vms), virtual networks (vnets), and cloud storage?": "Yes"
       experience in mlops: "0"
       experience in hugging face: "0"
       experience in openai: "2"
