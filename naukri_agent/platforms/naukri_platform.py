@@ -71,14 +71,20 @@ class NaukriPlatform(BaseJobPlatform):
         return True
 
     async def fetch_jobs(self, profile: JobProfile, exclude_job_ids: set[str]) -> list[Job]:
-        jobs = []
+        jobs: list[Job] = []
         if profile.use_recommended and self.config.recommended.enabled:
-            jobs = await self.searcher.search_recommended(self.config.recommended, exclude_job_ids=exclude_job_ids)
+            try:
+                jobs = await self.searcher.search_recommended(self.config.recommended, exclude_job_ids=exclude_job_ids)
+            except Exception as exc:
+                log.warning("naukri.fetch.recommended_failed", error=str(exc)[:150])
         if profile.naukri_experience_search_terms:
-            known = exclude_job_ids | {job.job_id for job in jobs}
-            jobs.extend(await self.searcher.search_with_experience(
-                profile.naukri_experience_search_terms, int(profile.experience_years), known,
-            ))
+            try:
+                known = exclude_job_ids | {job.job_id for job in jobs}
+                jobs.extend(await self.searcher.search_with_experience(
+                    profile.naukri_experience_search_terms, int(profile.experience_years), known,
+                ))
+            except Exception as exc:
+                log.warning("naukri.fetch.search_failed", error=str(exc)[:150])
         return jobs
 
     async def apply_to_job(

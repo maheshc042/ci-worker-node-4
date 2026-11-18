@@ -285,3 +285,85 @@ class TestLinkedInReceiptScope(unittest.IsolatedAsyncioTestCase):
             outcome = await platform.apply_to_job(job, "Full Stack / Web Developer", pre_submit_check=lambda j: MagicMock(passed=True))
             self.assertEqual(outcome.status, ApplicationStatus.SKIPPED)
             self.assertEqual(outcome.reason, SkipReason.STALE_JOB)
+
+    async def test_easy_apply_still_visible_rejects_confirmation(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.page = MagicMock(url='https://www.linkedin.com/jobs/view/123/')
+        job = Job('linkedin-123', 'Developer', 'Example', 'https://www.linkedin.com/jobs/view/123/')
+        with patch.object(linkedin, 'first_visible', new=AsyncMock(return_value=MagicMock())), \
+             patch.object(linkedin, '_is_easy_apply_still_visible', new=AsyncMock(return_value=True)):
+            self.assertFalse(await platform._verify_submit(MagicMock(), job))
+
+    async def test_sidebar_receipt_is_rejected(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.page = MagicMock(url='https://www.linkedin.com/jobs/view/123/')
+        platform.page.goto = AsyncMock()
+        job = Job('linkedin-123', 'Developer', 'Example', 'https://www.linkedin.com/jobs/view/123/')
+        sidebar_el = MagicMock()
+        sidebar_el.evaluate = AsyncMock(return_value=True)  # indicates inside sidebar
+        with patch.object(linkedin, 'first_visible', new=AsyncMock(side_effect=[None, sidebar_el, None])):
+            self.assertFalse(await platform._verify_submit(MagicMock(), job))
+
+    async def test_guest_page_sign_in_control_fails_signed_in(self):
+        page = MagicMock(url="https://www.linkedin.com/jobs/search/?keywords=python")
+        guest_locator = MagicMock()
+        guest_locator.is_visible = AsyncMock(return_value=True)
+        page.locator.return_value.first = guest_locator
+        self.assertFalse(await linkedin.linkedin_signed_in(page))
+
+    def test_suitability_us_remote_and_hardware_and_hybrid(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        # US-only remote job must be rejected for India-based candidate
+        us_job = Job('1', 'Python Engineer', 'US Corp', 'https://linkedin.com/jobs/view/1/')
+        us_job.location = 'United States (Remote)'
+        us_job.description = 'We are hiring a Python Engineer. US work authorization required. Must reside in the US.'
+        suitable, reason, _ = platform.evaluate_job_suitability(us_job)
+        self.assertFalse(suitable)
+        self.assertTrue("US" in reason)
+
+        # Embedded/firmware role must be rejected
+        emb_job = Job('2', 'Embedded Firmware Engineer', 'Hardware Corp', 'https://linkedin.com/jobs/view/2/')
+        emb_job.location = 'Bengaluru, India'
+        emb_job.description = 'Firmware development with C and RTOS.'
+        suitable, reason, _ = platform.evaluate_job_suitability(emb_job)
+        self.assertFalse(suitable)
+        self.assertIn("Excluded role", reason)
+
+        # Hybrid Python or Java Developer role should be allowed
+        hybrid_job = Job('3', 'Python / Java Developer', 'Tech Corp', 'https://linkedin.com/jobs/view/3/')
+        hybrid_job.location = 'Bengaluru, India'
+        hybrid_job.description = 'Build backend services using Python, FastAPI, and Java.'
+        suitable, reason, _ = platform.evaluate_job_suitability(hybrid_job)
+        self.assertTrue(suitable)
+
+        # Company tenure ("in business for 10 years") should not trigger senior experience rejection
+        tenure_job = Job('4', 'Senior Software Engineer', 'Established Corp', 'https://linkedin.com/jobs/view/4/')
+        tenure_job.location = 'Bengaluru, India'
+        tenure_job.description = 'Established company in business for 10 years. Looking for Python and React developers.'
+        suitable, reason, _ = platform.evaluate_job_suitability(tenure_job)
+        self.assertTrue(suitable)
+
+    def test_resume_routing_for_generic_titles(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.config = AgentConfig.load()
+        platform.account = MagicMock(key='primary')
+
+        # Generic title under AI profile gets AI resume
+        _, path = platform._resume_for_role('AI / Python Engineer', 'Forward Deployed Engineer')
+        self.assertEqual(Path(path).name, 'CV_Mahesh_Chitakoti_2026.pdf')
+
+        # Generic title with AI stack in JD gets AI resume even if profile is Full Stack
+        _, path = platform._resume_for_role(
+            'Full Stack / Web Developer',
+            'Forward Deployed Engineer',
+            'Build RAG pipelines with LangChain and FastAPI.'
+        )
+        self.assertEqual(Path(path).name, 'CV_Mahesh_Chitakoti_2026.pdf')
+
+        # Generic title without AI stack under Full Stack profile gets Full Stack resume
+        _, path = platform._resume_for_role(
+            'Full Stack / Web Developer',
+            'Forward Deployed Engineer',
+            'Build React frontend and Express backend services.'
+        )
+        self.assertEqual(Path(path).name, 'CV_Mahesh_Chitakoti_2026_1_.pdf')

@@ -9,6 +9,7 @@ import asyncio
 import re
 import time
 from collections.abc import Callable
+from typing import Any
 
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PWTimeoutError
@@ -1038,6 +1039,37 @@ class ApplyEngine:
             log.debug("apply.verify_goto_failed", job_id=job.job_id, error=str(exc)[:120])
             return "unknown"
         await human_pause(1000, 2000)
+
+        # Verify job identity on reload: prevent cross-listing redirect receipts
+        try:
+            from urllib.parse import urlparse
+            curr_url = getattr(self.page, "url", "") or ""
+            if curr_url:
+                parsed = urlparse(curr_url)
+                host = parsed.netloc.lower()
+                if not (host == "naukri.com" or host.endswith(".naukri.com")):
+                    log.warning("apply.verify_host_mismatch", job_id=job.job_id, expected="naukri.com", actual=host)
+                    return "unknown"
+                path = parsed.path.rstrip("/")
+                match_curr = re.search(r"-(\d+)$", path)
+                if not match_curr:
+                    log.warning("apply.verify_no_canonical_id_in_path", job_id=job.job_id, path=path)
+                    return "unknown"
+                curr_canonical_id = match_curr.group(1)
+
+                match_job_url = re.search(r"-(\d+)$", urlparse(job.url).path.rstrip("/"))
+                target_match = re.search(r"(\d+)", job.job_id)
+                expected_id = match_job_url.group(1) if match_job_url else (target_match.group(1) if target_match else "")
+                if expected_id and curr_canonical_id != expected_id:
+                    log.warning(
+                        "apply.verify_job_id_mismatch",
+                        job_id=job.job_id,
+                        expected=expected_id,
+                        actual=curr_canonical_id,
+                    )
+                    return "unknown"
+        except Exception:
+            pass
 
         # 1. Inspect the primary apply button FIRST.
         # If the active "Apply" button is still present and not "Applied", the job is NOT applied.

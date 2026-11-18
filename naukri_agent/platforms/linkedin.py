@@ -14,6 +14,7 @@ Features:
 """
 from __future__ import annotations
 
+import inspect
 import re
 import time as _time
 import urllib.parse
@@ -42,6 +43,7 @@ from ..core.models import (
     extract_description_metadata,
 )
 from ..core.run_policy import RunPolicy
+from ..linkedin.analyzer import is_abroad_onsite
 from ..logging_setup import get_logger
 from ..naukri.parser import extract_jd_experience
 from .base import BaseJobPlatform
@@ -230,9 +232,50 @@ def _linkedin_auth_wall(url: str) -> bool:
 _LINKEDIN_GUEST_NAV = "a.nav__button-secondary:text-is('Sign in')"
 
 
+async def _is_easy_apply_still_visible(page: Page) -> bool:
+    try:
+        # Check if the target job's top card / apply container still displays Easy Apply
+        target = page.locator(
+            ".jobs-unified-top-card button:has-text('Easy Apply'), "
+            "div.jobs-apply-button button:has-text('Easy Apply'), "
+            "button.jobs-apply-button:has-text('Easy Apply'), "
+            "div.jobs-s-apply button:has-text('Easy Apply')"
+        ).first
+        res = target.is_visible()
+        if inspect.isawaitable(res):
+            return bool(await res)
+        return False
+    except Exception:
+        return False
+
+
+async def _is_target_job_receipt(page: Page, el) -> bool:
+    if el is None:
+        return False
+    try:
+        # Verify that the matched receipt element is not in a similar-jobs, recommendations, or sidebar container
+        is_sidebar = el.evaluate("""node => {
+            const excluded = node.closest('.jobs-similar-jobs, .similar-jobs, aside, .jobs-search-results, .scaffold-layout__aside');
+            return !!excluded;
+        }""")
+        if inspect.isawaitable(is_sidebar):
+            if await is_sidebar:
+                return False
+    except Exception:
+        pass
+    return True
+
+
 async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
     if _linkedin_auth_wall(page.url):
         return False
+    try:
+        guest_el = page.locator("a.nav__button-secondary:text-is('Sign in'), a[data-tracking-control-name*='guest'], a:text-is('Sign in'), button:text-is('Sign in')").first
+        res = guest_el.is_visible()
+        if inspect.isawaitable(res) and await res:
+            return False
+    except Exception:
+        pass
     markers = [
         "body:has(main):has(a[href*='/messaging/']):has(a[href*='/mynetwork'])",
         "button[aria-label*='Home' i]",
@@ -240,7 +283,6 @@ async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
         "button[aria-label*='Notifications' i]",
         "button[aria-label*='Me' i]",
         "a[aria-label*='Network' i]",
-        "a[aria-label*='Jobs' i]",
         "a[href*='/mynetwork']",
         "a.global-nav__primary-link[href*='/jobs']",
         "a[href*='/notifications']",
@@ -249,7 +291,6 @@ async def linkedin_signed_in(page: Page, timeout_ms: int = 3000) -> bool:
         "button.global-nav__me-menu-trigger",
         "img.global-nav__me-photo",
         "nav.global-nav__nav",
-        "#global-nav",
     ]
     return await first_visible(page, markers, timeout_ms=timeout_ms) is not None
 
@@ -408,9 +449,15 @@ class LinkedInPlatform(BaseJobPlatform):
             "security engineer", "cybersecurity", "infosec", "soc analyst",
             "data scientist", "bi developer", "powerbi", "tableau",
             "it support", "helpdesk", "service desk",
+            "embedded", "firmware", "hardware", "fpga", "rtos",
         ]
         for blocked_kw in blocked_title_keywords:
             if _word_hit(blocked_kw, title):
+                # Allow hybrid roles where Python / FastAPI / Django is explicitly offered alongside Java/C#/.NET
+                if blocked_kw in {"java", "spring boot", "spring-boot", "c#", ".net", "dotnet"} and any(
+                    _word_hit(allowed, title) for allowed in ["python", "fastapi", "django"]
+                ):
+                    continue
                 return False, f"Excluded role or tech stack ('{blocked_kw}')", 0
 
         # 1.5 Exact or Partial Target Role Match in Title
@@ -432,19 +479,41 @@ class LinkedInPlatform(BaseJobPlatform):
         if any(w in title or w in desc for w in ["unpaid", "fellowship", "volunteer", "no salary", "commission only", "pollfish", "survey link"]):
             return False, "Unpaid / Fellowship / Survey spam posting skipped", 0
 
-        # 3. Seniority / Experience Blocker Check (skips strictly 7+, 8+, 10+ years Principal/Architect/Director)
-        senior_match = re.search(r"\b(6|7|8|9|10|12|15)\+?\s*(?:-\s*\d+)?\s*(?:years|yrs)\b", desc)
+        # 3. Seniority / Experience Blocker Check (skips strictly 6+, 7+, 8+, 10+ years Principal/Architect/Director)
+        # Require experience-related terms so company age ("in business for 10 years") does not trigger.
+        senior_exp_pattern = (
+            r"(?:(?:minimum|at\s+least|with|\+)\s*)?"
+            r"\b(6|7|8|9|10|12|15)\+?\s*(?:-\s*\d+)?\s*(?:years|yrs)\s+"
+            r"(?:of\s+)?(?:relevant\s+|work\s+|professional\s+|hands-on\s+)?(?:experience|exp)\b|"
+            r"\b(?:experience|exp)\s+(?:of\s+)?(6|7|8|9|10|12|15)\+?\s*(?:-\s*\d+)?\s*(?:years|yrs)\b"
+        )
+        senior_match = re.search(senior_exp_pattern, desc)
         if senior_match and any(w in title for w in ["principal", "staff", "architect", "director", "head of", "engineering manager", "senior", "sr."]):
             return False, f"Requires senior experience ({senior_match.group(0)})", 20
 
-        # 4. Location / Remote compatibility (Filter foreign on-site roles strictly)
+        # 4. Location / Remote compatibility (Filter foreign on-site and US-restricted roles strictly)
         loc_str = (job.location or "").lower()
         is_foreign = any(c in loc_str for c in ["united states", "usa", "u.s.", "uk", "united kingdom", "canada", "germany", "australia", "austin", "texas", "california", "london"])
         is_india = any(c in loc_str for c in ["india", "bengaluru", "bangalore", "hyderabad", "mumbai", "pune", "delhi", "noida", "gurgaon", "chennai", "kolkata", "ahmedabad"])
         loc_remote = any(k in loc_str or k in title for k in ["remote", "work from home", "wfh", "anywhere"])
 
-        if is_foreign and not is_india and not loc_remote:
-            return False, f"Foreign on-site location ({job.location})", 10
+        if not is_india:
+            if is_abroad_onsite(job.location or "") or is_abroad_onsite(desc):
+                return False, f"Foreign on-site or US-restricted location ({job.location})", 10
+
+            us_restriction_patterns = [
+                "us only", "u.s. only", "usa only", "united states only",
+                "must be located in the us", "must be located in the u.s.", "must be located in the united states",
+                "must reside in the us", "must reside in the u.s.", "must reside in the united states",
+                "us work authorization", "u.s. work authorization", "authorized to work in the us",
+                "authorized to work in the united states", "legally authorized to work in the united states",
+                "us citizen", "u.s. citizen", "security clearance", "w2 only", "c2c only",
+            ]
+            if any(p in desc or p in loc_str for p in us_restriction_patterns):
+                return False, "US work authorization or US residency required", 0
+
+            if is_foreign and not loc_remote:
+                return False, f"Foreign on-site location ({job.location})", 10
 
         if is_india or loc_remote:
             score += 5
@@ -1075,6 +1144,10 @@ class LinkedInPlatform(BaseJobPlatform):
                             log.warning("linkedin.fetch.goto_error", pass_name=pass_name, page=1, error=str(exc))
                             break
 
+                    if not await linkedin_signed_in(self.page):
+                        log.warning("linkedin.fetch.signed_out_or_challenged", pass_name=pass_name, url=self.page.url)
+                        break
+
                     page_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
                     log.info("linkedin.fetch.page_done", pass_name=pass_name, page=1, added=page_added, total=len(jobs))
                 else:
@@ -1126,6 +1199,10 @@ class LinkedInPlatform(BaseJobPlatform):
                                 log.warning("linkedin.fetch.goto_error", pass_name=pass_name, page=target_page_num, error=str(exc))
                                 break
 
+                        if not await linkedin_signed_in(self.page):
+                            log.warning("linkedin.fetch.signed_out_or_challenged", pass_name=pass_name, page=target_page_num, url=self.page.url)
+                            break
+
                     page_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
                     log.info("linkedin.fetch.page_done", pass_name=pass_name, page=target_page_num, added=page_added, total=len(jobs))
 
@@ -1149,18 +1226,25 @@ class LinkedInPlatform(BaseJobPlatform):
                 fallback_days=7,
             )
             current_days = 7
-            base_search_url = self._get_search_url(profile, days=7, custom_query=FULL_TARGET_QUERY)
+            profile_query = passes[0][1] if passes else FULL_TARGET_QUERY
+            base_search_url = self._get_search_url(profile, days=7, custom_query=profile_query)
             try:
                 await self.page.goto(base_search_url, wait_until="commit", timeout=25000)
                 await human_pause(2000, 3500)
-                fb_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
-                log.info("linkedin.fetch.fallback_page_done", added=fb_added, total=len(jobs))
+                if not await linkedin_signed_in(self.page):
+                    log.warning("linkedin.fetch.fallback_signed_out", url=self.page.url)
+                else:
+                    fb_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
+                    log.info("linkedin.fetch.fallback_page_done", added=fb_added, total=len(jobs))
             except Exception:
                 try:
                     await self.page.goto(base_search_url, timeout=25000)
                     await human_pause(2000, 3500)
-                    fb_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
-                    log.info("linkedin.fetch.fallback_page_done", added=fb_added, total=len(jobs))
+                    if not await linkedin_signed_in(self.page):
+                        log.warning("linkedin.fetch.fallback_signed_out", url=self.page.url)
+                    else:
+                        fb_added = await self._scroll_and_extract_cards(scrape_target, exclude_job_ids, seen_ids, jobs)
+                        log.info("linkedin.fetch.fallback_page_done", added=fb_added, total=len(jobs))
                 except Exception as exc:
                     log.warning("linkedin.fetch.fallback_goto_error", error=str(exc))
 
@@ -1528,6 +1612,12 @@ class LinkedInPlatform(BaseJobPlatform):
                 return ApplyOutcome(ApplicationStatus.EXTERNAL, reason=SkipReason.EXTERNAL_APPLY, detail="Verified company-site application link", external_url=ats_url)
             return ApplyOutcome(ApplicationStatus.FAILED, detail="LinkedIn did not expose a verifiable application route")
 
+        initial_pages = set()
+        try:
+            initial_pages = set(self.page.context.pages)
+        except Exception:
+            pass
+
         log.info("linkedin.apply.clicking_button", job_id=job.job_id)
         # Locator.click performs its own scrolling and retries React detach
         # races. A separate pre-scroll was aborting otherwise valid jobs.
@@ -1586,22 +1676,30 @@ class LinkedInPlatform(BaseJobPlatform):
 
         if not await self._modal_visible(modal):
             # Check if clicking the apply button opened an external ATS page in another tab or navigated
-            pages = self.page.context.pages
-            for p in pages:
-                if p != self.page and not _is_linkedin_host(urllib.parse.urlsplit(p.url).hostname):
-                    ext_url = p.url
-                    try:
-                        await p.close()
-                    except Exception:
-                        pass
-                    _record_timing()
-                    log.info("linkedin.apply.external_tab_opened", job_id=job.job_id, url=ext_url)
-                    return ApplyOutcome(
-                        ApplicationStatus.EXTERNAL,
-                        reason=SkipReason.EXTERNAL_APPLY,
-                        detail="LinkedIn Easy Apply routed to an external ATS page",
-                        external_url=ext_url,
-                    )
+            new_pages = []
+            try:
+                new_pages = [p for p in self.page.context.pages if p not in initial_pages and p != self.page]
+            except Exception:
+                pass
+            for p in new_pages:
+                try:
+                    p_host = urllib.parse.urlsplit(p.url).hostname or ""
+                    if not _is_linkedin_host(p_host):
+                        ext_url = p.url
+                        try:
+                            await p.close()
+                        except Exception:
+                            pass
+                        _record_timing()
+                        log.info("linkedin.apply.external_tab_opened", job_id=job.job_id, url=ext_url)
+                        return ApplyOutcome(
+                            ApplicationStatus.EXTERNAL,
+                            reason=SkipReason.EXTERNAL_APPLY,
+                            detail="LinkedIn Easy Apply routed to an external ATS page",
+                            external_url=ext_url,
+                        )
+                except Exception:
+                    continue
             current_host = urllib.parse.urlsplit(self.page.url).hostname or ""
             if not _is_linkedin_host(current_host):
                 ext_url = self.page.url
@@ -1825,15 +1923,31 @@ class LinkedInPlatform(BaseJobPlatform):
         stem = base[:-4] if base.lower().endswith(".pdf") else base
         return stem, rel
 
-    def _resume_for_role(self, profile_name: str, job_title: str) -> tuple[str, str]:
+    def _resume_for_role(self, profile_name: str, job_title: str, job_desc: str = "") -> tuple[str, str]:
         """Resume matching this role, resolved from config.yaml — never hardcoded.
 
         Returns (stem, relative_path); ("", "") when nothing is configured, in
         which case the caller must leave resume selection untouched.
         """
         title_low = (job_title or "").lower()
-        ai_track = bool(re.search(r"\b(ai|python|genai|llm|data|machine learning)\b", title_low))
+        desc_low = (job_desc or "").lower()
         wanted = (profile_name or "").strip().lower()
+
+        # 1. Check if title indicates AI/Python vs Full Stack
+        title_is_ai = bool(re.search(r"\b(ai|python|genai|llm|data|machine learning|rag|nlp)\b", title_low))
+        title_is_fs = bool(re.search(r"\b(react|frontend|front-end|full\s*stack|fullstack|mean|mern|ui|angular|vue)\b", title_low))
+
+        if title_is_ai:
+            ai_track = True
+        elif title_is_fs:
+            ai_track = False
+        else:
+            # For ambiguous/generic titles ("Software Engineer", "Backend Engineer", "Forward Deployed Engineer"):
+            # Check description for AI stack, or fall back to profile persona
+            desc_is_ai = bool(re.search(r"\b(llm|genai|generative ai|langchain|rag|pytorch|fastapi|ai agent)\b", desc_low))
+            profile_is_ai = bool(re.search(r"\b(ai|python)\b", wanted))
+            ai_track = desc_is_ai or profile_is_ai
+
         profiles = list(getattr(self.config, "profiles", []) or [])
         primary = next(
             (p for p in profiles if (p.name or "").strip().lower() == wanted and getattr(p, "resume_file", None)),
@@ -1911,7 +2025,7 @@ class LinkedInPlatform(BaseJobPlatform):
 
         # 1. State-aware resume selection (never deselects already selected resume)
         target_resume_stem, target_resume_file = self._resume_for_role(
-            profile_name, job.title if job else ""
+            profile_name, job.title if job else "", job.description if job else ""
         )
         if not target_resume_stem:
             log.warning("linkedin.apply.no_resume_configured", profile=profile_name)
@@ -2682,23 +2796,48 @@ class LinkedInPlatform(BaseJobPlatform):
             )
             if confirmation is not None:
                 await click_if_present(self.page, ["[role='dialog'] button:text-is('Done')"])
+                if await _is_easy_apply_still_visible(self.page):
+                    return False
                 return True
+
+            if await _is_easy_apply_still_visible(self.page):
+                return False
+
             job_id = job.job_id.removeprefix("linkedin-")
             current = urllib.parse.urlsplit(self.page.url)
             if _is_linkedin_host(current.hostname) and current.path.rstrip("/") == f"/jobs/view/{job_id}":
-                markers = ["main button:text-is('Applied')", "main span:text-is('Application submitted')", "main p:text-is('Application submitted')"]
-                if await first_visible(
+                markers = [
+                    ".jobs-unified-top-card button:text-is('Applied')",
+                    ".jobs-unified-top-card span:text-is('Applied')",
+                    ".jobs-unified-top-card span:text-is('Application submitted')",
+                    ".jobs-unified-top-card p:text-is('Application submitted')",
+                    "div.jobs-apply-button :text-is('Applied')",
+                    "div.jobs-apply-button :text-is('Application submitted')",
+                    "div.jobs-s-apply :text-is('Applied')",
+                    "div.jobs-s-apply :text-is('Application submitted')",
+                    "button.jobs-apply-button:text-is('Applied')",
+                    "span.artdeco-inline-feedback__message:text-is('Applied')",
+                    "main button:text-is('Applied')",
+                    "main span:text-is('Application submitted')",
+                    "main p:text-is('Application submitted')",
+                ]
+                el = await first_visible(
                     self.page,
                     markers,
                     timeout_ms=1500,
-                ) is not None:
+                )
+                if el is not None and await _is_target_job_receipt(self.page, el):
                     return True
                 # A newly submitted SPA can lag behind the receipt. Reopen
                 # only the exact target; never click Submit a second time.
                 await self.page.goto(f"https://www.linkedin.com/jobs/view/{job_id}/", wait_until="domcontentloaded", timeout=25000)
                 reopened = urllib.parse.urlsplit(self.page.url)
                 if _is_linkedin_host(reopened.hostname) and reopened.path.rstrip("/") == f"/jobs/view/{job_id}":
-                    return await first_visible(self.page, markers, timeout_ms=6000) is not None
+                    if await _is_easy_apply_still_visible(self.page):
+                        return False
+                    el_reopened = await first_visible(self.page, markers, timeout_ms=6000)
+                    if el_reopened is not None and await _is_target_job_receipt(self.page, el_reopened):
+                        return True
         except Exception as exc:
             log.debug("linkedin.apply.verify_submit_failed", error=str(exc)[:120])
         return False

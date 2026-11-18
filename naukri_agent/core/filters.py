@@ -395,7 +395,7 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("support engineer", "support engineering") and _contains_any(title, ["cloud", "aws", "azure", "gcp"]):
                     is_override = True
-                elif hit in ("frontend", "frontend developer", "frontend engineer", "front end", "front end developer", "front end engineer", "front-end developer", "front-end engineer") and _contains_any(title, ["full stack", "fullstack", "full-stack", "backend"]):
+                elif hit in ("frontend", "frontend developer", "frontend engineer", "front end", "front end developer", "front end engineer", "front-end developer", "front-end engineer") and _contains_any(title, ["full stack", "fullstack", "full-stack", "backend", "ai", "genai", "generative ai", "llm", "agentic"]):
                     is_override = True
                 elif hit in ("machine learning", "machine learning engineer") and _contains_any(title, ["backend", "back end", "infrastructure", "platform"]):
                     if not self.candidate or "ai" in getattr(self.candidate, "name", "").lower() or "python" in getattr(self.candidate, "name", "").lower():
@@ -479,6 +479,9 @@ class FilterEngine:
 
             if _contains_any(title, ["machine learning", "machine learning engineer"]) and _contains_any(title, ["backend", "back end"]):
                 title_variants.extend(["ai backend", "ai backend engineer", "python backend engineer"])
+
+            if re.search(r"\bai[- ](?:led|first|powered|driven|native|augmented)\b", tech_norm):
+                title_variants.extend(["ai developer", "ai engineer", "ai applied developer", "ai applied engineer"])
 
             if "/" in job.title or "&" in job.title:
                 compound_delims = r"\s*(?:/|&)\s*"
@@ -694,15 +697,27 @@ class FilterEngine:
         if genai_years is not None:
             for requirement in re.finditer(
                 r"(?<![\w./-])(\d+(?:\.\d+)?)(?:\s*[-–—]\s*\d+(?:\.\d+)?|\+)?"
-                r"\s+years?\s+of\s+(?:hands-on\s+)?experience\s+in\s+"
-                r"(?:gen\s*ai|generative ai)(?:\s+and\s+nlp)?(?=\s*(?:[.;]|$))",
+                r"\s+years?(?:\s+of)?\s+(?:hands-on\s+|professional\s+|relevant\s+)?"
+                r"(?:experience\s+(?:in|with)|(?:experience\s+)?(?:in\s+|with\s+|spent\s+in\s+|spent\s+)?(?:building|developing|deploying|shipping|designing|working\s+with))\s+"
+                r"(?:production\s+)?"
+                r"(?:gen\s*ai|generative\s+ai|ai\s+engineering|artificial\s+intelligence|ai\s*/\s*ml|ai\s+and\s+ml|ai|llms?(?:\s+(?:engineering|applications?|apps?))?|rag|agentic\s+ai)\b",
                 description,
             ):
                 minimum = float(requirement[1])
                 context = description[max(0, requirement.start() - 36):requirement.start()]
-                if minimum > genai_years and not re.search(r"\b(?:preferred|nice to have)\s*:?\s*$", context):
+                trailing = description[requirement.end():min(len(description), requirement.end() + 80)]
+                has_blocked_alt = bool(re.search(r"\b(?:sap|abap|salesforce|pega|cobol|mainframe|c#|\.net|java)\b", trailing))
+                has_backend_alt = (not has_blocked_alt) and bool(
+                    re.search(r"^\s*or\s+(?:in\s+)?(?:backend(?:\s+software|\s+web)?|python(?:\s+backend|\s+software)?|full\s*stack|fastapi|django|node(?:\.js)?|web\s+development)\b", trailing)
+                )
+                effective_tenure = 3.0 if has_backend_alt else genai_years
+                is_optional = bool(
+                    re.search(r"\b(?:preferred|nice to have|plus|optional)\s*:?\s*$", context)
+                    or re.search(r"^\s*(?:is\s+)?(?:preferred|nice to have|a plus|optional)\b", trailing)
+                )
+                if minimum > effective_tenure and not is_optional:
                     return FilterDecision(False, SkipReason.FILTER_EXPERIENCE,
-                                          f"JD requires {minimum:g}y in GenAI, candidate has {genai_years:g}y")
+                                          f"JD requires {minimum:g}y in GenAI, candidate has {effective_tenure:g}y")
 
         if rules.description_must_exclude_any:
             hit = _contains_any(description, rules.description_must_exclude_any)

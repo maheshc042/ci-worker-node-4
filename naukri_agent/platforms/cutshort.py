@@ -2258,14 +2258,28 @@ class CutshortPlatform(BaseJobPlatform):
                     stage = "selecting the configured PDF"
                     await (await chooser.value).set_files(str(resume_path), timeout=5000)
                     stage = "waiting for Cutshort to display the uploaded filename"
-                    await selected_resume.wait_for(state="visible", timeout=15000)
+                    uploaded_visible = False
+                    for _ in range(15):
+                        displayed = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
+                        if any(resume_pattern.search(f.strip()) for f in displayed):
+                            uploaded_visible = True
+                            break
+                        if await selected_resume.is_visible():
+                            uploaded_visible = True
+                            break
+                        import asyncio
+                        await asyncio.sleep(1)
+                    if not uploaded_visible:
+                        await selected_resume.wait_for(state="visible", timeout=1000)
                 resume_verified = True
             except Exception as exc:
                 resume_failure_detail = f" ({stage})"
                 displayed_files = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
-                candidate_resume_pattern = re.compile(r"(?:CV_)?Mahesh_Chitakoti", re.IGNORECASE)
-                fallback_verified = any(candidate_resume_pattern.search(f) for f in displayed_files) or bool(
-                    candidate_resume_pattern.search(modal_text)
+                # Verify that the attached file matches this specific engineering track's resume pattern
+                core_pattern = resume_pattern.pattern.lstrip("^").rstrip("$")
+                unanchored_track_pattern = re.compile(rf"(?:\s|^){core_pattern}(?:\s|$)", re.IGNORECASE)
+                fallback_verified = any(
+                    resume_pattern.search(f.strip()) for f in displayed_files
                 )
                 if fallback_verified:
                     log.info(
@@ -2274,7 +2288,7 @@ class CutshortPlatform(BaseJobPlatform):
                         track=target_track,
                         expected_file=resume_path.name,
                         displayed_files=displayed_files[:3],
-                        msg="Accepted candidate's profile resume already attached on Cutshort instead of failing application",
+                        msg="Accepted candidate's track-verified profile resume already attached on Cutshort instead of failing application",
                     )
                     resume_verified = True
                 else:

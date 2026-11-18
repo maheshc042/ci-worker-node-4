@@ -113,6 +113,22 @@ def _get_resume_path(role: str, resume_dir: Path) -> Path:
     return _configured_resume_fallback(want_ai=want_ai, resume_dir=resume_dir)
 
 
+def _in_fallback_ledger(email: str) -> bool:
+    try:
+        path = Path("analysis/contacted_recruiters_fallback.jsonl")
+        if not path.exists():
+            return False
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    import json
+                    if json.loads(line).get("email", "").lower() == email.lower():
+                        return True
+    except Exception:
+        pass
+    return False
+
+
 async def run_campaign(
     daily_email_limit: int = 20,
     headed: bool = False,
@@ -406,7 +422,7 @@ async def run_campaign(
             if not resume_path.is_file():
                 log.warning("linkedin.lead.resume_missing", role=role)
                 continue
-            if await repo.has_emailed(clean_email, within_days=60):
+            if (await repo.has_emailed(clean_email, within_days=60)) or _in_fallback_ledger(clean_email):
                 log.info("linkedin.already_emailed", email=clean_email)
                 continue
 
@@ -450,7 +466,25 @@ async def run_campaign(
                     angle="application",
                 )
                 if success:
-                    await repo.record_contacted_recruiter(clean_email, role, text, post_url)
+                    recorded = False
+                    for attempt in range(3):
+                        try:
+                            await repo.record_contacted_recruiter(clean_email, role, text, post_url)
+                            recorded = True
+                            break
+                        except Exception as db_exc:
+                            log.warning("linkedin.record_contacted_failed", to=clean_email, attempt=attempt + 1, error=str(db_exc)[:150])
+                            await asyncio.sleep(1)
+                    if not recorded:
+                        try:
+                            fallback_path = Path("analysis/contacted_recruiters_fallback.jsonl")
+                            fallback_path.parent.mkdir(parents=True, exist_ok=True)
+                            with fallback_path.open("a", encoding="utf-8") as f:
+                                import json
+                                f.write(json.dumps({"email": clean_email, "role": role, "post_url": post_url}) + "\n")
+                            log.info("linkedin.fallback_ledger_recorded", to=clean_email)
+                        except Exception as log_exc:
+                            log.error("linkedin.fallback_ledger_failed", error=str(log_exc))
                     emails_sent_today += 1
                     sent_records.append(
                         {

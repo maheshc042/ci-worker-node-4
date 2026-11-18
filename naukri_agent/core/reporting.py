@@ -135,9 +135,8 @@ class ReportExporter:
         platform: str = "",
     ) -> None:
         try:
-            # 1. Base outcome CSVs (preserves 100% backward compatibility)
+            # 1. Base outcome CSVs: applied_jobs.csv and genuine failures only
             self._write_outcomes_csv(self._names("applied_jobs.csv", platform), applied)
-            self._write_outcomes_csv(self._names("failed_jobs.csv", platform), failed)
 
             # 2. Categorized partitions for crystal-clear human auditing
             external_items = [(j, o) for j, o in failed if o.status == ApplicationStatus.EXTERNAL]
@@ -145,15 +144,18 @@ class ReportExporter:
                 (j, o) for j, o in failed
                 if o.status in (ApplicationStatus.SKIPPED, ApplicationStatus.ALREADY_APPLIED)
             ]
-            true_failed_items = [
-                (j, o) for j, o in failed
-                if o.status not in (ApplicationStatus.EXTERNAL, ApplicationStatus.SKIPPED, ApplicationStatus.ALREADY_APPLIED)
-            ]
+            review_items = [(j, o) for j, o in failed if o.status == ApplicationStatus.NEEDS_REVIEW]
+            true_failed_items = [(j, o) for j, o in failed if o.status == ApplicationStatus.FAILED]
+
+            # failed_jobs.csv contains strictly true application failures (not external routes, skips, or review items)
+            self._write_outcomes_csv(self._names("failed_jobs.csv", platform), true_failed_items)
 
             if external_items:
                 self._write_outcomes_csv(self._names("external_jobs.csv", platform), external_items)
             if skipped_items:
                 self._write_outcomes_csv(self._names("skipped_jobs.csv", platform), skipped_items)
+            if review_items:
+                self._write_outcomes_csv(self._names("review_jobs.csv", platform), review_items)
 
             # 3. Complete unified ledger
             all_items = applied + failed

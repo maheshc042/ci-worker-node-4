@@ -536,6 +536,7 @@ class Orchestrator:
 
                     self.platform_started_at = time.monotonic()
                     self.platform_consecutive_failures = 0
+                    self.platform_dialog_open_streak = 0
                     # The global streak is an anti-ban tripwire for one contiguous
                     # burst (markup change, IP block). It must not leak across
                     # platforms: run 391's Cutshort fill-wall drove it to 5+ and
