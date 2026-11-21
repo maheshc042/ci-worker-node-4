@@ -300,3 +300,65 @@ class TestArchivedMandatoryRequirements(unittest.TestCase):
                 job_id="audit", title="Software Engineer", company="Example",
                 url="https://example.com/job", description=description,
             )).passed)
+
+    def test_run799_800_review_questions_resolved(self):
+        config = AgentConfig.load()
+        engine = AnswerEngine([], profile_answers=config.answers)
+
+        # Q#702: Current company
+        res_702 = engine.resolve(ScreeningQuestion("What is your Current Company?", "text"))
+        self.assertIsNotNone(res_702)
+        self.assertEqual(res_702.value, "Independent Software Consultant")
+
+        # Q#703: Reason for exploring
+        res_703 = engine.resolve(ScreeningQuestion("Reason for exploring new opportunities", "text"))
+        self.assertIsNotNone(res_703)
+        self.assertIn("challenging engineering problems", res_703.value)
+
+        # Q#704: Current location (radio)
+        res_704 = engine.resolve(ScreeningQuestion(
+            "Mention your current location.",
+            "radio",
+            ["Delhi", "Gurugram / Faridabad", "Noida / Gr. Noida / Ghaziabad", "My location is not mentioned"]
+        ))
+        self.assertIsNotNone(res_704)
+        self.assertEqual(res_704.value, "My location is not mentioned")
+
+        # Q#705: CA/CS qualification
+        res_705 = engine.resolve(ScreeningQuestion(
+            "Have you completed or are you currently pursuing any professional qualification (e.g., CA, CS, CMA, CFA)?",
+            "text"
+        ))
+        self.assertIsNotNone(res_705)
+        self.assertEqual(res_705.value, "No")
+
+        # Q#706: Base location
+        res_706 = engine.resolve(ScreeningQuestion("What is your base location?", "text"))
+        self.assertIsNotNone(res_706)
+        self.assertEqual(res_706.value, "Bengaluru")
+
+    def test_officer_titles_excluded(self):
+        for account in ("primary", "secondary"):
+            with self.subTest(account=account):
+                profile = AgentConfig.load().active_profiles(account=account)[0]
+                filters = FilterEngine(profile.filters_for("recommended"))
+                for bad_title in ("Quality Analyst Officer", "Loan Officer", "HR Officer", "Compliance Officer"):
+                    job = Job("test", bad_title, "Corp", "https://example.com/job")
+                    decision = filters.evaluate_card(job)
+                    self.assertFalse(decision.passed)
+                    self.assertEqual(decision.reason, SkipReason.FILTER_TITLE)
+
+    def test_cutshort_resume_name_matches_handles_sizes_and_tokens(self):
+        from pathlib import Path
+        from naukri_agent.platforms.cutshort import _resume_name_matches
+
+        fs_path = Path("resumes/CV_Mahesh_Chitakoti_2026_1_.pdf")
+        ai_path = Path("resumes/CV_Mahesh_Chitakoti_2026.pdf")
+
+        # File with size indicator
+        self.assertTrue(_resume_name_matches("CV_Mahesh_Chitakoti_2026_1_.pdf (1.2 MB)", fs_path))
+        self.assertFalse(_resume_name_matches("CV_Mahesh_Chitakoti_2026_1_.pdf (1.2 MB)", ai_path))
+
+        # AI file with size indicator
+        self.assertTrue(_resume_name_matches("CV_Mahesh_Chitakoti_2026.pdf (1.1 MB)", ai_path))
+        self.assertFalse(_resume_name_matches("CV_Mahesh_Chitakoti_2026.pdf (1.1 MB)", fs_path))

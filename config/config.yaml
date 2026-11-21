@@ -211,6 +211,45 @@ answers:
   "have you personally built and deployed a rag application? explain its use case and your specific contribution.": "Yes, built and deployed an end-to-end RAG system for WorkBridge using FastAPI, LangChain, and PostgreSQL (pgvector HNSW) with Redis semantic caching. Implemented document parsing, semantic chunking, hybrid search (dense embeddings + BM25 keyword matching), and context reranking for sub-second responses."
   "which regulatory standards do you have experience in?": "None - no direct experience in financial regulatory standards (AMFI, Basel III, RBI, SEBI)."
   "describe your latest project using rag, langchain and fastapi": "In my latest project WorkBridge, I built an end-to-end RAG system using FastAPI, LangChain, and PostgreSQL (pgvector HNSW) with Redis semantic caching. I designed the document ingestion and chunking pipeline, implemented hybrid search combining dense embeddings with BM25 keyword matching, and added context reranking with LangGraph state orchestration for accurate, low-latency responses."
+  "re:describe your latest project using (?:rag|langchain|fastapi).*|describe your latest project.*": "In my latest project WorkBridge, I built an end-to-end RAG system using FastAPI, LangChain, and PostgreSQL (pgvector HNSW) with Redis semantic caching. I designed the document ingestion and chunking pipeline, implemented hybrid search combining dense embeddings with BM25 keyword matching, and added context reranking with LangGraph state orchestration for accurate, low-latency responses."
+  "re:what is your current location\\??$": "Bengaluru"
+  "what is your current location?": "Bengaluru"
+  "what is your current location": "Bengaluru"
+  "where are you currently located?": "Bengaluru"
+  "where are you currently located": "Bengaluru"
+  "in which of the following do you have hands-on working experience? (2+)": "All of the above"
+  "re:in which of the following do you have hands-on working experience.*": "All of the above"
+  "gender*": "Male"
+  "gender": "Male"
+  "what is your gender?": "Male"
+  "what is your gender": "Male"
+  "re:what is your gender\\??$|^gender\\s*\\*?$": "Male"
+  "current unvested options/rsu value": "0"
+  "current unvested options/rsu value?": "0"
+  "re:current unvested options.*|unvested options.*": "0"
+  "experience in do-178c?": "No"
+  "experience in do-178c": "No"
+  "re:experience in do-178c\\??$": "No"
+  "experience in debugging and root-cause analysis?": "Yes"
+  "experience in debugging and root-cause analysis": "Yes"
+  "re:experience in debugging and root-cause analysis\\??$": "Yes"
+  "understanding of automated testing methodologies and frameworks?": "Yes"
+  "understanding of automated testing methodologies and frameworks": "Yes"
+  "re:understanding of automated testing methodologies and frameworks\\??$": "Yes"
+  "experience in the avionics or automotive industry will be highly preferred, with familiarity?": "No"
+  "experience in the avionics or automotive industry will be highly preferred, with familiarity": "No"
+  "re:experience in the avionics or automotive industry.*": "No"
+  "apply to e-solve group 3/4 pages additional questions do you have 3+ years of experience in backend engineering?": "Yes, 3 years"
+  "re:do you have 3\\+? years of experience in backend engineering\\??$": "Yes"
+  "do you have at least 2 years of hands-on experience working with node.js and typescript in production?": "Yes, 2.5 years"
+  "re:do you have at least 2 years of hands-on experience working with node\\.js and typescript in production\\??$": "Yes"
+  "do you have experience working with ai-native development workflows or ai-assisted engineering tools?": "Yes"
+  "re:do you have experience working with ai-native development workflows.*": "Yes"
+  "communication skills?": "Excellent"
+  "communication skills": "Excellent"
+  "have you been employed by happiest minds before?": "No"
+  "have you been employed by happiest minds before": "No"
+  "re:how many months of professional experience do you have personally writing and maintaining automated test code.*": "30"
   "github actions?": "Yes, 3 years"
   "github actions": "Yes, 3 years"
   "have you independently developed an end-to-end rag pipeline?": "Yes"
@@ -219,6 +258,17 @@ answers:
   "have you managed azure virtual machines (vms), virtual networks (vnets), and cloud storage?": "Yes"
   "have you managed azure virtual machines (vms), virtual networks (vnets), and cloud storage": "Yes"
   "what is your current fixed and variable component?": "Fixed: 3.9 LPA, Variable: 0 LPA"
+  "what is your current company?": "Independent Software Consultant"
+  "what is your current company": "Independent Software Consultant"
+  "reason for exploring new opportunities": "Looking for better technical growth and challenging engineering problems."
+  "reason for exploring new opportunities?": "Looking for better technical growth and challenging engineering problems."
+  "mention your current location.": "My location is not mentioned"
+  "mention your current location": "My location is not mentioned"
+  "have you completed or are you currently pursuing any professional qualification (e.g., ca, cs, cma, cfa)?": "No"
+  "have you completed or are you currently pursuing any professional qualification (e.g., ca, cs, cma, cfa)": "No"
+  "have you completed or are you currently pursuing any professional qualification": "No"
+  "what is your base location?": "Bengaluru"
+  "what is your base location": "Bengaluru"
   "current designation": "Full Stack & AI Engineer"
   "do you have experience on computer graphics?": "No"
   "are you available to join immediately?": "Yes"
@@ -882,6 +932,51 @@ answers:
   "re:ug\\s*/\\s*pg completion year|completion year": "2023"
   "re:robot programming in fanuc or abb|robot programming": "None"
 
+  # Run 805 / Questions #707-#718 trained 2026-11-19
+  "re:experience.*(?:playwright|cypress|selenium|appium)": "3"
+  "re:developed and deployed a complete web application from scratch": "Yes"
+  "re:comfortable working full-time from our bengaluru office": "Yes"
+  "re:designed and owned distributed backend systems in production": "Yes"
+  "re:^school\\*?$": "Other"
+  "re:^degree\\*?$": "Bachelor's Degree"
+  "re:^discipline\\*?$": "Engineering"
+  "re:^photo$": "https://github.com/maheshchichkoti.png"
+  "re:experience working in a b2b-?\\s*saas": "Yes"
+  "re:comfortable with a ctc up to 8lpa": "Yes"
+
+  # Run 806 / Questions #720-#724 trained 2026-11-19
+  "salutation": "Mr."
+  "re:^salutation\\??$": "Mr."
+  "which ai platforms have you used professionally?": "Multiple of the above"
+  "re:which ai platforms have you used professionally\\??$": "Multiple of the above"
+  "have you worked on optimizing large-scale data processing jobs?": "Yes"
+  "re:worked on optimizing large-scale data processing jobs": "Yes"
+  "experience in tsql?": "3"
+  "experience in tsql": "3"
+  "experience in t-sql": "3"
+  "have you worked on cloudwatch?": "Yes"
+  "re:worked on cloudwatch": "Yes"
+
+  # Run 808 / Questions #729-#747 trained 2026-11-20
+  "re:your email id|email id|email address": "maheshrwd042@gmail.com"
+  "re:certification in az[\\s-]?104|az[\\s-]?900": "NO"
+  "re:which statistical methods have you applied": "Descriptive statistics / distributions"
+  "re:trufflehog": "No"
+  "re:qualification with specialization": "B.E. in Computer Science and Engineering"
+  "re:worked with apis and system integrations": "Extensive experience"
+  "re:integrated with indian fintech services|kyc.*payment gateways": "Yes"
+  "re:production incident management": "Yes"
+  "re:rbi digital lending directions": "No"
+  "re:implemented webhooks, retries, idempotency": "Yes"
+  "re:independently managed or maintained production applications on aws": "Yes"
+  "re:automated tests using frameworks such as vitest or jest": "Yes"
+  "re:worked in the indian fintech, lending, nbfc": "Yes"
+  "re:indicate your experience in number of years": "2-4"
+  "re:describe a ci/cd pipeline you set up from scratch": "Built a GitHub Actions CI/CD pipeline from scratch automating linting, pytest unit/integration tests, Docker container builds, and deployment to AWS EC2 with health checks. This reduced deployment time by 50% and eliminated deployment regressions."
+  "re:voice/speech ai.*llms.*prompt engineering": "Yes"
+  "re:exp in 3 to\\s*8 years": "Yes"
+  "re:10th.*12th.*(?:btech|mca|mtech|degree|graduation)": "10th: 67%, 12th: 74%, B.E.: 60%"
+
 # ---------------------------------------------------------------------------
 # Skill -> years map. This answers the open-ended "how many years of X?" family
 # that no finite answer table can cover: the engine detects the intent, sees
@@ -933,6 +1028,8 @@ experience:
     mongodb: 3
     mongo: 3
     sql: 3
+    tsql: 3
+    t-sql: 3
     rest api: 3
     restful api: 3
     microservices: 3
@@ -1034,6 +1131,7 @@ experience:
     algorithms: 3
     cloud: 3
     aws: 3
+    cloudwatch: 2
     aml: 0
     fircosoft: 0
     # --- Resume-backed skills that were missing from this map ------------
@@ -1044,6 +1142,9 @@ experience:
     cicd: 3
     github actions: 3
     pytest: 3
+    vitest: 3
+    jest: 3
+    trufflehog: 0
     playwright: 3
     qdrant: 2
     pgvector: 2
@@ -1163,7 +1264,20 @@ experience:
     - "api integration"
     - "websocket"
     - "real time communication"
+    - "debugging"
+    - "root-cause analysis"
+    - "root cause analysis"
+    - "automated testing"
+    - "automated testing methodologies"
+    - "automated test code"
+    - "ai-native development workflows"
+    - "ai-assisted engineering tools"
   unclaimed_no:
+    - "do-178c"
+    - "do178c"
+    - "do-178"
+    - "avionics"
+    - "automotive"
     # Separate language ecosystems (Java kept 0 in the map; unlisted kin here).
     - "j2ee"
     - "struts"
@@ -1347,7 +1461,7 @@ profiles:
       # staff titles are still safe: the orchestrator runs impute_seniority
       # before filtering, which imputes 5-10y for title-corroborated senior
       # markers, so the 0-3.5y ceiling (max_years) backstops them.
-      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, technical support, support engineer, product support, application support, desktop support, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, power bi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
+      title_must_exclude_any: [lead, principal, architect, manager, officer, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang, golang developer, golang engineer, go developer, go engineer, java, mainframe, sap, salesforce, sugar crm, sugarcrm, scala, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, technical support, support engineer, product support, application support, desktop support, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, power bi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, llm, ai engineer, machine learning, ml, ml developer, mlops, deep learning, nlp, nlp engineer, computer vision, prompt engineer, ai researcher, genai, generative ai, research associate, research analyst, applied scientist, rpa, automation anywhere, uipath, ui path, blue prism, blueprism, power automate, flexcube, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "registration fee", "security deposit",
         # Explicit mandatory requirements observed in runs 702/703.
@@ -1499,7 +1613,7 @@ profiles:
       # gates, not the title string. Un-banded senior/staff titles are still
       # rejected: impute_seniority (run before filtering) imputes 5-10y from
       # the title markers, and the 0-3.5y ceiling (max_years) backstops them.
-      title_must_exclude_any: [lead, principal, architect, manager, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, power bi, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, automation anywhere, rpa, uipath, ui path, blue prism, blueprism, power automate, flexcube, machine learning, deep learning, nlp, computer vision, prompt engineer, ai researcher, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, desktop support, ux, designer, scala, sugar crm, sugarcrm, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
+      title_must_exclude_any: [lead, principal, architect, manager, officer, trainer, training, professor, assistant professor, associate professor, teacher, teaching, faculty, instructor, lecturer, tutor, mentor, educator, academic, curriculum developer, sales, presales, pre-sales, bpo, php, wordpress, .net, dotnet, dot net, spring boot, asp.net, c#, c++, golang developer, golang engineer, golang, go developer, go engineer, java, network, hardware, mainframe, sap, salesforce, drupal, magento, engineering manager, project manager, product manager, general manager, solution architect, enterprise architect, tech architect, technical architect, sr. manager, gis, oac, intershop, erp, pega, servicenow, intern, internship, trainee, traineeship, customer success, program management, it support, helpdesk, service desk, it engineer, systems engineer, security engineer, cybersecurity, infosec, soc analyst, data scientist, etl, big data, snowflake, teradata, bi developer, powerbi, tableau, data warehousing, databricks, dba, database administrator, oracle dba, power bi, content writer, seo, android, ios, react native, mobile, mobile app, mobile developer, mobile engineer, mobile application developer, flutter, swift, kotlin, infrastructure engineer, phd, ph.d, research scientist, automation anywhere, rpa, uipath, ui path, blue prism, blueprism, power automate, flexcube, machine learning, deep learning, nlp, computer vision, prompt engineer, ai researcher, research associate, research analyst, research engineer, applied scientist, mlops, mlops engineer, technical support, support engineer, customer success engineer, product support, application support, desktop support, ux, designer, scala, sugar crm, sugarcrm, robotics, robotic, robot, solutions engineer, iit, iiit, nit, cgpa, tier 1, tier-1, tier 1 college, tier-1 college, manual testing, manual test, frontend developer, frontend engineer, front end developer, front end engineer, front-end developer, front-end engineer, pure frontend]
       description_must_exclude_any: [
         "bpo", "commission only", "unpaid", "phd required", "registration fee", "security deposit",
         "years of experience in the water industry", "years of water industry experience",

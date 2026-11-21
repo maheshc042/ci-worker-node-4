@@ -219,7 +219,7 @@ def _track_resume_for(job: "Job", extra_text: str = "") -> tuple[Path | None, st
 
 def _resume_label_pattern(path: Path) -> re.Pattern[str]:
     raw_stem = path.stem.rstrip("_")
-    stems = {raw_stem}
+    stems = {raw_stem, path.stem}
     for s in list(stems):
         if s.lower().startswith("cv_"):
             stems.add(s[3:])
@@ -231,13 +231,41 @@ def _resume_label_pattern(path: Path) -> re.Pattern[str]:
     if "_1" in raw_stem or "fullstack" in raw_stem.lower():
         stems.add("Mahesh_Chitakoti_FullStack_Engineer")
         stems.add("CV_Mahesh_Chitakoti_FullStack_Engineer")
+        stems.add("Mahesh_Chitakoti_FullStack")
+        stems.add("CV_Mahesh_Chitakoti_FullStack")
     elif "ai" in raw_stem.lower() or ("2026" in raw_stem and "_1" not in raw_stem):
         stems.add("Mahesh_Chitakoti_AI_Engineer")
         stems.add("CV_Mahesh_Chitakoti_AI_Engineer")
+        stems.add("Mahesh_Chitakoti_AI")
+        stems.add("CV_Mahesh_Chitakoti_AI")
     stem_expr = "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True))
-    # Cutshort renders the filename with an optional suffix (e.g. _3XGe, _zNau, _1).
-    suffix = r"(?:_{1,2}[A-Za-z0-9-]{3,12}|_)?"
+    # Cutshort renders the filename with an optional suffix (e.g. _3XGe, _zNau, _1, __1).
+    suffix = r"(?:_{1,2}[A-Za-z0-9-]{1,16}|_)?"
     return re.compile(rf"^(?:{stem_expr}){suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
+
+
+def _resume_name_matches(text: str, path: Path) -> bool:
+    """Verifies that the attached file label matches this specific engineering track's resume."""
+    if not text or not path:
+        return False
+    pat = _resume_label_pattern(path)
+    if pat.search(text.strip()):
+        return True
+    for line in text.splitlines():
+        clean = line.strip()
+        if pat.search(clean):
+            return True
+        first_token = clean.split()[0] if clean else ""
+        if pat.search(first_token):
+            return True
+    norm = " ".join(text.lower().split())
+    if "mahesh" in norm and ("chitakoti" in norm or "cv" in norm):
+        is_fs_track = "_1" in path.stem or "fullstack" in path.stem.lower()
+        if is_fs_track and any(k in norm for k in ["_1", "fullstack", "full stack"]):
+            return True
+        elif not is_fs_track and any(k in norm for k in ["ai", "python"]) and "_1" not in norm:
+            return True
+    return False
 
 
 class CutshortChatbot:
@@ -2260,8 +2288,15 @@ class CutshortPlatform(BaseJobPlatform):
                     stage = "waiting for Cutshort to display the uploaded filename"
                     uploaded_visible = False
                     for _ in range(15):
-                        displayed = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
-                        if any(resume_pattern.search(f.strip()) for f in displayed):
+                        displayed = await modal.locator(
+                            "[class*='sc-d023fd03-8']:visible, "
+                            "div[class*='resume']:visible, "
+                            "div[class*='Resume']:visible, "
+                            "div:has(> svg):has-text('.pdf'):visible, "
+                            "span:text-matches('\\.pdf', 'i'):visible, "
+                            "p:text-matches('\\.pdf', 'i'):visible"
+                        ).all_text_contents()
+                        if any(_resume_name_matches(f.strip(), resume_path) for f in displayed):
                             uploaded_visible = True
                             break
                         if await selected_resume.is_visible():
@@ -2270,16 +2305,24 @@ class CutshortPlatform(BaseJobPlatform):
                         import asyncio
                         await asyncio.sleep(1)
                     if not uploaded_visible:
-                        await selected_resume.wait_for(state="visible", timeout=1000)
+                        all_modal_spans = await modal.locator("span:visible, p:visible, div:visible").filter(has_text=".pdf").all_text_contents()
+                        if any(_resume_name_matches(f.strip(), resume_path) for f in all_modal_spans):
+                            uploaded_visible = True
+                        else:
+                            await selected_resume.wait_for(state="visible", timeout=1000)
                 resume_verified = True
             except Exception as exc:
                 resume_failure_detail = f" ({stage})"
-                displayed_files = await modal.locator("[class*='sc-d023fd03-8']:visible").all_text_contents()
-                # Verify that the attached file matches this specific engineering track's resume pattern
-                core_pattern = resume_pattern.pattern.lstrip("^").rstrip("$")
-                unanchored_track_pattern = re.compile(rf"(?:\s|^){core_pattern}(?:\s|$)", re.IGNORECASE)
+                displayed_files = await modal.locator(
+                    "[class*='sc-d023fd03-8']:visible, "
+                    "div[class*='resume']:visible, "
+                    "div[class*='Resume']:visible, "
+                    "div:has(> svg):has-text('.pdf'):visible, "
+                    "span:text-matches('\\.pdf', 'i'):visible, "
+                    "p:text-matches('\\.pdf', 'i'):visible"
+                ).all_text_contents()
                 fallback_verified = any(
-                    resume_pattern.search(f.strip()) for f in displayed_files
+                    _resume_name_matches(f.strip(), resume_path) for f in displayed_files
                 )
                 if fallback_verified:
                     log.info(

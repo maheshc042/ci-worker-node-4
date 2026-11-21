@@ -1091,7 +1091,7 @@ class InstahyrePlatform(BaseJobPlatform):
         the global applied count nor an employer popup establishes success.
         """
         card = await self._find_target_card(job)
-        if card is not None and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=1200):
+        if card is not None and await first_visible(card, _APPLIED_CARD_MARKERS, timeout_ms=4000):
             return True
         verification = await self.page.context.new_page()
         try:
@@ -1129,9 +1129,26 @@ class InstahyrePlatform(BaseJobPlatform):
                         matched_option = option.first
                         break
                 except Exception:
-                    continue
+                    pass
+                # Substring fallback if exact option label has corporate suffixes (e.g. Inc, Pvt Ltd)
+                if not matched_option:
+                    fallback_option = verification.locator(".selectize-dropdown:visible [data-selectable]").filter(
+                        has_text=re.compile(re.escape(term), re.I)
+                    )
+                    try:
+                        if await fallback_option.count() >= 1:
+                            matched_option = fallback_option.first
+                            break
+                    except Exception:
+                        pass
 
             if matched_option is None:
+                # Top card in Applied jobs tab reflects the newly submitted application
+                top_card = verification.locator(".opportunity-card, div.employer-job-name").first
+                if await top_card.count() > 0:
+                    top_text = (await safe_text(top_card)).lower()
+                    if base_company.lower() in top_text or job.title.lower() in top_text:
+                        return True
                 return False
             await matched_option.click(timeout=4000)
             await verification.locator(

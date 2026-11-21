@@ -347,7 +347,9 @@ class AnswerEngine:
         experience: ExperienceAnswers | None = None,
         home_location: str = "",
         job_screening_answers: dict[str, dict[str, str]] | None = None,
+        candidate_gender: str = "Male",
     ) -> None:
+        self.candidate_gender = candidate_gender or "Male"
         self.job_screening_answers = {
             job_id: {_normalise(question): answer for question, answer in answers.items()}
             for job_id, answers in (job_screening_answers or {}).items()
@@ -524,6 +526,11 @@ class AnswerEngine:
         availability = self._resolve_availability(text, question)
         if availability is not None:
             return availability
+        # Stage 1.51: Demographics & Equity intents (Gender, RSUs/unvested options)
+        for intent in (self._resolve_gender, self._resolve_rsu):
+            hit = intent(text, question)
+            if hit is not None:
+                return hit
         # Stage 1.52: Fluency + self-rating intents (recruiter reframings
         # that generic willingness/fuzzy stages either miss or answer
         # wrongly — e.g. typing "Yes" into a 1-10 rating box).
@@ -912,10 +919,24 @@ class AnswerEngine:
         _generic_tokens = {
             "experience", "experiences", "year", "years", "yr", "yrs",
             "many", "much", "work", "working", "hands",
+            "current", "previous", "latest", "role", "designation", "title", "position",
         }
         if not (set(best_entry.tokens) & _tokenise(text) - _generic_tokens):
             log.info(
                 "answers.fuzzy_rejected_no_skill_overlap",
+                question=question.text[:120],
+                matched_pattern=best_entry.pattern[:80],
+                ratio=round(best_ratio, 3),
+            )
+            return None
+
+        _LOCATION_TOKENS = frozenset({"location", "city", "residence", "residing", "place", "address", "state", "country"})
+        _ORG_TOKENS = frozenset({"organization", "organisation", "company", "employer", "firm", "workplace"})
+        q_toks = _tokenise(text)
+        e_toks = set(best_entry.tokens)
+        if (q_toks & _LOCATION_TOKENS and e_toks & _ORG_TOKENS) or (q_toks & _ORG_TOKENS and e_toks & _LOCATION_TOKENS):
+            log.info(
+                "answers.fuzzy_rejected_domain_mismatch",
                 question=question.text[:120],
                 matched_pattern=best_entry.pattern[:80],
                 ratio=round(best_ratio, 3),
@@ -1002,6 +1023,16 @@ class AnswerEngine:
                 if fitted is not None:
                     log.info("answers.self_rating", question=question.text[:120], skill=phrase[:40])
                 return fitted
+        return None
+
+    def _resolve_gender(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        if re.search(r"\bgender\b", text):
+            return self._fit_to_options(self.candidate_gender, question, "intent:gender", "intent-map")
+        return None
+
+    def _resolve_rsu(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        if re.search(r"\b(?:unvested\s+options?|rsu|stock\s+options?|esops?)\b", text):
+            return self._fit_to_options("0", question, "intent:unvested_options", "intent-map")
         return None
 
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
@@ -1546,6 +1577,11 @@ class AnswerEngine:
                 low = _opt_low(option)
                 if any(name in low for name in home_names):
                     return ResolvedAnswer(option, pattern, source)
+            # If the candidate's home city is not among the options, check for "Others" / "Other" / "None of the above"
+            _other_opt_re = re.compile(r"^(?:others?|any\s+other(?:\s+(?:location|city))?|none\s+of\s+the\s+above)\b", re.IGNORECASE)
+            for option in options:
+                if _other_opt_re.search(option.strip()):
+                    return ResolvedAnswer(option, pattern, "option-match-other-location")
 
         polarity = self._polarity(wanted)
         if polarity is not None:

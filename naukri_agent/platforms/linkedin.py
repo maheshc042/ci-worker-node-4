@@ -2147,19 +2147,25 @@ class LinkedInPlatform(BaseJobPlatform):
 
                 options = await sel.locator("option").all_inner_texts()
                 opt_joined = " ".join(options).lower()
-                if any(k in opt_joined for k in ["deutsch", "español", "français", "bangla", "العربية", "čeština"]):
-                    continue
-                target_val = ""
 
                 # Phone Country Code
-                if any(k in label_low for k in ["country code", "phone country", "phone code"]):
-                    for o in options:
-                        if "india" in o.lower() or "+91" in o:
-                            target_val = o.strip()
-                            break
-                    if target_val:
-                        await sel.select_option(label=target_val)
+                if any(k in label_low for k in ["country code", "phone country", "phone code", "mobile country"]):
+                    try:
+                        await sel.select_option(label=re.compile(r"india|\+91", re.I))
+                        log.info("linkedin.apply.phone_country_code_selected_india")
+                    except Exception:
+                        for o in options:
+                            if "india" in o.lower() or "+91" in o:
+                                try:
+                                    await sel.select_option(label=o.strip())
+                                    break
+                                except Exception:
+                                    pass
                     continue
+
+                if re.search(r"\b(?:deutsch|español|français|čeština)\b", opt_joined):
+                    continue
+                target_val = ""
 
                 # Email Address dropdown
                 is_email_select = (

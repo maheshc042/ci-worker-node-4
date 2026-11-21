@@ -693,5 +693,357 @@ class TestCutshortSweepFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plat.questionnaire_stats["incomplete"], 1)
 
 
+class TestRun806AnswerResolutions(unittest.TestCase):
+    """Test resolution of Run 806 reviews #720-#724."""
+
+    @classmethod
+    def setUpClass(cls):
+        from naukri_agent.config import AgentConfig
+        cls.cfg = AgentConfig.load()
+        cls.prof = next(p for p in cls.cfg.profiles if p.name == "AI / Python Engineer")
+        answers = {**cls.cfg.answers, **cls.prof.answers}
+        cls.eng = AnswerEngine(
+            kb=[],
+            profile_answers=answers,
+            experience=cls.cfg.experience_for(cls.prof),
+            home_location=cls.cfg.candidate.location,
+            strict=True,
+        )
+
+    def test_salutation(self):
+        q = ScreeningQuestion("SALUTATION", "radio", ["Mr.", "Mrs.", "Miss"])
+        res = self.eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Mr.")
+
+    def test_ai_platforms_checkbox(self):
+        q = ScreeningQuestion(
+            "Which AI platforms have you used professionally?",
+            "checkbox",
+            ["ChatGPT / OpenAI", "Claude", "Gemini", "Multiple of the above", "None"],
+        )
+        res = self.eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Multiple of the above")
+
+    def test_large_scale_data_processing(self):
+        q = ScreeningQuestion("Have you worked on optimizing large-scale data processing jobs?", "text", [])
+        res = self.eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_tsql_experience(self):
+        q = ScreeningQuestion("Experience in TSQL?", "text", [])
+        res = self.eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "3")
+
+    def test_cloudwatch(self):
+        q = ScreeningQuestion("Have you worked on CloudWatch?", "text", [])
+        res = self.eng.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+
+class TestRun808AnswerResolutions(unittest.TestCase):
+    """Test resolution of Run 808 reviews #729-#747 and Cutshort resume matching."""
+
+    @classmethod
+    def setUpClass(cls):
+        from naukri_agent.config import AgentConfig
+        cls.cfg = AgentConfig.load()
+        cls.ai_prof = next(p for p in cls.cfg.profiles if p.name == "AI / Python Engineer")
+        cls.fs_prof = next(p for p in cls.cfg.profiles if p.name == "Full Stack / Web Developer")
+        cls.eng_ai = AnswerEngine(
+            kb=[],
+            profile_answers={**cls.cfg.answers, **cls.ai_prof.answers},
+            experience=cls.cfg.experience_for(cls.ai_prof),
+            home_location=cls.cfg.candidate.location,
+            strict=True,
+        )
+        cls.eng_fs = AnswerEngine(
+            kb=[],
+            profile_answers={**cls.cfg.answers, **cls.fs_prof.answers},
+            experience=cls.cfg.experience_for(cls.fs_prof),
+            home_location=cls.cfg.candidate.location,
+            strict=True,
+        )
+
+    def test_cutshort_resume_pattern_with_counter_suffix(self):
+        from pathlib import Path
+        from naukri_agent.platforms.cutshort import _resume_label_pattern, _resume_name_matches
+
+        fs_path = Path("resumes/CV_Mahesh_Chitakoti_2026_1_.pdf")
+        for candidate in [
+            "CV_Mahesh_Chitakoti_2026_1_.pdf",
+            "CV_Mahesh_Chitakoti_2026_1__1.pdf",
+            "CV_Mahesh_Chitakoti_2026_1_1.pdf",
+            "CV_Mahesh_Chitakoti_2026_1_ab12.pdf",
+            "Mahesh_Chitakoti_FullStack_Engineer.pdf",
+        ]:
+            self.assertTrue(_resume_name_matches(candidate, fs_path), f"Failed to match {candidate}")
+
+    def test_email_id(self):
+        res = self.eng_ai.resolve(ScreeningQuestion("Your Email ID", "text", []))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "maheshrwd042@gmail.com")
+
+    def test_az_certification_no(self):
+        res = self.eng_ai.resolve(ScreeningQuestion("Do you Have certification in AZ 104 OR AZ 900?", "radio", ["YES", "NO"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "NO")
+
+    def test_trufflehog_no(self):
+        res = self.eng_ai.resolve(ScreeningQuestion("Do you have experience in operational management and global governance of TruffleHog secret-scanning platform?", "text", []))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_qualification_specialization(self):
+        res = self.eng_ai.resolve(ScreeningQuestion("Qualification With Specialization?", "text", []))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "B.E. in Computer Science and Engineering")
+
+    def test_apis_and_integrations(self):
+        res = self.eng_ai.resolve(ScreeningQuestion("Have you worked with APIs and system integrations?", "radio", ["Extensive experience", "Moderate experience", "Basic experience", "No experience"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Extensive experience")
+
+    def test_fintech_and_incident_management(self):
+        res_fintech = self.eng_fs.resolve(ScreeningQuestion("Have you integrated with Indian fintech services such as KYC, credit bureaus, UPI AutoPay, eNACH or payment gateways?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_fintech)
+        assert res_fintech is not None
+        self.assertEqual(res_fintech.value, "Yes")
+
+        res_incident = self.eng_fs.resolve(ScreeningQuestion("Have you worked on production incident management, monitoring, debugging and resolution?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_incident)
+        assert res_incident is not None
+        self.assertEqual(res_incident.value, "Yes")
+
+    def test_rbi_compliance_no(self):
+        res = self.eng_fs.resolve(ScreeningQuestion("Are you familiar with RBI Digital Lending Directions and related compliance requirements?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_webhooks_and_aws(self):
+        res_wh = self.eng_fs.resolve(ScreeningQuestion("Have you implemented webhooks, retries, idempotency and reconciliation mechanisms?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_wh)
+        assert res_wh is not None
+        self.assertEqual(res_wh.value, "Yes")
+
+        res_aws = self.eng_fs.resolve(ScreeningQuestion("Have you independently managed or maintained production applications on AWS?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_aws)
+        assert res_aws is not None
+        self.assertEqual(res_aws.value, "Yes")
+
+    def test_jest_vitest_automated_tests(self):
+        res = self.eng_fs.resolve(ScreeningQuestion("Have you written automated tests using frameworks such as Vitest or Jest?", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_years_brackets_and_cicd(self):
+        res_years = self.eng_fs.resolve(ScreeningQuestion("Please indicate your experience in number of years", "radio", ["2-4", "4-6", "6-8", "8+"]))
+        self.assertIsNotNone(res_years)
+        assert res_years is not None
+        self.assertEqual(res_years.value, "2-4")
+
+        res_cicd = self.eng_fs.resolve(ScreeningQuestion("Describe a CI/CD pipeline you set up from scratch. What tools did you use, and how did it improve deployment reliability or speed?", "text", []))
+        self.assertIsNotNone(res_cicd)
+        assert res_cicd is not None
+        self.assertTrue("GitHub Actions" in res_cicd.value)
+
+    def test_voice_speech_ai_and_experience_bracket(self):
+        res_voice = self.eng_ai.resolve(ScreeningQuestion("do you have exp Voice/Speech AI + LLMs + Prompt Engineering", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_voice)
+        assert res_voice is not None
+        self.assertEqual(res_voice.value, "Yes")
+
+        res_exp = self.eng_ai.resolve(ScreeningQuestion("do you have exp in 3 to  8 years", "radio", ["Yes", "No"]))
+        self.assertIsNotNone(res_exp)
+        assert res_exp is not None
+        self.assertEqual(res_exp.value, "Yes")
+
+    def test_education_percentages(self):
+        res_edu = self.eng_fs.resolve(ScreeningQuestion("Please Mentioned your 10th, 12th, Btech/MCA/Mtech %", "text", []))
+        self.assertIsNotNone(res_edu)
+        assert res_edu is not None
+        self.assertEqual(res_edu.value, "10th: 67%, 12th: 74%, B.E.: 60%")
+
+
+class TestRun809AnswerResolutions(unittest.TestCase):
+    """Run #809 fixes: RAG project description and Location vs Organization resolution."""
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        cls.engine = AnswerEngine(
+            kb=list(cfg.get("answers", {}).items()),
+            home_location=cfg.get("candidate", {}).get("location", "Bengaluru, India"),
+        )
+
+    def test_rag_langchain_fastapi_project_description(self):
+        q = ScreeningQuestion("Describe your latest project using RAG, Langchain and FastAPI", "text", [])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertTrue("WorkBridge" in res.value)
+        self.assertTrue("FastAPI" in res.value)
+        self.assertTrue("LangChain" in res.value or "LangGraph" in res.value)
+
+    def test_current_location_others_when_not_home(self):
+        q = ScreeningQuestion("What is your current location?", "radio", ["Mumbai", "Navi Mumbai", "Others"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Others")
+
+    def test_current_location_home_when_present(self):
+        q = ScreeningQuestion("What is your current location?", "radio", ["Bengaluru", "Mumbai", "Others"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Bengaluru")
+
+    def test_current_location_text(self):
+        q = ScreeningQuestion("What is your current location?", "text", [])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Bengaluru")
+
+    def test_fuzzy_domain_mismatch_location_vs_org(self):
+        # A location question should never fuzzy-match an organization answer
+        engine_limited = AnswerEngine(
+            kb=[("what is your current organization?", "Independent Software Consultant")],
+            home_location="Bengaluru, India",
+        )
+        q = ScreeningQuestion("What is your current location?", "radio", ["Mumbai", "Navi Mumbai", "Others"])
+        res = engine_limited.resolve(q)
+        # Should NOT return "Independent Software Consultant" or fit it
+        self.assertIsNone(res)
+
+
+class TestRun811Reviews(unittest.TestCase):
+    """Reviews #752 - #768: Experience checkboxes, Gender, DO-178C, Avionics, RSU, etc."""
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        cls.engine = AnswerEngine(
+            kb=list(cfg.get("answers", {}).items()),
+            home_location=cfg.get("candidate", {}).get("location", "Bengaluru, India"),
+            candidate_gender=cfg.get("candidate", {}).get("gender", "Male"),
+        )
+
+    def test_hands_on_all_of_the_above(self):
+        q = ScreeningQuestion(
+            "In which of the following do you have hands-on working experience? (2+)",
+            "checkbox",
+            ["Python Coding", "NLP", "RAG", "LLM", "GenAI / Agentic AI", "Cloud (AWS/Azure/GCP)", "Computer Vision (Basics)", "Client Engagement", "End to End Project Delivery", "All of the above"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "All of the above")
+
+    def test_gender_resolution(self):
+        q = ScreeningQuestion(
+            "Gender*",
+            "select",
+            ["Select an option", "Male", "Female", "Trans", "Others", "Do not wish to disclose"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Male")
+
+    def test_current_unvested_rsu(self):
+        q = ScreeningQuestion("Current Unvested Options/RSU value", "text", [])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "0")
+
+    def test_do_178c_no(self):
+        q = ScreeningQuestion("Experience in DO-178C?", "radio", ["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_debugging_root_cause_yes(self):
+        q = ScreeningQuestion("Experience in debugging and root-cause analysis?", "radio", ["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_automated_testing_frameworks_yes(self):
+        q = ScreeningQuestion("Understanding of automated testing methodologies and frameworks?", "radio", ["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_avionics_automotive_no(self):
+        q = ScreeningQuestion(
+            "Experience in the Avionics or Automotive industry will be highly preferred, with familiarity?",
+            "radio",
+            ["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_happiest_minds_no(self):
+        q = ScreeningQuestion("Have you been employed by Happiest Minds before?", "radio", ["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_communication_skills_excellent(self):
+        q = ScreeningQuestion(
+            "communication skills?",
+            "radio",
+            ["Average", "Good", "Excellent", "Skip this question"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Excellent")
+
+    def test_automated_test_code_months(self):
+        q = ScreeningQuestion(
+            "How many months of professional experience do you have personally writing and maintaining automated test code, using any automation framework?",
+            "text",
+            [],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "30")
+
+
 if __name__ == "__main__":
     unittest.main()
