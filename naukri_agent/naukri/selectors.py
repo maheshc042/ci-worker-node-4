@@ -370,8 +370,14 @@ CHATBOT_TEXT_INPUT = [
 CHATBOT_SEND = [
     "div.sendMsg",
     "div.send",
+    "div[class*='sendMsg']",
+    "div[class*='sendIcon']",
+    "div[class*='send-icon']",
     "button.sendMsg",
+    "button[class*='send']",
+    "span[class*='send']",
     "svg.sendMsg",
+    "svg[class*='send']",
 ]
 CHATBOT_RADIO_OPTIONS = [
     "div.ssrc__radio-btn-container label",

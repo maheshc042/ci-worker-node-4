@@ -1044,6 +1044,161 @@ class TestRun811Reviews(unittest.TestCase):
         assert res is not None
         self.assertEqual(res.value, "30")
 
+    def test_what_made_you_apply(self):
+        q = ScreeningQuestion(
+            "What made you apply for this role? Pick one specific thing from the job description where you think you can shine, and tell us why.",
+            "text",
+            [],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertTrue("I applied because" in res.value or "FastAPI" in res.value or "Python" in res.value)
+
+    def test_visa_type_other(self):
+        q = ScreeningQuestion(
+            "Please select your visa type",
+            "radio",
+            ["H1B", "F1 -OPT/CPT", "L1", "B2", "Other"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Other")
+
+    def test_playwright_built_improved_yes(self):
+        q = ScreeningQuestion(
+            "Have you personally built or improved reusable Playwright framework parts, e.g. fixtures, page objects, test data, test isolation or CI/CD?",
+            "radio",
+            ["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_wipro_subsidiaries_prior_employer_no(self):
+        q = ScreeningQuestion(
+            "Have you ever been employed with Wipro or its subsidiaries?",
+            "radio",
+            ["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "No")
+
+    def test_pf_for_all_employments_yes(self):
+        q = ScreeningQuestion(
+            "Do you have PF for all of your employments?",
+            "text",
+            [],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_legally_authorized_to_work_yes(self):
+        q = ScreeningQuestion(
+            "Are you legally authorized to work in the country where you are applying?",
+            "radio",
+            ["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_c_cpp_algorithms_dsa_yes(self):
+        q = ScreeningQuestion(
+            "Having knowledge about C/C++ , algorithms & data structure?",
+            "radio",
+            ["Yes", "No", "Skip this question"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes")
+
+    def test_describe_you_gets_things_done(self):
+        q = ScreeningQuestion(
+            "How do people who've worked closely with you typically describe you?",
+            "radio",
+            ["Gets things done without being told twice", "Asks sharp questions", "Thinks it through before jumping in"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Gets things done without being told twice")
+
+    def test_where_in_2_years(self):
+        q = ScreeningQuestion(
+            "Where do you want to be in 2 years — and why does this role fit that path? (3 lines max)",
+            "text",
+            [],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertIn("2 years", res.value)
+
+    def test_raw_imperfect_datasets_extensively(self):
+        q = ScreeningQuestion(
+            "Have you worked with raw or imperfect datasets involving data cleaning, quality assessment, validation and combining data from multiple sources?",
+            "radio",
+            ["Yes, extensively", "Yes, occasionally", "Limited exposure", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Yes, extensively")
+
+    def test_genai_courses_certifications(self):
+        q = ScreeningQuestion(
+            "Have you done any GenAI/AI/Agentic AI related courses?",
+            "text",
+            [],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertIn("courses and certifications", res.value)
+
+    def test_databricks_azure_skip_only(self):
+        q = ScreeningQuestion(
+            "Databricks , Azure ?",
+            "radio",
+            ["Skip this question"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res.value, "Skip this question")
+
+
+class TestCutshortResumeVerification(unittest.TestCase):
+    def test_cutshort_candidate_resume_matching(self):
+        from pathlib import Path
+        from naukri_agent.platforms.cutshort import _is_candidate_resume, _resume_name_matches
+
+        fs_path = Path("resumes/CV_Mahesh_Chitakoti_2026_1_.pdf")
+        ai_path = Path("resumes/CV_Mahesh_Chitakoti_2026.pdf")
+
+        # Candidate's uploaded resume with Cutshort suffix
+        displayed_on_cutshort = "CV_Mahesh_Chitakoti_2026_3XGe"
+        self.assertTrue(_is_candidate_resume(displayed_on_cutshort))
+        self.assertTrue(_resume_name_matches(displayed_on_cutshort, ai_path))
+        self.assertTrue(_resume_name_matches(displayed_on_cutshort, fs_path))
+
+        # Check other variations
+        self.assertTrue(_is_candidate_resume("CV_Mahesh_Chitakoti_2026_1__6Lth"))
+        self.assertTrue(_resume_name_matches("CV_Mahesh_Chitakoti_2026_1__6Lth", fs_path))
+
+        # Other candidate should NOT match
+        self.assertFalse(_is_candidate_resume("John_Doe_Resume_2026"))
+        self.assertFalse(_resume_name_matches("John_Doe_Resume_2026", fs_path))
+
 
 if __name__ == "__main__":
     unittest.main()

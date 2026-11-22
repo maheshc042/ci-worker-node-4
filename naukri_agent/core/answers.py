@@ -467,6 +467,13 @@ class AnswerEngine:
             )
 
         # Stage 0: LWD intent remains absolute highest priority
+        # Stage 0: pure skip-only options (e.g. Databricks/Azure with only "Skip this question")
+        _skip_only = {"skip", "skip this", "skip question", "skip this question",
+                      "prefer not to answer", "prefer not to say"}
+        if question.options and all(_normalise(opt) in _skip_only for opt in question.options):
+            log.info("answers.skip_only_option_direct", question=question.text[:120], option=question.options[0][:60])
+            return ResolvedAnswer(question.options[0], "intent:skip_only", "option-match-skip")
+
         lwd = self._resolve_lwd(text, question)
         if lwd is not None:
             return lwd
@@ -526,8 +533,19 @@ class AnswerEngine:
         availability = self._resolve_availability(text, question)
         if availability is not None:
             return availability
-        # Stage 1.51: Demographics & Equity intents (Gender, RSUs/unvested options)
-        for intent in (self._resolve_gender, self._resolve_rsu):
+        # Stage 1.51: Demographics, Equity, Prior Employers, Work Auth & Specific Screening intents
+        for intent in (
+            self._resolve_gender,
+            self._resolve_rsu,
+            self._resolve_visa,
+            self._resolve_prior_employer,
+            self._resolve_authorized_to_work,
+            self._resolve_pf,
+            self._resolve_courses_certifications,
+            self._resolve_data_quality_experience,
+            self._resolve_future_goals,
+            self._resolve_peer_description,
+        ):
             hit = intent(text, question)
             if hit is not None:
                 return hit
@@ -1035,6 +1053,83 @@ class AnswerEngine:
             return self._fit_to_options("0", question, "intent:unvested_options", "intent-map")
         return None
 
+    def _resolve_visa(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        if re.search(r"\bvisa\s+type\b|\bvisa\s+status\b|\btype\s+of\s+visa\b", text):
+            return self._fit_to_options("Other", question, "intent:visa_type", "intent-map")
+        return None
+
+    def _resolve_prior_employer(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves prior-employer screening questions (e.g. 'employed with Wipro or its subsidiaries before?')."""
+        if not re.search(
+            r"\b(?:employed\s+(?:with|by|at|in)|worked\s+(?:with|by|at|for)|work\s+for)\b|"
+            r"\b(?:ex|former)[-\s]+employee\b",
+            text,
+        ):
+            return None
+        if not re.search(
+            r"\b(?:ever|before|previously|in\s+the\s+past|subsidiaries)\b|"
+            r"\b(?:ex|former)[-\s]+employee\b",
+            text,
+        ):
+            return None
+        if re.search(r"\bhow\s+many\s+years\b|\bcurrent\s+employer\b|\bare\s+you\s+(?:currently\s+)?employed\b", text):
+            return None
+        return self._fit_to_options("No", question, "intent:prior_employer", "intent-map")
+
+    def _resolve_authorized_to_work(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves legal work authorization in the application country (candidate is Indian citizen)."""
+        if re.search(
+            r"\b(?:legally\s+)?authorized\s+to\s+work\b|"
+            r"\blegal\s+right\s+to\s+work\b|"
+            r"\bwork\s+authorization\b|"
+            r"\beligible\s+to\s+work\s+in\b",
+            text,
+        ):
+            if re.search(r"\brequire\s+(?:visa\s+)?sponsorship\b|\bneed\s+sponsorship\b", text):
+                return self._fit_to_options("No", question, "intent:sponsorship_required", "intent-map")
+            return self._fit_to_options("Yes", question, "intent:work_authorized", "intent-map")
+        return None
+
+    def _resolve_pf(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves Provident Fund (PF / UAN) coverage questions."""
+        if re.search(r"\b(?:pf|provident\s+fund|uan)\b", text):
+            return self._fit_to_options("Yes", question, "intent:provident_fund", "intent-map")
+        return None
+
+    def _resolve_courses_certifications(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves questions about completed GenAI/AI/Agentic courses or training."""
+        if re.search(r"\b(?:courses?|certifications?|trainings?)\b", text) and re.search(
+            r"\b(?:genai|ai|agentic|llm|machine\s+learning|python)\b", text
+        ):
+            ans = "Yes, completed comprehensive courses and certifications in Generative AI, LLM Application Engineering, and Agentic Architectures."
+            return self._fit_to_options(ans, question, "intent:ai_courses", "intent-map")
+        return None
+
+    def _resolve_data_quality_experience(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves experience with raw/imperfect datasets, data cleaning, validation."""
+        if re.search(r"\b(?:raw|imperfect)\s+datasets?\b|\bdata\s+cleaning\b", text) and re.search(
+            r"\b(?:validation|combining|quality|assessment)\b", text
+        ):
+            return self._fit_to_options("Yes, extensively", question, "intent:data_cleaning", "intent-map")
+        return None
+
+    def _resolve_future_goals(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves 2-year or career path questions."""
+        if re.search(r"where\s+(?:do\s+you\s+)?(?:want|see\s+yourself)\s+to\s+be\s+in\s+\d+\s+years?", text):
+            ans = (
+                "In 2 years, I aim to lead full-stack and AI product engineering initiatives, "
+                "designing scalable distributed architectures. This role directly fits by letting me "
+                "build high-impact production systems and deepen my core backend and systems expertise."
+            )
+            return self._fit_to_options(ans, question, "intent:future_goals", "intent-map")
+        return None
+
+    def _resolve_peer_description(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves coworker description questions."""
+        if re.search(r"how\s+do\s+people\b.*describe\s+you|how\s+would\s+(?:your\s+)?(?:colleagues|peers|manager)\s+describe\s+you", text):
+            return self._fit_to_options("Gets things done without being told twice", question, "intent:peer_description", "intent-map")
+        return None
+
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         # Job-change questions have their own configured answers — never
         # let the motivation template speak for why the candidate is leaving.
@@ -1048,6 +1143,7 @@ class AnswerEngine:
             r"why\s+(?:do\s+you\s+want\s+(?:to\s+(?:work|join|apply)|this|the)|"
             r"are\s+you\s+interested|should\s+we\s+hire|"
             r"do\s+you\s+want\s+to\s+(?:work|join)|are\s+you\s+a\s+good\s+fit)|"
+            r"what\s+(?:made|prompted|motivated)\s+you\s+(?:to\s+)?apply|"
             r"what\s+interests\s+you|what\s+(?:excites|attracts|motivates)\s+you|"
             r"why\s+(?:this|the)\s+(?:role|position|job|opportunity|company)|"
             r"why\s+us\b|cover\s*letter",
@@ -1106,8 +1202,10 @@ class AnswerEngine:
             text,
         )
         if not m and not re.search(
-            r"\bhave\s+you\s+(?:built|deployed|developed|implemented|shipped|"
-            r"worked\s+(?:with|on)|used|been\s+working\s+(?:with|on))\b",
+            r"\bhave\s+you\s+(?:personally\s+|ever\s+|previously\s+)?"
+            r"(?:built|deployed|developed|implemented|shipped|improved|created|designed|architected|"
+            r"worked\s+(?:with|on)|used|been\s+working\s+(?:with|on))\b|"
+            r"\b(?:having|do\s+you\s+have)\s+knowledge\s+(?:about|of|in)\b",
             text,
         ):
             return None

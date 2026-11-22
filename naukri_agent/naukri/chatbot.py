@@ -781,10 +781,16 @@ class ChatbotHandler:
 
             if question.text == last_question:
                 stagnant_rounds += 1
-                if stagnant_rounds >= 3:
+                if stagnant_rounds >= 5:
                     result.error = "chatbot stalled on the same question"
                     log.warning("chatbot.stalled", question=question.text[:150])
                     break
+                # Actively attempt re-submitting to advance drawer on slow network or animation lag
+                try:
+                    await self._submit()
+                    await self.page.keyboard.press("Enter")
+                except Exception:
+                    pass
                 continue
 
             stagnant_rounds = 0

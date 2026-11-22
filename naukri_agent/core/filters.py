@@ -557,7 +557,8 @@ class FilterEngine:
                 [
                     "react", "node", "python", "mern", "frontend", "backend", "full stack",
                     "fullstack", "full-stack", "ai", "ml", "fastapi", "django", "llm", "genai", "qa",
-                    "automation", "sdet", "devops", "cloud", "database", "sql",
+                    "automation", "sdet", "devops", "cloud", "database", "sql", "chat bot",
+                    "chatbot", "agentic", "prompt", "rag", "deep learning", "machine learning",
                 ],
             ) is not None
             if is_broad_title and not specialized_tech_in_title and not ambiguous_qa:
@@ -569,16 +570,22 @@ class FilterEngine:
                     for tr in (
                         "software engineer", "software developer", "sde", "associate software engineer",
                         "junior software engineer", "full stack", "fullstack", "full-stack", "backend developer",
-                        "frontend developer", "software development engineer", "founding engineer"
+                        "frontend developer", "frontend engineer", "front end developer", "front end engineer",
+                        "software development engineer", "founding engineer", "web developer", "application developer",
+                        "test engineer", "software test", "quality assurance", "sdet", "qa engineer", "qa automation",
+                        "automation tester", "automation test engineer", "qa analyst", "test analyst",
+                        "ai developer", "ai engineer", "genai", "generative ai", "llm", "chat bot",
+                        "chatbot", "prompt engineer", "prompt engineering", "agentic"
                     )
                 )
                 if has_card_content and not is_target_role:
                     haystack = _build_searchable_haystack(job)
                     core_skills = getattr(self.candidate, "core_skills", [])
                     sec_skills = getattr(self.candidate, "secondary_skills", [])
+                    bonus_skills = getattr(self.candidate, "bonus_skills", [])
                     has_core_match = any(
                         _exact_word_match(s, haystack)
-                        for s in list(core_skills) + list(sec_skills)
+                        for s in list(core_skills) + list(sec_skills) + list(bonus_skills)
                     )
                     if not has_core_match:
                         return FilterDecision(

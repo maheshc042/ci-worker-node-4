@@ -53,3 +53,38 @@ The playbooks distinguish these requirements from implementation gaps. A documen
     .venv\Scripts\python -m pytest tests/
     ```
   - Run all currently discovered unit and regression tests, report the actual counts, and disclose any failures or unavailable checks before presenting completion.
+
+---
+
+## 4. Profile Architecture & Specialization Invariants (NEVER VIOLATE)
+
+The system relies on two strictly specialized profiles to maximize candidate match quality and interview conversion. Under no circumstances should an agent cross-contaminate or alter these profile boundaries without explicit user authorization.
+
+### A. Profile 0: `Full Stack / Web Developer`
+- **Resume Attached**: `resumes/CV_Mahesh_Chitakoti_2026_1_.pdf` ("Full Stack Engineer").
+- **Core Tech Stack**: React.js, Next.js, TypeScript, Node.js, Express.js, Python, FastAPI, SQL, PostgreSQL, MongoDB, Redis, REST APIs, WebSockets, Docker, AWS.
+- **Target Job Families**: Full-Stack, Web Developer, Backend Developer, Frontend Developer (React/TS), Database Developer, SQL Engineer, Analytical Engineer, QA Automation / SDET, General SDE.
+- **SQL & Database Invariant**:
+  - ✅ **DO NOT REMOVE** `sql developer`, `sql engineer`, `database developer`, `database engineer`, `database programmer`, `database tester`, `analytical engineer` from Profile 0 includes or keywords.
+  - ❌ **NEVER PUT** `sql developer` or `database developer` into `title_must_exclude_any`. Mahesh possesses extensive SQL/database expertise.
+- **AI Separation Rule**:
+  - ❌ **NEVER DUMP PURE AI TITLES** (`generative ai`, `genai`, `llm`, `rag`, `ai agent`, `agentic ai`, `prompt engineer`, `ai developer`, `ai engineer`, `chatbot developer`) into Profile 0. Submitting the Full Stack resume to dedicated AI/RAG roles results in immediate recruiter rejection and wastes daily quotas.
+  - Only true hybrid engineering roles (e.g. `full stack ai engineer`, `full-stack ai developer`, `full stack genai developer`) are permitted in Profile 0.
+
+### B. Profile 1: `AI / Python Engineer`
+- **Resume Attached**: `resumes/CV_Mahesh_Chitakoti_2026.pdf` ("AI & Backend Engineer").
+- **Core Tech Stack**: LangGraph multi-agent workflows, Qdrant hybrid vector search, RAG pipelines, LLM inference caching, embeddings, Python, FastAPI, Node.js, PostgreSQL, Redis.
+- **Target Job Families**: AI / GenAI, LLM Applications, RAG Pipelines, Multi-Agent Orchestration, Python Backend, Data Engineering, AI QA / Testing.
+- **Frontend Separation Rule**:
+  - ❌ **NEVER DUMP PURE FRONTEND TITLES** (`frontend developer`, `frontend engineer`, `front end engineer`, `senior frontend engineer`) into Profile 1. Submitting the AI & Backend resume to pure React/UI jobs makes zero sense and gets rejected by recruiters.
+  - `frontend developer`, `frontend engineer`, `front end developer`, `front end engineer`, `pure frontend` MUST REMAIN in Profile 1's `title_must_exclude_any`.
+
+### C. Experience Ceiling Invariant (3.5y Total, 3.0y Dedicated AI)
+- **Candidate Commercial Experience**: ~3.2 years total software tenure (~2.0 years dedicated commercial AI experience).
+- **Configured Hard Caps**:
+  - `experience.max_years: 3.5`
+  - `dedicated_ai_max_years: 3.0`
+- **Mandatory Guardrail**:
+  - ❌ **NEVER BUMP** `max_years` or `dedicated_ai_max_years` to 4.0y or 5.0y in `config.yaml` or `naukri_agent/config.py`!
+  - Applying to 5-year requisitions guarantees ATS/recruiter rejection for a 3-year engineer, burning valuable daily submission quotas.
+  - If a job is skipped because `requires 4.0y > ceiling 3.5y` or `requires 5.0y > ceiling 3.5y`, **THIS IS AN INTENDED REJECTION**. Do not attempt to bypass intentional filters by altering system design thresholds.

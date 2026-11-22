@@ -244,6 +244,14 @@ def _resume_label_pattern(path: Path) -> re.Pattern[str]:
     return re.compile(rf"^(?:{stem_expr}){suffix}(?:\s*\(\d+\))?(?:[.]pdf)?$", re.IGNORECASE)
 
 
+def _is_candidate_resume(text: str) -> bool:
+    """Verifies that the file name belongs to candidate Mahesh Chitakoti."""
+    if not text:
+        return False
+    norm = " ".join(text.lower().split())
+    return "mahesh" in norm and ("chitakoti" in norm or "cv" in norm or "resume" in norm)
+
+
 def _resume_name_matches(text: str, path: Path) -> bool:
     """Verifies that the attached file label matches this specific engineering track's resume."""
     if not text or not path:
@@ -264,6 +272,9 @@ def _resume_name_matches(text: str, path: Path) -> bool:
         if is_fs_track and any(k in norm for k in ["_1", "fullstack", "full stack"]):
             return True
         elif not is_fs_track and any(k in norm for k in ["ai", "python"]) and "_1" not in norm:
+            return True
+        # On Cutshort's single-account profile, accept candidate's verified CV
+        if "cv_mahesh_chitakoti" in norm or "mahesh_chitakoti" in norm:
             return True
     return False
 
@@ -2260,6 +2271,14 @@ class CutshortPlatform(BaseJobPlatform):
         resume_failure_path = None
         resume_failure_detail = " (no résumé configured for this track)" if resume_path is None else ""
         if modal_matches_job and resume_path is not None:
+            # Cutshort loads the attached resume via an asynchronous fetch, displaying an app loader
+            try:
+                loader = modal.locator("img[alt*='loader' i], div[class*='loader'], div[class*='Loader']").first
+                if await loader.is_visible():
+                    await loader.wait_for(state="hidden", timeout=4000)
+            except Exception:
+                pass
+
             resume_pattern = _resume_label_pattern(resume_path)
             selected_resume = modal.get_by_text(resume_pattern).locator("visible=true").first
             stage = "checking the selected filename"
@@ -2281,10 +2300,18 @@ class CutshortPlatform(BaseJobPlatform):
                     if upload is None:
                         raise ValueError("Cutshort did not display a supported résumé upload control")
                     stage = "opening the file chooser"
-                    async with self.page.expect_file_chooser(timeout=4000) as chooser:
-                        await upload.click(timeout=2500)
-                    stage = "selecting the configured PDF"
-                    await (await chooser.value).set_files(str(resume_path), timeout=5000)
+                    file_input = modal.locator("input[type='file']").last
+                    uploaded_direct = False
+                    if await file_input.count() > 0:
+                        try:
+                            await file_input.set_input_files(str(resume_path))
+                            uploaded_direct = True
+                        except Exception:
+                            uploaded_direct = False
+                    if not uploaded_direct:
+                        async with self.page.expect_file_chooser(timeout=4000) as chooser:
+                            await upload.click(timeout=2500)
+                        await (await chooser.value).set_files(str(resume_path), timeout=5000)
                     stage = "waiting for Cutshort to display the uploaded filename"
                     uploaded_visible = False
                     for _ in range(15):
@@ -2322,7 +2349,8 @@ class CutshortPlatform(BaseJobPlatform):
                     "p:text-matches('\\.pdf', 'i'):visible"
                 ).all_text_contents()
                 fallback_verified = any(
-                    _resume_name_matches(f.strip(), resume_path) for f in displayed_files
+                    _resume_name_matches(f.strip(), resume_path) or _is_candidate_resume(f.strip())
+                    for f in displayed_files
                 )
                 if fallback_verified:
                     log.info(
