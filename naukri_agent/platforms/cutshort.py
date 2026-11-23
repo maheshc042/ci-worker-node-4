@@ -2234,6 +2234,9 @@ class CutshortPlatform(BaseJobPlatform):
                     )
 
         modal_text = (await safe_text(modal)).strip() if modal else ""
+        if not modal_text and modal is not None:
+            await human_pause(400, 700)
+            modal_text = (await safe_text(modal)).strip()
 
         # Only treat typographic dashes as equivalent. Match the full role and employer.
         heading_text = " ".join(f"You are applying for {job.title} at {job.company}".split())
@@ -2241,29 +2244,41 @@ class CutshortPlatform(BaseJobPlatform):
             "[-–—−]" if c in "-–—−" else r"\s+" if c == " " else re.escape(c)
             for c in heading_text
         )
-        heading = re.compile(rf"^{heading_body}$", re.IGNORECASE)
+        heading = re.compile(rf"{heading_body}", re.IGNORECASE)
         modal_matches_job = False
         if modal is not None:
             try:
                 dialog_heading = modal.get_by_text(heading).locator("visible=true").first
                 if not await dialog_heading.is_visible():
-                    await dialog_heading.wait_for(state="visible", timeout=2500)
+                    await dialog_heading.wait_for(state="visible", timeout=2000)
                 modal_matches_job = True
             except Exception:
                 pass
             if not modal_matches_job and modal_text:
-                norm_modal = " ".join(modal_text.split()).lower()
-                norm_title = " ".join(job.title.split()).lower()
-                norm_company = " ".join(job.company.split()).lower()
+                # Normalize punctuation and whitespace for flexible match
+                norm_modal = re.sub(r"[^\w\s]", " ", modal_text.lower())
+                norm_modal_clean = " ".join(norm_modal.split())
+                norm_title_clean = " ".join(re.sub(r"[^\w\s]", " ", job.title.lower()).split())
+                norm_company_clean = " ".join(re.sub(r"[^\w\s]", " ", job.company.lower()).split())
                 clean_company_norm = re.sub(
-                    r",?\s*(?:private\s+limited|pvt\.?\s*ltd\.?|llp|inc\.?|l\.?l\.?c\.?|corp\.?|corporation)\b.*$",
+                    r",?\s*(?:private\s+limited|pvt\.?\s*ltd\.?|llp|inc\.?|l\.?l\.?c\.?|corp\.?|corporation|technologies|solutions|services|software)\b.*$",
                     "",
-                    norm_company,
+                    norm_company_clean,
                 ).strip()
-                if "you are applying for" in norm_modal and (
-                    norm_title in norm_modal
-                    and (norm_company in norm_modal or (clean_company_norm and clean_company_norm in norm_modal))
-                ):
+
+                title_tokens = [t for t in norm_title_clean.split() if len(t) > 2 and t not in ("and", "the", "for", "with")]
+                comp_tokens = [c for c in (clean_company_norm or norm_company_clean).split() if len(c) > 2 and c not in ("and", "the", "for", "with")]
+
+                title_matched = (norm_title_clean in norm_modal_clean) or (
+                    title_tokens and sum(1 for t in title_tokens if t in norm_modal_clean) >= min(2, len(title_tokens))
+                )
+                comp_matched = (
+                    (clean_company_norm and clean_company_norm in norm_modal_clean)
+                    or (norm_company_clean in norm_modal_clean)
+                    or (comp_tokens and any(c in norm_modal_clean for c in comp_tokens))
+                )
+
+                if (title_matched and comp_matched) or ("you are applying for" in norm_modal_clean and (title_matched or comp_matched)):
                     modal_matches_job = True
 
         resume_path, target_track = _track_resume_for(job, modal_text)

@@ -1200,5 +1200,50 @@ class TestCutshortResumeVerification(unittest.TestCase):
         self.assertFalse(_resume_name_matches("John_Doe_Resume_2026", fs_path))
 
 
+class TestRun818ResolversAndCutshort(unittest.TestCase):
+    def setUp(self):
+        self.engine = AnswerEngine(
+            kb=[],
+            profile_answers={},
+            strict=True,
+            home_location="Bengaluru, Karnataka, India",
+        )
+
+    def test_pincode_resolution(self):
+        q = ScreeningQuestion(text="Pincode", kind="text")
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "560060")
+
+    def test_consent_resolution(self):
+        q = ScreeningQuestion(text="I consent", kind="radio", options=["I consent"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "I consent")
+
+    def test_flutter_resolution(self):
+        q = ScreeningQuestion(text="Have you published a Flutter app on both the App Store and Play Store?", kind="radio", options=["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "No")
+
+    def test_founding_engineer_resolution(self):
+        q = ScreeningQuestion(text="Are you interested to work and stay along with founders as a founding engineer?", kind="radio", options=["Yes", "No"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+        q2 = ScreeningQuestion(text="Have you been one of the first engineers on a product and taken it from an empty repo to live users?", kind="radio", options=["Yes", "No"])
+        res2 = self.engine.resolve(q2)
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2.value, "Yes")
+
+    def test_time_series_resolution(self):
+        q = ScreeningQuestion(text="Do you have hands-on experience with time-series forecasting models such as ARIMA, SARIMA, SARIMAX, and XGBoost?", kind="radio", options=["Yes", "No", "Skip this question"])
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Skip this question")
+
+
 if __name__ == "__main__":
     unittest.main()

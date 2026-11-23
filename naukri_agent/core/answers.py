@@ -545,6 +545,11 @@ class AnswerEngine:
             self._resolve_data_quality_experience,
             self._resolve_future_goals,
             self._resolve_peer_description,
+            self._resolve_pincode,
+            self._resolve_consent,
+            self._resolve_founding_engineer,
+            self._resolve_flutter,
+            self._resolve_time_series,
         ):
             hit = intent(text, question)
             if hit is not None:
@@ -1128,6 +1133,39 @@ class AnswerEngine:
         """Resolves coworker description questions."""
         if re.search(r"how\s+do\s+people\b.*describe\s+you|how\s+would\s+(?:your\s+)?(?:colleagues|peers|manager)\s+describe\s+you", text):
             return self._fit_to_options("Gets things done without being told twice", question, "intent:peer_description", "intent-map")
+        return None
+
+    def _resolve_pincode(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves pincode / postal code questions (Bengaluru home: 560060)."""
+        if re.search(r"\b(?:pincode|pin\s*code|postal\s*code|zip\s*code)\b", text):
+            return self._fit_to_options("560060", question, "intent:pincode", "intent-map")
+        return None
+
+    def _resolve_consent(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves terms consent / I consent checkboxes or text."""
+        if re.search(r"\b(?:i\s*consent|consent\s+to|agree\s+to\s+terms)\b", text):
+            return self._fit_to_options("I consent", question, "intent:consent", "intent-map")
+        return None
+
+    def _resolve_founding_engineer(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves interest in working with founders as early/founding engineer, taking repo to live users."""
+        if re.search(r"\b(?:founding\s*engineer|first\s*engineers?\s+on\s+a\s+product|empty\s*repo|stay\s+along\s+with\s+founders)\b", text):
+            return self._fit_to_options("Yes", question, "intent:founding_engineer", "intent-map")
+        return None
+
+    def _resolve_flutter(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves Flutter app store publishing questions (candidate is web/backend)."""
+        if re.search(r"\b(?:flutter\s*app|published.*flutter)\b", text):
+            return self._fit_to_options("No", question, "intent:flutter_app", "intent-map")
+        return None
+
+    def _resolve_time_series(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves classical statistical time-series forecasting questions (ARIMA, SARIMA, SARIMAX)."""
+        if re.search(r"\b(?:time[-\s]*series|arima|sarima|sarimax)\b", text):
+            opts = list(question.options or [])
+            if any("skip" in o.lower() for o in opts):
+                return self._fit_to_options("Skip this question", question, "intent:time_series", "intent-map")
+            return self._fit_to_options("No", question, "intent:time_series", "intent-map")
         return None
 
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
