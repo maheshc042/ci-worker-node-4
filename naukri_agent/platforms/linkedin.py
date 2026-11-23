@@ -2373,14 +2373,14 @@ class LinkedInPlatform(BaseJobPlatform):
         checkboxes = await modal.locator("input[type='checkbox']").all()
         for cb in checkboxes:
             try:
-                if not await cb.is_visible():
+                cb_id = await cb.get_attribute("id") or ""
+                lbl = modal.locator(f"label[for='{cb_id}']").first if cb_id else None
+                has_visible_lbl = bool(lbl and await lbl.count() > 0 and await lbl.is_visible())
+                if not (await cb.is_visible() or has_visible_lbl):
                     continue
                 cb_label = ""
-                cb_id = await cb.get_attribute("id") or ""
-                if cb_id:
-                    lbl = modal.locator(f"label[for='{cb_id}']").first
-                    if await lbl.count() > 0:
-                        cb_label = (await safe_text(lbl)).strip()
+                if cb_id and lbl and await lbl.count() > 0:
+                    cb_label = (await safe_text(lbl)).strip()
                 if not cb_label:
                     lbl = cb.locator("xpath=ancestor::label[1] | following-sibling::label[1]").first
                     if await lbl.count() > 0:
@@ -2421,7 +2421,11 @@ class LinkedInPlatform(BaseJobPlatform):
                             if lbl_el and await lbl_el.count() > 0:
                                 await lbl_el.click(timeout=1500)
                             else:
-                                await target_cb.click(force=True, timeout=1500)
+                                anc_lbl = target_cb.locator("xpath=ancestor::label[1]").first
+                                if await anc_lbl.count() > 0:
+                                    await anc_lbl.click(timeout=1500)
+                                else:
+                                    await target_cb.click(force=True, timeout=1500)
 
                 resolved = resolve_screening(ScreeningQuestion(text=lookup_text, kind="checkbox")) if lookup_text else None
                 if resolved and resolved.source in {"profile", "kb", "profile-override"}:

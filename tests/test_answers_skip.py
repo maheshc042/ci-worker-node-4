@@ -1245,5 +1245,22 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
         self.assertEqual(res.value, "Skip this question")
 
 
+    def test_phonepe_consent_with_unknown_kind_and_dismiss_options(self):
+        q = ScreeningQuestion(
+            text=(
+                "Apply to PhonePe 6/7 pages Additional Questions Here you can find details of our privacy notice. "
+                "I allow PhonePe to collect, use, store, and process my information for evaluating my candidature "
+                "and for employment purposes (if applicable), in accordance with PhonePe’s policies, including Privacy Policy. "
+                "I understand and agree that I may be required to share additional information for the above-mentioned purposes during the process. "
+                "* I consent This field is required Back Review 0 notifications"
+            ),
+            kind="unknown",
+            options=["Dismiss", "Open https://www.phonepe.com/privacy-policy"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "I consent")
+
+
 if __name__ == "__main__":
     unittest.main()

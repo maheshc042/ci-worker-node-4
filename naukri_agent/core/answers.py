@@ -1785,6 +1785,13 @@ class AnswerEngine:
                              answer=answer[:40], option=option[:60])
                     return ResolvedAnswer(option, pattern, "option-match-skip")
 
+        # Blocked page screening reviews often dump page navigation or modal buttons
+        # ("Dismiss", "Open https://...") into options with kind "unknown".
+        # For kind="unknown", return the candidate answer directly rather than failing
+        # against irrelevant modal buttons.
+        if question.kind == "unknown":
+            return ResolvedAnswer(answer, pattern, source)
+
         if self.strict:
             return None
         return ResolvedAnswer(options[0], pattern, "option-match")

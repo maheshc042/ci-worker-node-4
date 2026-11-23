@@ -7092,11 +7092,17 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(platform.questionnaire_stats, dict(stale=1, unknown_age=1, unconfirmed=1, incomplete=0))
 
         self.assertEqual(rows.evaluate_all.await_count, 3)
-        rows.evaluate_all.return_value = [stale, unknown]
+        really_stale, really_stale_row = make_row(103, "4 days ago")
+        really_stale_tagged, really_stale_tagged_row = make_row(104, "4 days ago", questionnaire=True)
+        unparseable_old, unparseable_old_row = make_row(105, "15 Oct")
+        rows.evaluate_all.return_value = [stale, unknown, really_stale, really_stale_tagged, unparseable_old]
         with patch.object(cutshort, "human_pause", new=AsyncMock()):
             await platform._scan_message_rows(panel, set(), [], None, pending=True)
         stale_row.click.assert_awaited_once()
         unknown_row.click.assert_awaited_once()
+        really_stale_row.click.assert_not_called()
+        really_stale_tagged_row.click.assert_awaited_once()
+        unparseable_old_row.click.assert_not_called()
 
     async def test_sweep_checks_new_application_then_waits_for_pending_rows(self):
         from naukri_agent.platforms import cutshort

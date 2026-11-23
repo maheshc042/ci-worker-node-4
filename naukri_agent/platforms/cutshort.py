@@ -2915,11 +2915,21 @@ class CutshortPlatform(BaseJobPlatform):
                     continue
                 processed.add(key)
                 expected_questionnaire = item["questionnaire"]
-                if not pending and not expected_questionnaire:
-                    age = self._message_age_hours(item["age"])
-                    if age is None or age >= 24:
-                        self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
-                        continue
+                if not expected_questionnaire:
+                    raw_age = (item.get("age") or "").strip().lower()
+                    age = self._message_age_hours(raw_age)
+                    if pending:
+                        # 72-hour freshness window for pending/awaiting threads:
+                        # "yesterday" is <= 48h, so it is within 72h.
+                        # Anything >= 72h, or unknown age that is not "yesterday", is skipped as stale.
+                        is_yesterday = (raw_age == "yesterday")
+                        if not is_yesterday and (age is None or age >= 72):
+                            self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
+                            continue
+                    else:
+                        if age is None or age >= 24:
+                            self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
+                            continue
                 try:
                     # Dismiss any blocking dialog/modal overlay before interacting with conversation row
                     dialog_loc = self.page.locator("div[role='dialog']:visible")
