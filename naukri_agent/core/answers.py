@@ -559,6 +559,7 @@ class AnswerEngine:
             self._resolve_joining_date,
             self._resolve_verified_resume,
             self._resolve_primary_experience_area,
+            self._resolve_market_compensation,
         ):
             hit = intent(text, question)
             if hit is not None:
@@ -1068,12 +1069,26 @@ class AnswerEngine:
         return None
 
     def _resolve_visa(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        if re.search(
+            r"\brequire\s+(?:.*?\b)?sponsorship\b|"
+            r"\bneed\s+(?:.*?\b)?sponsorship\b|"
+            r"\bsponsorship\s+for\s+(?:employment\s+)?visa\b|"
+            r"\bvisa\s+sponsorship\b",
+            text,
+        ):
+            return self._fit_to_options("No", question, "intent:sponsorship_required", "intent-map")
         if re.search(r"\bvisa\s+type\b|\bvisa\s+status\b|\btype\s+of\s+visa\b", text):
             return self._fit_to_options("Other", question, "intent:visa_type", "intent-map")
         return None
 
     def _resolve_prior_employer(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         """Resolves prior-employer screening questions (e.g. 'employed with Wipro or its subsidiaries before?')."""
+        if re.search(
+            r"\b(?:i\s+)?currently\s+work\s+(?:at|for)\s+(?:microsoft|linkedin)\b|"
+            r"\b(?:microsoft|linkedin)\s*-\s*(?:full\s+time\s+employee|employee|intern|contingent\s+worker|agency\s+temp|business\s+guest|vendor|contractor|joint\s+venture)\b",
+            text,
+        ):
+            return self._fit_to_options("No", question, "intent:prior_employer", "intent-map")
         if not re.search(
             r"\b(?:employed\s+(?:with|by|at|in)|worked\s+(?:with|by|at|for)|work\s+for)\b|"
             r"\b(?:ex|former)[-\s]+employee\b",
@@ -1093,14 +1108,20 @@ class AnswerEngine:
     def _resolve_authorized_to_work(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         """Resolves legal work authorization in the application country (candidate is Indian citizen)."""
         if re.search(
+            r"\brequire\s+(?:.*?\b)?sponsorship\b|"
+            r"\bneed\s+(?:.*?\b)?sponsorship\b|"
+            r"\bsponsorship\s+for\s+(?:employment\s+)?visa\b|"
+            r"\bvisa\s+sponsorship\b",
+            text,
+        ):
+            return self._fit_to_options("No", question, "intent:sponsorship_required", "intent-map")
+        if re.search(
             r"\b(?:legally\s+)?authorized\s+to\s+work\b|"
             r"\blegal\s+right\s+to\s+work\b|"
             r"\bwork\s+authorization\b|"
             r"\beligible\s+to\s+work\s+in\b",
             text,
         ):
-            if re.search(r"\brequire\s+(?:visa\s+)?sponsorship\b|\bneed\s+sponsorship\b", text):
-                return self._fit_to_options("No", question, "intent:sponsorship_required", "intent-map")
             return self._fit_to_options("Yes", question, "intent:work_authorized", "intent-map")
         return None
 
@@ -1152,6 +1173,10 @@ class AnswerEngine:
 
     def _resolve_consent(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         """Resolves terms consent / I consent checkboxes or text."""
+        if re.search(r"^\s*confirmed\s*$", text):
+            return self._fit_to_options("Confirmed", question, "intent:confirmed", "intent-map")
+        if re.search(r"^\s*not\s+applicable\s*$", text) or re.search(r"\bnot\s+applicable\b", text):
+            return self._fit_to_options("Not Applicable", question, "intent:not_applicable", "intent-map")
         if re.search(r"\b(?:i\s*consent|consent\s+to|agree\s+to\s+terms)\b", text):
             return self._fit_to_options("I consent", question, "intent:consent", "intent-map") or self._fit_to_options("Yes", question, "intent:consent", "intent-map")
         if re.search(r"\b(?:allowing\s+.*to\s+contact\s+me|contact\s+me\s+about\s+future\s+(?:job\s+)?opportunities)\b", text):
@@ -1241,6 +1266,14 @@ class AnswerEngine:
             return self._fit_to_options(pref, question, "intent:primary_experience_area", "intent-map")
         return None
 
+    def _resolve_market_compensation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves openness to compensation based on market standards, skills, experience, and performance."""
+        if re.search(r"\b(?:compensation|salary)\s+based\s+on\s+market\s+standards\b", text) or (
+            re.search(r"\bopen\s+to\s+considering\s+compensation\b", text) and re.search(r"\bmarket\s+standards\b", text)
+        ):
+            return self._fit_to_options("Yes", question, "intent:market_compensation", "intent-map")
+        return None
+
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         # Job-change questions have their own configured answers — never
         # let the motivation template speak for why the candidate is leaving.
@@ -1308,20 +1341,22 @@ class AnswerEngine:
         # to the tenure-number stage below, never to a Yes/No answer.
         if re.search(r"\bhow\s+(many|much|long)\b|\bnumber\s+of\s+", text):
             return None
+        if re.search(r"\bci\s*/\s*cd\s+pipelines?\b", text) and re.search(r"\b(?:built|maintained|deployed|created)\b", text):
+            return self._fit_to_options("Yes", question, "intent:cicd_pipelines", "intent-map")
         m = re.search(
             r"\bexperienc(?:ed|e)\s+(?:in|with|on)\s+(.+?)\s*\??$",
             text,
         )
         if not m and not re.search(
-            r"\bhave\s+you\s+(?:personally\s+|ever\s+|previously\s+)?"
-            r"(?:built|deployed|developed|implemented|shipped|improved|created|designed|architected|"
+            r"\bhave\s+you\s+(?:personally\s+|ever\s+|previously\s+|independently\s+|successfully\s+)?"
+            r"(?:built|maintained|deployed|developed|implemented|shipped|improved|created|designed|architected|"
             r"worked\s+(?:with|on)|used|been\s+working\s+(?:with|on))\b|"
             r"\b(?:having|do\s+you\s+have)\s+knowledge\s+(?:about|of|in)\b",
             text,
         ):
             return None
         frag = ((m.group(1) if m else text) or "").strip()
-        if not frag or len(frag) > 120:
+        if not frag or len(frag) > 200:
             return None
         saw_zero = False
         for skill, years in (self.experience.skills or {}).items():
@@ -1490,6 +1525,9 @@ class AnswerEngine:
         if not _EXPERIENCE_INTENT.search(text):
             return None
 
+        if re.search(r"\bproduct\s+(?:management|ownership|manager|owner)\b", text):
+            return self._fit_to_options("0", question, "experience:product_management", "experience-map")
+
         def fit_years(years: float, pattern: str) -> ResolvedAnswer | None:
             if not question.options and re.search(r"\b(?:(?:how many|number of)\s+months?|in months)\b", text):
                 years *= 12
@@ -1604,6 +1642,11 @@ class AnswerEngine:
                              question=question.text[:100],
                              expected=exp_val, threshold=threshold, value=want_bool)
                     return fitted
+
+        if question.options and any(self._polarity(o) is True for o in question.options) and any(self._polarity(o) is False for o in question.options):
+            if re.search(r"\b(?:yes\s*/\s*no|\(yes/no\))\b", text) and re.search(r"\b(?:current\s+ctc|ctc|salary|compensation)\b", text):
+                return self._fit_to_options("Yes", question, "intent:ctc_consent", "intent-map")
+
         norm = text.lower()
         if any(m in norm for m in ("expected", "expectation", "looking for", "desired", "asking", "demand")):
             want = "expected"

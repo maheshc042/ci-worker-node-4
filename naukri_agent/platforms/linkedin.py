@@ -1032,9 +1032,13 @@ class LinkedInPlatform(BaseJobPlatform):
                         max_exp = float(exp_match.group(2))
                     elif "+" in exp_match.group(0):
                         max_exp = min_exp + 5.0
-                elif any(k in f"{title} {card_text}".lower() for k in ("senior", "sr.", "sr ", "lead", "principal", "staff")):
-                    min_exp = 5.0
-                    max_exp = 10.0
+                elif any(k in f"{title} {card_text}".lower() for k in ("principal", "staff", "architect", "director", "head of", "engineering manager")):
+                    min_exp = 6.0
+                    max_exp = 12.0
+                    exp_imputed = True
+                elif any(k in f"{title} {card_text}".lower() for k in ("senior", "sr.", "sr ", "lead")):
+                    min_exp = 3.5
+                    max_exp = 8.0
                     exp_imputed = True
                 elif any(k in f"{title} {card_text}".lower() for k in ("intern", "trainee", "fresher")):
                     min_exp = 0.0
@@ -2428,9 +2432,14 @@ class LinkedInPlatform(BaseJobPlatform):
                                     await target_cb.click(force=True, timeout=1500)
 
                 resolved = resolve_screening(ScreeningQuestion(text=lookup_text, kind="checkbox")) if lookup_text else None
-                if resolved and resolved.source in {"profile", "kb", "profile-override"}:
+                if resolved and resolved.source in {"profile", "kb", "profile-override", "intent-map"}:
                     if self.answers._polarity(resolved.value) is True and not is_checked:
                         await _check_cb_target(cb)
+                    elif self.answers._polarity(resolved.value) is False and is_checked:
+                        try:
+                            await cb.uncheck(force=True)
+                        except Exception:
+                            pass
                 elif any(w in (lookup_text or "").lower() for w in ("consent", "terms", "agree", "privacy", "certify", "acknowledge", "authorize")):
                     if not is_checked:
                         await _check_cb_target(cb)

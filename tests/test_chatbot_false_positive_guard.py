@@ -354,6 +354,85 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kind, "text")
         self.assertEqual(opts, [])
 
+    def test_chatbot_save_selectors_do_not_contain_bare_send_msg(self):
+        """CHATBOT_SAVE must never contain bare 'div.sendMsg' which would hijack
+        form submission on questions that have action buttons like Submit/Done."""
+        self.assertNotIn("div.sendMsg", S.CHATBOT_SAVE)
+        # Ensure common action button selectors are included
+        self.assertTrue(any("Save" in s for s in S.CHATBOT_SAVE))
+        self.assertTrue(any("Submit" in s for s in S.CHATBOT_SAVE))
+        self.assertTrue(any("Done" in s for s in S.CHATBOT_SAVE))
+
+    def test_format_date_for_input(self):
+        """ISO date strings must be converted to DD/MM/YYYY for Indian portal compatibility."""
+        self.assertEqual(cb_mod.ChatbotHandler._format_date_for_input("1997-11-19"), "19/11/1997")
+        self.assertEqual(cb_mod.ChatbotHandler._format_date_for_input("1997-11-19", placeholder="DD-MM-YYYY"), "19-11-1997")
+        self.assertEqual(cb_mod.ChatbotHandler._format_date_for_input("19/11/1997"), "19/11/1997")
+        self.assertEqual(cb_mod.ChatbotHandler._format_date_for_input("Immediate"), "Immediate")
+
+    async def test_checkbox_skip_does_not_enforce_checked(self):
+        """When an answer maps to 'Skip' on a checkbox question, the handler must
+        not enforce checked state on the skip control."""
+        page = MagicMock()
+        handler = cb_mod.ChatbotHandler(
+            page, MagicMock(), RunPolicy(dry_run=False, side_effects_enabled=True)
+        )
+        handler._ensure_checkbox_checked = AsyncMock()
+        handler._drawer_scope = AsyncMock(return_value=page)
+        handler._dismiss_blocking_overlays = AsyncMock()
+        handler._submit = AsyncMock(return_value=True)
+
+        skip_btn = MagicMock()
+        skip_btn.click = AsyncMock()
+        skip_btn.inner_text = AsyncMock(return_value="Skip")
+        page.locator.return_value.all = AsyncMock(return_value=[skip_btn])
+
+        with patch.object(cb_mod, "safe_text", new=AsyncMock(return_value="Skip")):
+            ok = await handler._answer_option("Skip", "checkbox")
+        self.assertTrue(ok)
+        handler._ensure_checkbox_checked.assert_not_called()
+
+    async def test_submit_prioritizes_action_buttons_over_send_icon(self):
+        """_submit must prioritize drawer action buttons (Save/Submit/Done)
+        before falling back to chat send icons."""
+        page = MagicMock()
+        handler = cb_mod.ChatbotHandler(
+            page, MagicMock(), RunPolicy(dry_run=True, side_effects_enabled=False)
+        )
+        drawer = MagicMock()
+        submit_btn = MagicMock(is_visible=AsyncMock(return_value=True), click=AsyncMock())
+        send_icon = MagicMock(is_visible=AsyncMock(return_value=True), click=AsyncMock())
+
+        # When drawer.locator is called:
+        # None of S.CHATBOT_SAVE match (e.g., custom button text)
+        # drawer.locator("button, div[role='button'], a[role='button']").all() returns submit_btn with text 'Submit'
+        # drawer.locator("div.sendMsg") returns send_icon
+        def drawer_locator_mock(sel):
+            mock = MagicMock()
+            if any(s in sel for s in ("Save", "submit", "save-btn")):
+                mock.first.count = AsyncMock(return_value=0)
+                mock.first.is_visible = AsyncMock(return_value=False)
+                return mock
+            if "send" in sel.lower():
+                mock.first.count = AsyncMock(return_value=1)
+                mock.first.is_visible = AsyncMock(return_value=True)
+                mock.first.click = send_icon.click
+                return mock
+            mock.all = AsyncMock(return_value=[submit_btn])
+            return mock
+
+        drawer.locator = MagicMock(side_effect=drawer_locator_mock)
+        with (
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=drawer)),
+            patch.object(cb_mod, "safe_text", new=AsyncMock(return_value="Submit")),
+            patch.object(handler, "_dismiss_blocking_overlays", new=AsyncMock()),
+        ):
+            ok = await handler._submit()
+
+        self.assertTrue(ok)
+        submit_btn.click.assert_called_once()
+        send_icon.click.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
 

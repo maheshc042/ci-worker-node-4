@@ -1386,6 +1386,88 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
         self.assertIsNotNone(res_ai)
         self.assertEqual(res_ai.value, "AI/ML")
 
+    def test_run828_screening_question_resolutions(self):
+        engine = AnswerEngine(
+            kb=[],
+            profile_answers={},
+            strict=True,
+            experience=ExperienceAnswers(
+                total_years=3.0,
+                default_years=2.0,
+                skills={
+                    "generative ai, llm, or agentic ai products": 2.0,
+                    "product management": 0.0,
+                    "ci/cd": 3.0,
+                },
+            ),
+        )
+
+        # 1. Visa sponsorship -> No
+        q_visa = ScreeningQuestion(
+            text="Will you now or in the future require sponsorship for employment visa status, in order to begin or maintain employment with LinkedIn?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res_visa = engine.resolve(q_visa)
+        self.assertIsNotNone(res_visa)
+        self.assertEqual(res_visa.value, "No")
+
+        # 2. Confirmed & Not Applicable
+        q_conf = ScreeningQuestion(text="Confirmed", kind="radio", options=[])
+        self.assertEqual(engine.resolve(q_conf).value, "Confirmed")
+
+        q_na = ScreeningQuestion(text="Not Applicable", kind="radio", options=[])
+        self.assertEqual(engine.resolve(q_na).value, "Not Applicable")
+
+        # 3. Employer checkboxes -> No
+        q_ms = ScreeningQuestion(text="I currently work at Microsoft", kind="checkbox", options=[])
+        self.assertEqual(engine.resolve(q_ms).value, "No")
+
+        q_ms_emp = ScreeningQuestion(text="Microsoft - Full Time Employee", kind="checkbox", options=[])
+        self.assertEqual(engine.resolve(q_ms_emp).value, "No")
+
+        # 4. CI/CD pipelines -> Yes
+        q_cicd = ScreeningQuestion(
+            text="Have you independently built and maintained CI/CD pipelines for deploying applications to staging and production environments?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res_cicd = engine.resolve(q_cicd)
+        self.assertIsNotNone(res_cicd)
+        self.assertEqual(res_cicd.value, "Yes")
+
+        # 5. Product Management -> 0
+        q_pm = ScreeningQuestion(
+            text="Apply to Norwin Technologies 3/4 pages Additional Questions How many years of Product Management/Product Ownership experience do you have?",
+            kind="text",
+            options=[],
+        )
+        self.assertEqual(engine.resolve(q_pm).value, "0")
+
+        # 6. GenAI products -> 2
+        q_genai = ScreeningQuestion(
+            text="How many years have you worked specifically on Generative AI, LLM, or Agentic AI products?",
+            kind="text",
+            options=[],
+        )
+        self.assertEqual(engine.resolve(q_genai).value, "2")
+
+        # 7. Compensation based on market standards -> Yes
+        q_mkt = ScreeningQuestion(
+            text="Are you open to considering compensation based on market standards and your skills, experience, and interview performance?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        self.assertEqual(engine.resolve(q_mkt).value, "Yes")
+
+        # 8. CTC consent radio -> Yes
+        q_ctc_consent = ScreeningQuestion(
+            text="(Yes/No)* Yes No What is your current CTC (Fixed + Variable) in LPA (Lakhs Per Annum)?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        self.assertEqual(engine.resolve(q_ctc_consent).value, "Yes")
+
 
 if __name__ == "__main__":
     unittest.main()

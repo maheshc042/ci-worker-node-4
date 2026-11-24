@@ -2765,16 +2765,39 @@ class CutshortPlatform(BaseJobPlatform):
                     await tab.wait_for(state="visible", timeout=8000)
                     if await tab.get_attribute("aria-selected") != "true":
                         await tab.click(timeout=3000)
-                panel = self.page.locator("#tabpanel-awaiting:visible" if pending else "div[role='tabpanel']:visible").first
+                else:
+                    inbox_tab = self.page.locator(
+                        "#tab-inbox, #tab-all, [role='tab']:not(#tab-awaiting), button:has-text('Inbox'), button:has-text('All')"
+                    ).first
+                    try:
+                        if await inbox_tab.count() > 0 and await inbox_tab.is_visible():
+                            if await inbox_tab.get_attribute("aria-selected") != "true":
+                                await inbox_tab.click(timeout=3000)
+                    except Exception:
+                        pass
+                panel = self.page.locator(
+                    "#tabpanel-awaiting:visible" if pending else
+                    "#tabpanel-inbox:visible, #tabpanel-all:visible, div[role='tabpanel']:not(#tabpanel-awaiting):visible, div[role='tabpanel']:visible"
+                ).first
                 await panel.wait_for(state="visible", timeout=8000)
                 remaining = max(0, phase_deadline - monotonic()) if phase_deadline is not None else None
                 async with asyncio.timeout(remaining):
                     ready = await first_visible(panel, [
                         "ul[role='list'] > div[role='button']",
+                        "div[role='feed'] > div[role='button']",
+                        "div[role='list'] > div[role='button']",
+                        "div[role='button']",
                         ":text-is('No conversations here.')",
                         ":text-is('No conversations here')",
+                        ":text-is('No messages here')",
+                        ":text-is('No messages yet')",
+                        ":text-is('You don\\'t have any conversations')",
                     ], timeout_ms=10000)
                     if ready is None:
+                        row_count = await panel.locator("div[role='button']").count()
+                        if row_count == 0:
+                            log.info("cutshort.messages.empty_tab", pending=pending)
+                            continue
                         raise ValueError("Cutshort conversation rows or empty state did not load")
                     await self._scan_message_rows(
                         panel, set(), unanswered, phase_deadline, pending=pending, seen_jobs=seen_jobs,
@@ -2947,7 +2970,12 @@ class CutshortPlatform(BaseJobPlatform):
                     max_inbox_age = 72 if expected_questionnaire else 24
                     if age is None or age >= max_inbox_age:
                         self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
+                        consecutive_stale += 1
+                        if consecutive_stale >= 20:
+                            log.info("cutshort.messages.stale_horizon_reached", count=len(processed), phase="inbox")
+                            return
                         continue
+                    consecutive_stale = 0
                 try:
                     # Dismiss any blocking dialog/modal overlay before interacting with conversation row
                     dialog_loc = self.page.locator("div[role='dialog']:visible")

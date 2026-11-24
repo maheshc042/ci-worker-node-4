@@ -459,9 +459,21 @@ CHATBOT_SEARCH_INPUT = [
 ]
 CHATBOT_SAVE = [
     "div.botItem button:has-text('Save')",
+    "div.botItem button:has-text('Submit')",
+    "div.botItem button:has-text('Done')",
+    "div.botItem button:has-text('Continue')",
+    "div.botItem button:has-text('Next')",
+    "div.botItem button:has-text('Apply')",
     "button:has-text('Save')",
+    "button:has-text('Submit')",
+    "button:has-text('Done')",
+    "button:has-text('Continue')",
+    "button:has-text('Next')",
+    "button[class*='save' i]",
+    "button[class*='submit' i]",
+    "div[class*='saveBtn' i]",
+    "div[class*='save-btn' i]",
     "div.sendMsg:has-text('Save')",
-    "div.sendMsg",
 ]
 CHATBOT_CLOSE = [
     "div.chatBot-ic-cross",

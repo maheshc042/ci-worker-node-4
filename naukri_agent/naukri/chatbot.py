@@ -226,8 +226,21 @@ class ChatbotHandler:
         except Exception:
             pass
 
+    @staticmethod
+    def _format_date_for_input(value: str, placeholder: str = "") -> str:
+        """Format ISO date strings into DD/MM/YYYY (or placeholder matching format)."""
+        val_clean = (value or "").strip()
+        m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", val_clean)
+        if m:
+            year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            pl = placeholder.lower()
+            if "dd-mm-yyyy" in pl or "d-m-y" in pl:
+                return f"{day:02d}-{month:02d}-{year}"
+            return f"{day:02d}/{month:02d}/{year}"
+        return val_clean
+
     # ------------------------------------------------------------------ write
-    async def _answer_text(self, value: str) -> bool:
+    async def _answer_text(self, value: str, question_text: str = "") -> bool:
         await self._dismiss_blocking_overlays()
         drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=1500)
         if drawer is None:
@@ -241,10 +254,19 @@ class ChatbotHandler:
                 await field.click(force=True, timeout=2_500)
             except Exception:
                 await field.focus()
+            val_to_type = value
+            placeholder = ""
+            try:
+                placeholder = (await field.get_attribute("placeholder") or "").lower()
+            except Exception:
+                pass
+            q_low = question_text.lower()
+            if "birth" in q_low or "dob" in q_low or "date" in placeholder or "dob" in placeholder:
+                val_to_type = self._format_date_for_input(value, placeholder)
             # contenteditable: clear any prefill, then type so React re-renders.
             await self.page.keyboard.press("Control+A")
             await self.page.keyboard.press("Delete")
-            await field.press_sequentially(value, delay=45)
+            await field.press_sequentially(val_to_type, delay=45)
             await human_pause(200, 500)
             if not await self._submit():
                 await field.press("Enter")
@@ -435,7 +457,7 @@ class ChatbotHandler:
                         self.policy.require_mutation("naukri.screening.answer")
                         await locator.click(force=True, timeout=3_000)
                         await human_pause(200, 500)
-                        if kind == "checkbox":
+                        if kind == "checkbox" and val_clean not in ("skip", "none of the above", "n/a", "na", "none"):
                             # Custom widgets often swallow label clicks: verify
                             # the box actually toggled (city multi-selects
                             # failed silently here across runs 268-507).
@@ -446,7 +468,7 @@ class ChatbotHandler:
                         try:
                             await locator.evaluate("el => el.click()")
                             await human_pause(200, 500)
-                            if kind == "checkbox":
+                            if kind == "checkbox" and val_clean not in ("skip", "none of the above", "n/a", "na", "none"):
                                 await self._ensure_checkbox_checked(locator)
                             await self._submit()
                             return True
@@ -689,7 +711,8 @@ class ChatbotHandler:
         drawer = await first_visible(self.page, S.CHATBOT_DRAWER, timeout_ms=1500)
         if drawer is None:
             return False
-        for selector in S.CHATBOT_SAVE + S.CHATBOT_SEND:
+        # 1. Primary: dedicated form save/submit buttons in the drawer
+        for selector in S.CHATBOT_SAVE:
             try:
                 locator = drawer.locator(selector).first
                 if await locator.count() and await locator.is_visible():
@@ -700,11 +723,11 @@ class ChatbotHandler:
                     return True
             except Exception:
                 continue
-        # Fallback: drawer-scoped action buttons by text. City multi-selects
-        # often label the control Done/OK/Confirm/Apply instead of Save/Send.
-        # Drawer-scoped ONLY: page-level "Apply" could hit the job button.
+        # 2. Drawer-scoped action buttons by text. City multi-selects and custom
+        # forms often label the control Done/OK/Confirm/Apply/Submit instead of Save.
+        # Check these BEFORE falling back to chat send icons.
         try:
-            for el in await drawer.locator("button").all():
+            for el in await drawer.locator("button, div[role='button'], a[role='button']").all():
                 try:
                     if not await el.is_visible():
                         continue
@@ -725,6 +748,18 @@ class ChatbotHandler:
                     return True
         except Exception:
             pass
+        # 3. Message send icon fallback for text input questions
+        for selector in S.CHATBOT_SEND:
+            try:
+                locator = drawer.locator(selector).first
+                if await locator.count() and await locator.is_visible():
+                    try:
+                        await locator.click(force=True, timeout=2_500)
+                    except Exception:
+                        await locator.evaluate("el => el.click()")
+                    return True
+            except Exception:
+                continue
         return False
 
     # ------------------------------------------------------------------- loop
@@ -786,7 +821,16 @@ class ChatbotHandler:
                     log.warning("chatbot.stalled", question=question.text[:150])
                     break
                 # Actively attempt re-submitting to advance drawer on slow network or animation lag
+                await human_pause(800, 1500)
                 try:
+                    if drawer is not None:
+                        field = await first_visible(drawer, S.CHATBOT_TEXT_INPUT, timeout_ms=800)
+                        if field is not None and await field.is_visible():
+                            try:
+                                await field.focus()
+                                await field.press("Enter")
+                            except Exception:
+                                pass
                     await self._submit()
                     await self.page.keyboard.press("Enter")
                 except Exception:
@@ -829,7 +873,7 @@ class ChatbotHandler:
             if question.kind == "combobox":
                 ok = await self._answer_combobox(resolved.value)
             elif question.kind in ("text", "unknown"):
-                ok = await self._answer_text(resolved.value)
+                ok = await self._answer_text(resolved.value, question.text)
             else:
                 ok = await self._answer_option(resolved.value, question.kind)
 
@@ -843,12 +887,12 @@ class ChatbotHandler:
                 elif question.kind == "combobox":
                     ok = (
                         await self._answer_option(resolved.value, "radio")
-                        or await self._answer_text(resolved.value)
+                        or await self._answer_text(resolved.value, question.text)
                     )
                 else:
                     ok = (
                         await self._answer_combobox(resolved.value)
-                        or await self._answer_text(resolved.value)
+                        or await self._answer_text(resolved.value, question.text)
                     )
                 # Last resort: options rendered outside every known selector
                 # list (city multi-selects). Hunt text nodes across element

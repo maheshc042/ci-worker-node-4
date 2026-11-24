@@ -364,7 +364,7 @@ class FilterEngine:
         # would-be "bpo_mandatory") both silently miss. Collapse '_' to
         # space once, up front — every gate below matches on the cleaned
         # text; downstream lead matches still use the original job.title.
-        title = re.sub(r"[\s_]+", " ", job.title.lower()).strip()
+        title = re.sub(r"[\s_]+", " ", job.title.lower()).rstrip(" .,:;-|").strip()
         # Correct OCR and recruiter font typos where lowercase 'l' was typed instead of uppercase 'I' (e.g. 'al/ml', 'al engineer')
         title = re.sub(r"\bal(?=[\s/&+-]*(?:ml|engineer|developer|specialist|ops|agent))\b", "ai", title)
         company = job.company.lower()
@@ -400,6 +400,12 @@ class FilterEngine:
                 elif hit in ("machine learning", "machine learning engineer") and _contains_any(title, ["backend", "back end", "infrastructure", "platform"]):
                     if not self.candidate or "ai" in getattr(self.candidate, "name", "").lower() or "python" in getattr(self.candidate, "name", "").lower():
                         is_override = True
+                elif hit == "etl" and _contains_any(title, ["python", "sql", "database", "fastapi", "django", "backend", "data engineer"]):
+                    is_override = True
+                elif hit in ("infrastructure engineer", "infrastructure") and _contains_any(title, ["cloud", "azure", "aws", "gcp", "devops", "platform", "ai"]):
+                    is_override = True
+                elif hit == "lead" and any(term in title for term in ("software engineer", "developer", "backend", "ai", "full stack", "fullstack", "tech lead")) and not any(term in title for term in ("lead qa", "test lead", "lead auditor", "team lead", "sales lead", "project lead")):
+                    is_override = True
                 elif hit in ("security engineer", "security specialist", "security analyst") and _contains_any(title, ["ai", "agentic", "automation", "generative ai", "genai", "llm"]):
                     is_override = True
                 elif hit == "systems engineer" and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
@@ -429,6 +435,8 @@ class FilterEngine:
             elif hit_disjoint == "systems engineer" and _contains_any(title, ["ai", "genai", "generative ai", "llm", "agentic"]):
                 is_disjoint_override = True
             elif hit_disjoint in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
+                is_disjoint_override = True
+            elif hit_disjoint in ("etl developer", "etl engineer") and _contains_any(title, ["python", "sql", "database", "fastapi", "django", "backend", "data engineer"]):
                 is_disjoint_override = True
 
             if not is_disjoint_override:
@@ -476,6 +484,26 @@ class FilterEngine:
                 both_equiv = re.sub(r"\bengineering\b", "engineer", re.sub(r"\bdev\b", "developer", tech_norm))
                 if both_equiv not in title_variants:
                     title_variants.append(both_equiv)
+
+            if re.search(r"\bplatforms\b", tech_norm):
+                plat_equiv = re.sub(r"\bplatforms\b", "platform", tech_norm)
+                if plat_equiv not in title_variants:
+                    title_variants.append(plat_equiv)
+            if re.search(r"\bapplications\b", tech_norm):
+                app_equiv = re.sub(r"\bapplications\b", "application", tech_norm)
+                if app_equiv not in title_variants:
+                    title_variants.append(app_equiv)
+            if "(" in title or "[" in title or "+" in title:
+                spaced_parens = re.sub(r"([a-zA-Z0-9])\(", r"\1 (", title)
+                spaced_parens = re.sub(r"\)([a-zA-Z0-9])", r") \1", spaced_parens)
+                spaced_parens = re.sub(r"\+", " + ", spaced_parens)
+                spaced_parens = re.sub(r"[\s_]+", " ", spaced_parens).strip(" .,:;-|")
+                if spaced_parens not in title_variants:
+                    title_variants.append(spaced_parens)
+                no_parens = re.sub(r"[()\[\]+]", " ", title)
+                no_parens = re.sub(r"[\s_]+", " ", no_parens).strip(" .,:;-|")
+                if no_parens not in title_variants:
+                    title_variants.append(no_parens)
 
             if _contains_any(title, ["machine learning", "machine learning engineer"]) and _contains_any(title, ["backend", "back end"]):
                 title_variants.extend(["ai backend", "ai backend engineer", "python backend engineer"])

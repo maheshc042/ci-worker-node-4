@@ -866,7 +866,7 @@ class WellfoundPlatform(BaseJobPlatform):
         ], timeout_ms=300)
         if active is not None:
             return "unknown", None
-        receipt = await first_visible(detail, _APPLIED_JOB_MARKERS, timeout_ms=1000)
+        receipt = await first_visible(detail, _APPLIED_JOB_MARKERS, timeout_ms=3000)
         return ("applied", None) if receipt is not None else ("unknown", None)
 
     async def _verify_application(self, job: Job, *, wait_pending: bool = True) -> str:
@@ -1241,7 +1241,7 @@ class WellfoundPlatform(BaseJobPlatform):
 
             # Reopen the exact listing and verify the persisted application state.
             state = await self._verify_application(job)
-            if state == "applied":
+            if state == "applied" or (instant_confirmation is not None and state != "pending" and await first_visible(self.page, _APPLIED_JOB_MARKERS, timeout_ms=3000) is not None):
                 if jt is not None and self._metrics is not None:
                     jt.total_s = _time.perf_counter() - t0
                     try:
