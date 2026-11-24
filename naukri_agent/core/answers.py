@@ -350,6 +350,7 @@ class AnswerEngine:
         candidate_gender: str = "Male",
     ) -> None:
         self.candidate_gender = candidate_gender or "Male"
+        self.profile_answers = dict(profile_answers or {})
         self.job_screening_answers = {
             job_id: {_normalise(question): answer for question, answer in answers.items()}
             for job_id, answers in (job_screening_answers or {}).items()
@@ -557,6 +558,7 @@ class AnswerEngine:
             self._resolve_launched_ai_product,
             self._resolve_joining_date,
             self._resolve_verified_resume,
+            self._resolve_primary_experience_area,
         ):
             hit = intent(text, question)
             if hit is not None:
@@ -1228,6 +1230,15 @@ class AnswerEngine:
         """Resolves third-party digitally signed and verified resume questions."""
         if re.search(r"\bdigitally\s+signed(?:\s+and\s+verified)?\s+resume\b", text):
             return self._fit_to_options("No, I don't have one", question, "intent:verified_resume", "intent-map")
+        return None
+
+    def _resolve_primary_experience_area(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves questions asking for the area candidate has most/primary experience in."""
+        if re.search(r"\b(?:what\s+area\s+have\s+you\s+most\s+experience\s+in|area\s+(?:do\s+)?you\s+have\s+most\s+experience|primary\s+area\s+of\s+experience)\b", text):
+            # Check profile context or fallback to options
+            is_ai_profile = any("ai" in str(k).lower() for k in self.profile_answers.keys()) if self.profile_answers else False
+            pref = "AI/ML" if is_ai_profile else "Full-stack"
+            return self._fit_to_options(pref, question, "intent:primary_experience_area", "intent-map")
         return None
 
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:

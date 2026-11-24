@@ -1823,7 +1823,7 @@ Candidate Snapshot:
 - Notice Period: Immediate (0 days)
 - Current CTC: ₹3.9 LPA
 - Expected CTC: ₹7 LPA (Negotiable)
-- Contact: 
+- Contact:
 +91 9481777227 | maheshchitakoti@gmail.com
 
 My resume is attached for your review.

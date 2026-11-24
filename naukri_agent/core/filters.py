@@ -408,7 +408,7 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("react native", "react-native") and _contains_any(title, ["python", "django", "fastapi", "backend", "back end"]) and not _contains_any(title, ["mobile"]):
                     is_override = True
-                elif hit in ("manual testing", "manual test") and _contains_any(title, ["automation", "automated", "qa engineer", "sdet", "software test", "test engineer"]):
+                elif hit in ("manual testing", "manual test") and _contains_any(title, ["automation", "automated", "qa engineer", "sdet", "software test", "test engineer", "test analyst", "qa analyst"]):
                     is_override = True
 
                 if not is_override:

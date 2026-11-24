@@ -484,6 +484,7 @@ class TestTitleDevAndEngineeringEquivalence(unittest.TestCase):
             title_must_include_any=[
                 "qa engineer", "test engineer", "testing engineer", "qa tester",
                 "frontend qa", "qa specialist", "database tester", "qa manual test engineer",
+                "test analyst", "qa analyst",
             ],
             title_must_exclude_any=["manual testing", "manual test"],
         )
@@ -491,6 +492,8 @@ class TestTitleDevAndEngineeringEquivalence(unittest.TestCase):
         for title in (
             "QA Engineer - Automation & Manual testing WITH Product Company",
             "Qa Manual Test Engineer",
+            "Manual Test Analyst",
+            "Manual Test Analyst(Male)",
             "Frontend QA",
             "QA Tester",
             "Testing Engineer I",
@@ -1364,6 +1367,24 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
         res = engine.resolve(q)
         self.assertIsNotNone(res)
         self.assertEqual(res.value, "yes or no")
+
+    def test_primary_experience_area_resolution(self):
+        # FS profile
+        fs_engine = AnswerEngine(kb=[], profile_answers={"proficiency in typescript": "3"}, strict=True)
+        q = ScreeningQuestion(
+            text="What area have you most experience in?",
+            kind="radio",
+            options=["AI/ML", "Architect", "ASP.NET", "Database", "Full-stack", "Mobile", "Testing"],
+        )
+        res_fs = fs_engine.resolve(q)
+        self.assertIsNotNone(res_fs)
+        self.assertEqual(res_fs.value, "Full-stack")
+
+        # AI profile
+        ai_engine = AnswerEngine(kb=[], profile_answers={"experience in ai": "2"}, strict=True)
+        res_ai = ai_engine.resolve(q)
+        self.assertIsNotNone(res_ai)
+        self.assertEqual(res_ai.value, "AI/ML")
 
 
 if __name__ == "__main__":
