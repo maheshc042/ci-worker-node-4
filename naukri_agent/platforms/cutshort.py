@@ -269,11 +269,20 @@ def _resume_name_matches(text: str, path: Path) -> bool:
     norm = " ".join(text.lower().split())
     if "mahesh" in norm and ("chitakoti" in norm or "cv" in norm):
         is_fs_track = "_1" in path.stem or "fullstack" in path.stem.lower()
-        if is_fs_track and any(k in norm for k in ["_1", "fullstack", "full stack"]):
-            return True
-        elif not is_fs_track and any(k in norm for k in ["ai", "python"]) and "_1" not in norm:
-            return True
-        # On Cutshort's single-account profile, accept candidate's verified CV
+        has_fs_indicator = any(k in norm for k in ["_1", "fullstack", "full stack"])
+
+        if not is_fs_track and has_fs_indicator:
+            return False
+
+        has_file_spec = ".pdf" in norm or re.search(r"\(\s*\d+(?:\.\d+)?\s*(?:mb|kb|b)", norm) is not None
+        if has_file_spec:
+            if is_fs_track:
+                return has_fs_indicator
+            else:
+                return not has_fs_indicator and any(k in norm for k in ["ai", "python", "2026"])
+
+        # On Cutshort's single-account profile (where profile resume has server slug like _3XGe),
+        # accept candidate's verified CV across tracks
         if "cv_mahesh_chitakoti" in norm or "mahesh_chitakoti" in norm:
             return True
     return False
@@ -2880,6 +2889,7 @@ class CutshortPlatform(BaseJobPlatform):
         if seen_jobs is None:
             seen_jobs = set()
         at_end = False
+        consecutive_stale = 0
         # Use the conversation row's company and full job title, not its changing preview.
         while deadline is None or monotonic() < deadline:
             previous_count = len(processed)
@@ -2915,21 +2925,29 @@ class CutshortPlatform(BaseJobPlatform):
                     continue
                 processed.add(key)
                 expected_questionnaire = item["questionnaire"]
-                if not expected_questionnaire:
-                    raw_age = (item.get("age") or "").strip().lower()
-                    age = self._message_age_hours(raw_age)
-                    if pending:
-                        # 72-hour freshness window for pending/awaiting threads:
-                        # "yesterday" is <= 48h, so it is within 72h.
-                        # Anything >= 72h, or unknown age that is not "yesterday", is skipped as stale.
-                        is_yesterday = (raw_age == "yesterday")
-                        if not is_yesterday and (age is None or age >= 72):
-                            self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
-                            continue
-                    else:
-                        if age is None or age >= 24:
-                            self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
-                            continue
+                raw_age = (item.get("age") or "").strip().lower()
+                age = self._message_age_hours(raw_age)
+                if pending:
+                    # 72-hour freshness window for pending/awaiting threads:
+                    # Stale threads older than 3 days (>= 72h) or with non-yesterday unparseable
+                    # dates (e.g. "15 Oct") are skipped immediately.
+                    is_yesterday = (raw_age == "yesterday")
+                    is_stale = (age is not None and age >= 72)
+                    is_unknown_date = bool(raw_age and not is_yesterday and age is None)
+                    if is_stale or is_unknown_date:
+                        self.questionnaire_stats["unknown_age" if is_unknown_date else "stale"] += 1
+                        consecutive_stale += 1
+                        if consecutive_stale >= 20:
+                            log.info("cutshort.messages.stale_horizon_reached", count=len(processed))
+                            return
+                        continue
+                    consecutive_stale = 0
+                else:
+                    # Inbox tab: 24-hour freshness window (or up to 72h if tagged questionnaire).
+                    max_inbox_age = 72 if expected_questionnaire else 24
+                    if age is None or age >= max_inbox_age:
+                        self.questionnaire_stats["unknown_age" if age is None else "stale"] += 1
+                        continue
                 try:
                     # Dismiss any blocking dialog/modal overlay before interacting with conversation row
                     dialog_loc = self.page.locator("div[role='dialog']:visible")

@@ -7095,14 +7095,48 @@ class TestCutshortMessagesSweep(unittest.IsolatedAsyncioTestCase):
         really_stale, really_stale_row = make_row(103, "4 days ago")
         really_stale_tagged, really_stale_tagged_row = make_row(104, "4 days ago", questionnaire=True)
         unparseable_old, unparseable_old_row = make_row(105, "15 Oct")
-        rows.evaluate_all.return_value = [stale, unknown, really_stale, really_stale_tagged, unparseable_old]
+        fresh_tagged, fresh_tagged_row = make_row(106, "10 mins ago", questionnaire=True)
+        rows.evaluate_all.return_value = [stale, unknown, really_stale, really_stale_tagged, unparseable_old, fresh_tagged]
         with patch.object(cutshort, "human_pause", new=AsyncMock()):
             await platform._scan_message_rows(panel, set(), [], None, pending=True)
         stale_row.click.assert_awaited_once()
         unknown_row.click.assert_awaited_once()
         really_stale_row.click.assert_not_called()
-        really_stale_tagged_row.click.assert_awaited_once()
+        really_stale_tagged_row.click.assert_not_called()
         unparseable_old_row.click.assert_not_called()
+        fresh_tagged_row.click.assert_awaited_once()
+
+    async def test_scan_stops_after_consecutive_stale_horizon(self):
+        from naukri_agent.platforms import cutshort
+
+        platform = object.__new__(cutshort.CutshortPlatform)
+        platform.page = MagicMock()
+        platform.questionnaire_stats = dict(stale=0, unknown_age=0, unconfirmed=0, incomplete=0)
+        platform._answer_current_chat = AsyncMock(return_value=False)
+        panel = MagicMock()
+        rows = panel.locator.return_value
+
+        by_title = {}
+        def make_row(index, age, questionnaire=False):
+            title = f"For job Horizon {index}"
+            row = MagicMock(click=AsyncMock())
+            row.filter.return_value = row
+            by_title[title] = row
+            return dict(title=title, company="Example", age=age, questionnaire=questionnaire), row
+
+        stale_rows = [make_row(i, "4 days ago") for i in range(25)]
+        beyond_row_data, beyond_row = make_row(999, "10 mins ago")
+        platform.page.get_by_text.side_effect = lambda text, **_: text
+        rows.filter.side_effect = lambda *, has: by_title[has]
+        rows.evaluate_all = AsyncMock(return_value=[*(data for data, _ in stale_rows), beyond_row_data])
+        rows.count = AsyncMock(return_value=26)
+        rows.last.evaluate = AsyncMock(return_value=False)
+
+        with patch.object(cutshort, "human_pause", new=AsyncMock()):
+            await platform._scan_message_rows(panel, set(), [], None, pending=True)
+
+        self.assertEqual(platform.questionnaire_stats["stale"], 20)
+        beyond_row.click.assert_not_called()
 
     async def test_sweep_checks_new_application_then_waits_for_pending_rows(self):
         from naukri_agent.platforms import cutshort
