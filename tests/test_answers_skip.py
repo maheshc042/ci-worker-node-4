@@ -1261,6 +1261,110 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res.value, "I consent")
 
+    def test_pdi_contact_consent(self):
+        q = ScreeningQuestion(
+            text=(
+                "Apply to PDI Technologies 4/7 pages Additional Questions I am allowing PDI Technologies to contact me about "
+                "future job opportunities for up to 1 year. Privacy Policy * Yes No This field is required Back Next 0 notifications"
+            ),
+            kind="unknown",
+            options=["Dismiss", "Open https://pditechnologies.com/wp-content/uploads/2024/08/PDI-Applicant-Privacy-Policy.pdf"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+    def test_agentic_coding(self):
+        q = ScreeningQuestion(
+            text="Do you currently use an agentic coding tool (Claude Code, Cursor, Codex, or similar) as your primary way of writing code — meaning agents produce the majority of the code you ship today?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+    def test_shipped_production_feature(self):
+        q = ScreeningQuestion(
+            text="Have you shipped a production feature end-to-end in the last 6 months — from talking to the user or stakeholder, through building it, to seeing it live?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+    def test_ai_product_prds(self):
+        q = ScreeningQuestion(
+            text="Have you written PRDs, user stories, and acceptance criteria for AI-powered products?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+    def test_ai_tradeoffs(self):
+        q = ScreeningQuestion(
+            text="Have you managed trade-offs between latency, accuracy, and inference cost in production AI systems?",
+            kind="radio",
+            options=["Yes", "No"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+
+    def test_launched_ai_product(self):
+        q = ScreeningQuestion(
+            text="Have you successfully launched a Generative AI or Agentic AI product into production?",
+            kind="text",
+            options=[],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertIn("SahioNext", res.value)
+
+    def test_earliest_joining_date(self):
+        q = ScreeningQuestion(
+            text="What is your earliest available joining date? Please mention the exact date (DD/MM/YYYY).",
+            kind="text",
+            options=[],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        from datetime import datetime
+        self.assertEqual(res.value, datetime.now().strftime("%d/%m/%Y"))
+
+    def test_verified_resume(self):
+        q = ScreeningQuestion(
+            text="Do you have a digitally signed and verified resume issued by any company or organization?",
+            kind="radio",
+            options=["Applied / In Progress", "Yes, I have", "No, I don't have one", "I am not sure"],
+        )
+        res = self.engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "No, I don't have one")
+
+    def test_rabbitmq_yes_or_no_options(self):
+        engine = AnswerEngine(
+            kb=[],
+            profile_answers={},
+            strict=True,
+            experience=ExperienceAnswers(
+                total_years=3.0,
+                default_years=2.0,
+                skills={"rabbitmq": 0},
+            ),
+        )
+        q = ScreeningQuestion(
+            text="How many years of experience having on RabbitMQ",
+            kind="radio",
+            options=["yes or no", "if having how many years"],
+        )
+        res = engine.resolve(q)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "yes or no")
+
 
 if __name__ == "__main__":
     unittest.main()

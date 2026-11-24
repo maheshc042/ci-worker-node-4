@@ -550,6 +550,13 @@ class AnswerEngine:
             self._resolve_founding_engineer,
             self._resolve_flutter,
             self._resolve_time_series,
+            self._resolve_agentic_coding,
+            self._resolve_shipped_production_feature,
+            self._resolve_ai_product_prds,
+            self._resolve_ai_tradeoffs,
+            self._resolve_launched_ai_product,
+            self._resolve_joining_date,
+            self._resolve_verified_resume,
         ):
             hit = intent(text, question)
             if hit is not None:
@@ -1144,7 +1151,9 @@ class AnswerEngine:
     def _resolve_consent(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
         """Resolves terms consent / I consent checkboxes or text."""
         if re.search(r"\b(?:i\s*consent|consent\s+to|agree\s+to\s+terms)\b", text):
-            return self._fit_to_options("I consent", question, "intent:consent", "intent-map")
+            return self._fit_to_options("I consent", question, "intent:consent", "intent-map") or self._fit_to_options("Yes", question, "intent:consent", "intent-map")
+        if re.search(r"\b(?:allowing\s+.*to\s+contact\s+me|contact\s+me\s+about\s+future\s+(?:job\s+)?opportunities)\b", text):
+            return self._fit_to_options("Yes", question, "intent:contact_consent", "intent-map")
         return None
 
     def _resolve_founding_engineer(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
@@ -1166,6 +1175,59 @@ class AnswerEngine:
             if any("skip" in o.lower() for o in opts):
                 return self._fit_to_options("Skip this question", question, "intent:time_series", "intent-map")
             return self._fit_to_options("No", question, "intent:time_series", "intent-map")
+        return None
+
+    def _resolve_agentic_coding(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves use of agentic coding tools (Claude Code, Cursor, Codex, etc.)."""
+        if re.search(r"\b(?:agentic\s*coding\s*tool|cursor|claude\s*code|codex|agents?\s+produce.*code)\b", text):
+            return self._fit_to_options("Yes", question, "intent:agentic_coding", "intent-map")
+        return None
+
+    def _resolve_shipped_production_feature(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves shipping production features end-to-end within recent timeframe."""
+        if re.search(r"shipped.*production\s+feature.*end-to-end|end-to-end.*last\s+\d+\s+months?.*seeing\s+it\s+live", text):
+            return self._fit_to_options("Yes", question, "intent:shipped_production_feature", "intent-map")
+        return None
+
+    def _resolve_ai_product_prds(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves writing PRDs, user stories, acceptance criteria for AI-powered products."""
+        if re.search(r"\b(?:prds?|user\s+stories|acceptance\s+criteria)\b", text) and re.search(r"\b(?:ai|ai-powered|genai|llm)\b", text):
+            return self._fit_to_options("Yes", question, "intent:ai_product_prds", "intent-map")
+        return None
+
+    def _resolve_ai_tradeoffs(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves trade-offs between latency, accuracy, and inference cost in production AI."""
+        if re.search(r"\b(?:trade[-\s]*offs?)\b", text) and re.search(r"\b(?:latency|accuracy|inference\s*cost)\b", text):
+            return self._fit_to_options("Yes", question, "intent:ai_tradeoffs", "intent-map")
+        return None
+
+    def _resolve_launched_ai_product(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves launching Generative AI or Agentic AI products into production."""
+        if re.search(r"\blaunched.*(?:generative\s+ai|agentic\s+ai).*product.*production\b", text):
+            ans = (
+                "Yes, I designed and deployed production Generative AI and Agentic workflows at SahioNext "
+                "for the Tulkka platform, including lesson evaluation engines with Gemini and LangGraph, "
+                "semantic search pipelines with pgvector/Qdrant, and Redis semantic caching."
+            )
+            return self._fit_to_options(ans, question, "intent:launched_ai_product", "intent-map")
+        return None
+
+    def _resolve_joining_date(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves earliest available joining date (candidate is available immediately / 0 days notice)."""
+        if re.search(r"\bearliest\s+(?:available\s+)?joining\s+date\b|\bjoining\s+date\b", text):
+            from datetime import datetime
+            today_str = datetime.now().strftime("%d/%m/%Y")
+            if re.search(r"\bdd[/-]mm[/-]yyyy\b", text):
+                return self._fit_to_options(today_str, question, "intent:joining_date", "intent-map")
+            if question.options:
+                return self._fit_to_options("Immediately", question, "intent:joining_date", "intent-map") or self._fit_to_options(today_str, question, "intent:joining_date", "intent-map")
+            return ResolvedAnswer(today_str, "intent:joining_date", "intent-map")
+        return None
+
+    def _resolve_verified_resume(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
+        """Resolves third-party digitally signed and verified resume questions."""
+        if re.search(r"\bdigitally\s+signed(?:\s+and\s+verified)?\s+resume\b", text):
+            return self._fit_to_options("No, I don't have one", question, "intent:verified_resume", "intent-map")
         return None
 
     def _resolve_motivation(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
@@ -1724,6 +1786,13 @@ class AnswerEngine:
             for option in options:
                 if self._polarity(_opt_low(option)) == polarity:
                     return ResolvedAnswer(option, pattern, "option-match")
+
+        # Check for recruiter options like ["yes or no", "if having how many years"]
+        if any("yes or no" in _opt_low(o) for o in options) and any("how many years" in _opt_low(o) for o in options):
+            if wanted in ("0", "no", "0.0") or polarity is False:
+                for option in options:
+                    if "yes or no" in _opt_low(option):
+                        return ResolvedAnswer(option, pattern, "option-match")
 
         number = _NUMBER.search(wanted)
         if number:
