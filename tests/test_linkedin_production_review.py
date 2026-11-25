@@ -367,3 +367,16 @@ class TestLinkedInReceiptScope(unittest.IsolatedAsyncioTestCase):
             'Build React frontend and Express backend services.'
         )
         self.assertEqual(Path(path).name, 'CV_Mahesh_Chitakoti_2026_1_.pdf')
+
+    def test_page_header_wrapper_stripped_from_screening_questions(self):
+        platform = object.__new__(linkedin.LinkedInPlatform)
+        platform.answers = AnswerEngine([], profile_answers={})
+        platform._screening_review = []
+        res = platform._resolve_screening(ScreeningQuestion(
+            "Apply to Zluri 3/4 pages Additional Questions Have you completed the following level of education: Bachelor's Degree?",
+            "radio",
+            ["Yes", "No"],
+        ))
+        self.assertIsNotNone(res)
+        self.assertEqual(res.value, "Yes")
+        self.assertEqual(platform._screening_review, [])

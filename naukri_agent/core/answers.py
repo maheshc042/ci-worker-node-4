@@ -23,7 +23,7 @@ from ..logging_setup import get_logger
 
 log = get_logger(__name__)
 
-YES_TOKENS = ("yes", "yeah", "yep", "sure", "agree", "willing", "true", "available", "ok", "okay", "comfortable", "works", "acceptable")
+YES_TOKENS = ("yes", "yeah", "yep", "sure", "agree", "willing", "true", "available", "ok", "okay", "comfortable", "works", "acceptable", "consent")
 NO_TOKENS = ("no", "nope", "never", "false")
 
 STOPWORDS = frozenset(
@@ -32,11 +32,11 @@ STOPWORDS = frozenset(
 
 _EXPERIENCE_INTENT = re.compile(
     r"(how\s+(?:many|much)\s+(?:years?|yrs?|months?))"
-    r"|(?:total|overall|relevant|work|professional|hands[\s-]?on)\s+experience"
+    r"|(?:total|overall|relevant|work|professional|hands[\s-]?on)\s+(?:experience|exp)\b"
     r"|(?:years?|yrs?)\s+of\s+(?:experience|exp)"
-    r"|experience\s+(?:do\s+you\s+have|in|with|on|using|of|\w+ing\b)"
-    r"|(?:years?|yrs?)\s+(?:in|with|of)\s+\w+"
-    r"|\bexp\s+in\b"
+    r"|(?:experience|exp)\s+(?:do\s+you\s+have|in|with|on|using|of|\w+ing\b)"
+    r"|(?:years?|yrs?)\s+(?:in|with|of|on)\s+\w+"
+    r"|\bexp\s+(?:in|with|on|of)\b"
     # Recruiter reframings (sweep 2026-09-30): tenure asked without the
     # word "experience" — still tenure when a skill is named.
     r"|how\s+long\s+(?:have\s+you\s+)?(?:worked|been\s+working)\s+(?:with|on|in|as)"
@@ -105,7 +105,7 @@ _AVAILABILITY_TIMING_INTENT = re.compile(
 
 _WILLINGNESS_INTENT = re.compile(
     r"\b(?:"
-    r"willing|open\s+to|ready\s+to|comfortable|agree|able\s+to|attend|available\s+for|"
+    r"willing|open\s+(?:to|for)|ready\s+to|comfortable|agree|able\s+to|attend|available\s+for|"
     r"would\s+you|can\s+you|are\s+you\s+willing|are\s+you\s+open|are\s+you\s+ready|are\s+you\s+able|"
     r"are\s+you\s+fine|are\s+you\s+ok(?:ay)?|do\s+you\s+agree|will\s+you|"
     r"does\s+this\s+work(?:\s+for\s+you)?|works?\s+for\s+you|"
@@ -114,20 +114,24 @@ _WILLINGNESS_INTENT = re.compile(
     r"interview\s+process|selection\s+process|hiring\s+process|"
     r"relocate|relocation|"
     r"work\s+from\s+office|wfo|onsite|on[\s-]site|"
-    r"hybrid\s+(?:work|model|mode|setup|policy)|"
+    r"hybrid\s+(?:work|working|model|mode|setup|policy)|"
     r"join\s+immediately|immediate\s+joiner|"
     r"take\s+up\s+an?\s+interview|available\s+to\s+(?:take\s+up|attend|give)\s+(?:an?\s+)?interview|"
     r"available\s+within\s+\d+\s*days?|join\s+within\s+\d+\s*days?|notice\s+period|"
     r"night\s*shifts?|rotational\s*shifts?|day\s*shifts?|shifts?|24\/7|rotational|weekend|weekends|"
     r"bond|service\s*agreement|contract|undertaking|policy|terms?|"
     r"travel|flexible|flexibility|"
-    r"location\s+of\s+this\s+job|job\s+location|work\s+location|preferred\s+location"
+    r"location\s+of\s+this\s+job|job\s+location|work\s+location|preferred\s+location|"
+    r"(?:which|what)\s+(?:job\s+|work\s+|office\s+)?location\s+(?:are\s+you\s+)?(?:applying|interested|open)"
     r")\b",
     re.IGNORECASE,
 )
 
 _NEGATIVE_QUESTIONS = re.compile(
-    r"\b(?:need\s+special\s+accommodation|criminal|convicted|disciplinary|backlog|disability|handicapped)\b",
+    r"\b(?:need\s+special\s+accommodation|criminal|convicted|disciplinary|backlog|disability|handicapped|"
+    r"citizen|citizenship|permanent\s+resident|asylee|refugee|"
+    r"conflict\s+of\s+interest|outside\s+business\s+activities|"
+    r"family\s+or\s+close\s+friend|restricts\s+your\s+right)\b",
     re.IGNORECASE,
 )
 
@@ -839,9 +843,11 @@ class AnswerEngine:
                     return ResolvedAnswer(opt, "intent:willingness_can_relocate", "intent-map")
 
             # 3. Check for explicit affirmative tokens (Yes, Willing, Agree, Acceptable)
+            _explicit_home = any(h in text for h in self.home_markers)
             for opt in _opts:
                 if self._polarity(_normalise(opt)) is True:
-                    return ResolvedAnswer(opt, "intent:willingness_affirmative", "intent-map")
+                    pat = "intent:willingness_location_preferred" if _explicit_home else "intent:willingness_affirmative"
+                    return ResolvedAnswer(opt, pat, "intent-map")
 
             # 4. Fallback for relocation city options (e.g. Mumbai, Navi Mumbai, Pune, Hyderabad):
             # Candidate is willing to relocate almost anywhere in India in this
@@ -886,7 +892,14 @@ class AnswerEngine:
             if float(years) == 0 and _contains_word(text, _normalise(skill))
         ]
 
+        _bare_polarity = {"yes", "no", "true", "false", "ok", "okay"}
+        text_stripped = text.rstrip(" ?!.*")
+
         for entry in self.entries:
+            if not entry.pattern:
+                continue
+            if entry.regex is None and entry.pattern in _bare_polarity and text_stripped != entry.pattern:
+                continue
             if exact_only and not (
                 entry.regex.fullmatch(text) if entry.regex is not None
                 else entry.pattern.rstrip(" ?") == text.rstrip(" ?")

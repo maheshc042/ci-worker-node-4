@@ -752,6 +752,10 @@ class LinkedInPlatform(BaseJobPlatform):
         r"^\*?\s*(?:Invalid input\s+)?\d+\s*/\s*\d+\s*(\d+\s+of\s+\d+\s+(characters|words))?",
         re.IGNORECASE,
     )
+    _BLOCKED_PAGE_HEADER_RE = re.compile(
+        r"^(?:Apply\s+to\s+.{1,80}?\s+\d+\s*/\s*\d+\s*pages?\s*)?(?:Additional\s+Questions\s*)?",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     async def _extract_blocked_questions(modal, form_text: str) -> list[dict]:
@@ -805,6 +809,7 @@ class LinkedInPlatform(BaseJobPlatform):
                 core = LinkedInPlatform._BLOCKED_LEADING_DEBRIS_RE.sub("", chunk).strip()
                 invalid_text_input = bool(re.match(r"^\*?\s*Invalid input\b", core, re.I))
                 core = LinkedInPlatform._BLOCKED_COUNTER_DEBRIS_RE.sub("", core).strip()
+                core = LinkedInPlatform._BLOCKED_PAGE_HEADER_RE.sub("", core).strip()
                 if len(core) < 20 or any(
                     rx.search(core) for rx in LinkedInPlatform._BLOCKED_BOILERPLATE_RES
                 ):
@@ -2025,10 +2030,11 @@ class LinkedInPlatform(BaseJobPlatform):
         return None
 
     def _resolve_screening(self, question: ScreeningQuestion, *, job_id: str = "") -> ResolvedAnswer | None:
-        if question.kind == "text":
-            cleaned = self._BLOCKED_COUNTER_DEBRIS_RE.sub("", question.text).strip()
-            if cleaned and cleaned != question.text:
-                question = ScreeningQuestion(cleaned, question.kind, question.options, question.required)
+        cleaned = self._BLOCKED_PAGE_HEADER_RE.sub(
+            "", self._BLOCKED_COUNTER_DEBRIS_RE.sub("", question.text)
+        ).strip()
+        if cleaned and cleaned != question.text:
+            question = ScreeningQuestion(cleaned, question.kind, question.options, question.required)
         answer = self.answers.resolve(question, job_id=job_id) if job_id else self.answers.resolve(question)
         if answer is None or (
             answer.matched_pattern.startswith(("experience:unlisted_default", "tenure-compare:inferred:"))
@@ -2395,25 +2401,32 @@ class LinkedInPlatform(BaseJobPlatform):
                 pass
 
         # 3.5 Checkboxes strictly inside modal
-        checkboxes = await modal.locator("input[type='checkbox']").all()
+        checkboxes = await modal.locator("input[type='checkbox'], [role='checkbox']").all()
         for cb in checkboxes:
             try:
+                role = (await cb.get_attribute("role") or "").lower()
+                if role == "checkbox" and await cb.locator("input[type='checkbox']").count() > 0:
+                    continue
                 cb_id = await cb.get_attribute("id") or ""
                 lbl = modal.locator(f"label[for='{cb_id}']").first if cb_id else None
-                has_visible_lbl = bool(lbl and await lbl.count() > 0 and await lbl.is_visible())
-                if not (await cb.is_visible() or has_visible_lbl):
-                    continue
                 cb_label = ""
+                lbl_el = None
                 if cb_id and lbl and await lbl.count() > 0:
+                    lbl_el = lbl
                     cb_label = (await safe_text(lbl)).strip()
                 if not cb_label:
-                    lbl = cb.locator("xpath=ancestor::label[1] | following-sibling::label[1]").first
-                    if await lbl.count() > 0:
-                        cb_label = (await safe_text(lbl)).strip()
+                    cand_lbl = cb.locator("xpath=ancestor::label[1] | following-sibling::label[1]").first
+                    if await cand_lbl.count() > 0:
+                        lbl_el = cand_lbl
+                        cb_label = (await safe_text(cand_lbl)).strip()
                 if not cb_label:
-                    p = cb.locator("xpath=following-sibling::p | parent::div/following-sibling::p | following-sibling::span | parent::div/following-sibling::span").first
+                    p = cb.locator("xpath=following-sibling::p | parent::div/following-sibling::p | following-sibling::span | parent::div/following-sibling::span | following-sibling::div//p[1]").first
                     if await p.count() > 0:
+                        lbl_el = p
                         cb_label = (await safe_text(p)).strip()
+                has_visible_lbl = bool(lbl_el and await lbl_el.count() > 0 and await lbl_el.is_visible())
+                if not (await cb.is_visible() or has_visible_lbl):
+                    continue
 
                 fs_legend = ""
                 fs = cb.locator("xpath=ancestor::fieldset[1]").first
@@ -2426,15 +2439,37 @@ class LinkedInPlatform(BaseJobPlatform):
                         if await pre_p.count() > 0:
                             fs_legend = (await safe_text(pre_p)).strip()
                 if not fs_legend:
-                    container_p = cb.locator("xpath=ancestor::div[contains(@componentkey, 'easyApplyFieldFocus')]//p[1] | ancestor::div[contains(@class, 'jobs-easy-apply-form-section__grouping')]//p[1]").first
+                    container_p = cb.locator(
+                        "xpath=ancestor::div[contains(@componentkey, 'easyApplyFieldFocus') or contains(@class, 'jobs-easy-apply-form-section__grouping') or contains(@class, 'fb-dash-form-element') or contains(@class, 'jobs-easy-apply-form-element')][1]//*[self::legend or self::p or self::h3 or self::h4 or @role='heading'][1]"
+                    ).first
                     if await container_p.count() > 0:
-                        fs_legend = (await safe_text(container_p)).strip()
+                        cand_text = (await safe_text(container_p)).strip()
+                        if cand_text.lower() not in {"yes", "no", "*"}:
+                            fs_legend = cand_text
+                if not fs_legend and cb_label.lower() in {"yes", ""}:
+                    try:
+                        fs_legend = (await cb.evaluate(
+                            "el => { let node = el; for (let hop = 0; hop < 6 && node; hop++) {"
+                            " let sib = node.previousElementSibling;"
+                            " while (sib) { const t = (sib.innerText || '').trim().replace(/\\s+/g, ' ');"
+                            " if (t.length > 10 && t.toLowerCase() !== 'this field is required') return t.slice(0, 300); sib = sib.previousElementSibling; }"
+                            " node = node.parentElement; } return ''; }"
+                        ) or "").strip()
+                    except Exception:
+                        pass
 
                 cb_label_low = cb_label.lower()
-                is_checked = await cb.is_checked()
+                is_checked = (
+                    (await cb.get_attribute("aria-checked") or "").lower() == "true"
+                    if role == "checkbox"
+                    else await cb.is_checked()
+                )
                 lookup_text = fs_legend if (cb_label_low in ("yes", "") and fs_legend) else cb_label
 
                 async def _check_cb_target(target_cb: Locator) -> None:
+                    if role == "checkbox":
+                        await target_cb.click(timeout=1500)
+                        return
                     try:
                         await target_cb.check(timeout=1500)
                     except Exception:
@@ -2442,9 +2477,9 @@ class LinkedInPlatform(BaseJobPlatform):
                             await target_cb.check(force=True, timeout=1500)
                         except Exception:
                             _id = await target_cb.get_attribute("id") or ""
-                            lbl_el = modal.locator(f"label[for='{_id}']").first if _id else None
-                            if lbl_el and await lbl_el.count() > 0:
-                                await lbl_el.click(timeout=1500)
+                            lbl_target = modal.locator(f"label[for='{_id}']").first if _id else None
+                            if lbl_target and await lbl_target.count() > 0:
+                                await lbl_target.click(timeout=1500)
                             else:
                                 anc_lbl = target_cb.locator("xpath=ancestor::label[1]").first
                                 if await anc_lbl.count() > 0:
@@ -2739,9 +2774,12 @@ class LinkedInPlatform(BaseJobPlatform):
                         # Never fabricate exam scores or grades: without a configured
                         # answer the field is left for human review.
                         ans = ""
-                    elif any(k in label_low for k in ["notice", "immediate", "serving", "availability"]):
+                    elif any(k in label_low for k in ["notice", "immediate", "serving", "availability", "how soon"]):
                         num_match = re.search(r"[-+]?\d*\.?\d+", ans or "")
-                        ans = str(max(0, min(99, round(float(num_match.group(0)))))) if num_match else ""
+                        if num_match:
+                            ans = str(max(0, min(99, round(float(num_match.group(0))))))
+                        elif not ("immediate" in (ans or "").lower() and "days" not in label_low and not is_numeric):
+                            ans = ""
                     elif not ans and any(k in label_low for k in ["ctc", "salary", "compensation", "package"]):
                         # No configured answer: skip rather than invent compensation.
                         ans = ""

@@ -1468,6 +1468,95 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
         )
         self.assertEqual(engine.resolve(q_ctc_consent).value, "Yes")
 
+    def test_exp_intent_citizenship_guard_and_review_869_to_906_fixes(self):
+        # Bare willingness must never affirm US citizenship/visa status via "travel"
+        bare_engine = AnswerEngine(
+            kb=[("yes", "Yes")],
+            profile_answers={},
+            strict=True,
+            home_location="Bengaluru, India",
+            experience=ExperienceAnswers(
+                total_years=3.0,
+                skills={"postman": 3.0, "saas": 3.0, "nosql": 3.0, "uk domain": 0.0},
+            ),
+        )
+        self.assertIsNone(bare_engine.resolve(ScreeningQuestion(
+            text="Are you a citizen of the U.S., a lawful permanent resident of the U.S., or a non-U.S. citizen who is in the U.S. as an asylee or a refugee? (if you only hold a temporary work/travel/student U.S. visa, please check No)",
+            kind="radio",
+            options=["Yes", "No"],
+        )))
+        # Bare 'yes' KB row must not match inside 'If yes, how many years?' (uses postman skill map)
+        res_postman = bare_engine.resolve(ScreeningQuestion(
+            text="Have you worked on Postman and If yes, how many years?",
+            kind="text",
+        ))
+        self.assertIsNotNone(res_postman)
+        self.assertEqual(res_postman.value, "3")
+        # 'total exp' & 'exp on <skill>'
+        self.assertEqual(bare_engine.resolve(ScreeningQuestion(text="What is your total exp ?", kind="text")).value, "3")
+        self.assertEqual(bare_engine.resolve(ScreeningQuestion(text="how many years of exp on UK Domain?", kind="text")).value, "0")
+        # 'Which location are you applying for?' select picks home city Bengaluru
+        res_loc = bare_engine.resolve(ScreeningQuestion(
+            text="Which location are you applying for?",
+            kind="select",
+            options=["Select an option", "Bengaluru", "India"],
+        ))
+        self.assertIsNotNone(res_loc)
+        self.assertEqual(res_loc.value, "Bengaluru")
+        self.assertEqual(res_loc.matched_pattern, "intent:willingness_location_preferred")
+        # Consent fits radio ["Yes"] even via 'i consent' polarity
+        self.assertEqual(bare_engine.resolve(ScreeningQuestion(
+            text="Ivanti has my consent to collect, store, and process my data.",
+            kind="radio",
+            options=["Yes"],
+        )).value, "Yes")
+
+        # Full config regression checks for #869-#906 + safety check on unlisted skill
+        from naukri_agent.config import AgentConfig
+        cfg = AgentConfig.load()
+        fs_prof = next(p for p in cfg.profiles if "Full Stack" in p.name)
+        cfg_engine = AnswerEngine(
+            kb=list(cfg.answers.items()),
+            profile_answers=fs_prof.answers,
+            strict=True,
+            experience=cfg.experience_for(fs_prof),
+            home_location=cfg.candidate.location,
+            job_screening_answers=fs_prof.job_screening_answers,
+        )
+        self.assertIsNone(cfg_engine.resolve(ScreeningQuestion(
+            text="How many years of experience do you have in Cobol?", kind="text",
+        )))
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Are you comfortable with contractual role?", kind="radio", options=["Yes", "No"],
+        )).value, "Yes")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Open for Hybrid working from noida location?(2-3 days from office)", kind="text",
+        )).value, "Yes")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="How many years of work experience do you have with NoSQL?", kind="text",
+        )).value, "3")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Are you a citizen of the U.S., a lawful permanent resident of the U.S., or a non-U.S. citizen who is in the U.S. as an asylee or a refugee?", kind="radio", options=["Yes", "No"],
+        )).value, "No")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Do you have LinkedIn account?", kind="text",
+        )).value, "https://www.linkedin.com/in/maheshchitakoti")
+        # #912 home city Yes/No uses intent:willingness_location_preferred (accepted by LinkedIn)
+        res_blr = bare_engine.resolve(ScreeningQuestion(
+            text="Are you able to work from Bengaluru?", kind="radio", options=["Yes", "No"],
+        ))
+        self.assertIsNotNone(res_blr)
+        self.assertEqual(res_blr.value, "Yes")
+        self.assertEqual(res_blr.matched_pattern, "intent:willingness_location_preferred")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Have you tested or evaluated an LLM, chatbot, RAG or AI agent system (not just used AI tools)?",
+            kind="radio", options=["Yes", "No"],
+        )).value, "Yes")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Have you run Amazon RDS, Aurora or DynamoDB in production?",
+            kind="radio", options=["Yes", "No"],
+        )).value, "No")
+
 
 if __name__ == "__main__":
     unittest.main()

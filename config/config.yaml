@@ -545,11 +545,9 @@ answers:
   "are you authorized to work permanently in location in which you are expressing an interest?": "Yes"
   "how many years of experience do you have in manhattan wms?": "0"
   "have you independently explored any ai tools or technologies to solve real-world business problems?": "Yes, I have designed and deployed agentic workflows, RAG pipelines, and LLM-integrated automation tools in production."
-  "experience in years": "3"
   "current employer": "Independent Software Consultant"
   "do you currently live in bengaluru, india?*": "Yes"
   "how did you hear about the position?*": "LinkedIn Jobs Search"
-  "how many years of experience do you have?*": "0-5 years"
   "if you were referred by a kobie employee, please list their name. if not referred, put n/a": "N/A"
   "are u willing to work 5 days onsite": "Yes"
   "how many years of work experience do you have with dbs?": "3"
@@ -581,7 +579,7 @@ answers:
   "do you have the experience in below industry/ domain": "No"
   "re:high school %|high school percentage": "67"
   "re:manhattan wms": "0"
-  "re:^how many years of experience do you have\\s*\\?\\*?$": "0-5 years"
+  "re:^how many years of experience do you have\\s*\\?\\*?$": "3"
   "re:work experience do you have with dbs|experience.*with dbs": "3"
   "re:work experience do you have with helm|helm charts": "1"
   're:in which tech stack do you have expertise|tech stack do you have expertise': "Fast API"
@@ -967,7 +965,7 @@ answers:
   "re:graduation %|graduation percentage|ug percentage|degree percentage": "60"
   "re:authorized to work permanently|work authorization": "Yes"
   "re:independently explored any ai tools|explored any ai tools": "Yes, I have designed and deployed agentic workflows, RAG pipelines, and LLM-integrated automation tools in production."
-  "re:^experience in years$": "3"
+  "re:^experience in years\\??$": "3"
   "re:current employer|present employer": "Independent Software Consultant"
   "re:currently live in bengaluru": "Yes"
   "re:how did you hear about the position": "LinkedIn Jobs Search"
@@ -1126,6 +1124,27 @@ answers:
   "re:have you ever worked for deloitte.*": "No"
   "re:.*previously worked at linkedin or microsoft in any capacity.*": "No"
   "re:are you legally authorized to work in the country in which this role will be located.*": "Yes"
+  "re:comfortable (?:with|working in) (?:a |an )?(?:full[- ]?time )?contract(?:ual)? role": "Yes"
+  "re:^(?:which|what) (?:job |work |office )?location are you applying for\\??$": "Bengaluru"
+  "re:aws with vpc, iam, route53, acm, secrets manager, privatelink, transit gateway": "No"
+  "re:comfortable with a full-time remote role offering ₹\\s*5[–-]7 lpa": "Yes"
+  "re:(?:open for|comfortable with) hybrid working from noida location": "Yes"
+  "re:what interests you most about working at/for western digital": "Looking for new opportunity/Career Growth"
+  "re:share a brief overview of your background, focusing on the skills and past projects": "Python Programming , SQL /MySQL- Any database"
+  "re:name the devops and infrastructure technologies you have hands-on experience with": "Docker, Container ,Kubernetes ,Orchestration ,AWS,Azure,"
+  "re:hands-on experience writing and debugging python/ database /cicd /github": "Python"
+  "re:open to western digital also considering you for temporary positions": "Yes"
+  "re:family or close friend relationship with anyone employed by wd|employed by western digital": "No"
+  "re:currently party to any employment, consulting or personal services agreement that.*restricts": "No"
+  "re:outside business activities.*conflict of interest": "No"
+  "re:^are you a citizen of the country you.?ll be employed in\\??$": "Yes"
+  "re:^are you a citizen of the u\\.?s\\.?,? a lawful permanent resident": "No"
+  "re:^are you a citizen of cuba,? iran,? north korea or syria\\??$": "No"
+  "re:\\b(?:do you have (?:a )?linkedin account|linkedin account|linkedin profile link)\\b": "https://www.linkedin.com/in/maheshchitakoti"
+  "re:tested or evaluated an llm, chatbot, rag or ai agent": "Yes"
+  "re:built or run an evaluation dataset, benchmark or regression suite": "Yes"
+  "re:run amazon rds, aurora or dynamodb in production": "No"
+  "re:part of an on-call rotation or led production incidents": "No"
   "apply to h&m 6/7 pages additional questions here you can find details of our privacy notice.*": "Dismiss"
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1245,15 @@ experience:
     ssis: 0
     copilot: 2
     playwright: 3
+    web automation: 3
     b2b saas: 3
+    saas: 3
+    saas b2b: 3
+    saas-based b2b products: 3
+    b2b: 3
+    nosql: 3
+    postman: 3
+    uk domain: 0
     # AI / Python track: 2 years of application work. Model-training tooling
     # (PyTorch/TensorFlow/Hugging Face/MLOps) is 0 because the resume does not
     # support it. Unlisted numeric tenure requires review.
