@@ -78,21 +78,21 @@ instahyre:
   # ignored (run 366: 15 active, 16th missing with zero warning). Keep this
   # list at exactly 15, most important first. Code truncates + warns on more.
   skills:
-    - "SDET"
     - "Python"
-    - "Node.js"
-    - "React.js"
-    - "TypeScript"
     - "FastAPI"
-    - "Next.js"
     - "Generative AI"
-    - "JavaScript"
+    - "LLMs"
+    - "RAG"
     - "LangChain"
     - "LangGraph"
+    - "React.js"
+    - "Node.js"
+    - "TypeScript"
+    - "Next.js"
     - "PostgreSQL"
-    - "AWS Bedrock"
-    - "API Testing"
-    - "Quality Assurance"
+    - "AWS"
+    - "Docker"
+    - "SDET"
   experience_years: 2
 
 browser:
@@ -1647,6 +1647,7 @@ profiles:
         max_years: 3.5
       min_salary_lpa: 5
       max_posted_days: 3
+      max_applicants: null  # Demote >100 in ranking (-12 pts) instead of hard-skipping while daily volume < limit
       min_rating: null
       require_easy_apply: true
       skip_walkin: true
@@ -1798,6 +1799,7 @@ profiles:
         max_years: 3.5
       min_salary_lpa: 5
       max_posted_days: 3
+      max_applicants: null  # Demote >100 in ranking (-12 pts) instead of hard-skipping while daily volume < limit
       min_rating: null
       require_easy_apply: true
       skip_walkin: true

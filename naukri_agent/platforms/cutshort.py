@@ -21,8 +21,9 @@ from ..browser.resilience import (
     safe_text,
     scroll_page,
 )
-from ..config import AgentConfig, JobProfile, NaukriAccount
+from ..config import AgentConfig, JobProfile, NaukriAccount, get_settings
 from ..core.answers import AnswerEngine
+from ..core.gemini_writer import GeminiWriter
 from ..core.models import (
     ApplicationStatus,
     ApplyOutcome,
@@ -45,7 +46,6 @@ CUTSHORT_AI_SKILLS: list[str | tuple[str, str]] = [
     "Large Language Models (LLM)",
     ("RAG", "Retrieval Augmented Generation (RAG)"),
     ("Artificial Intelligence", "Artificial Intelligence (AI)"),
-    "MLOps",
     ("tuning", "Large Language Models (LLM) tuning"),
     ("Bedrock", "AWS Bedrock"),
     ("FastAPI", "FastAPI"),
@@ -1309,6 +1309,12 @@ class CutshortPlatform(BaseJobPlatform):
         self.artifacts = artifacts
         self.answers = answers
         self.config = config
+        try:
+            self.gemini: GeminiWriter | None = GeminiWriter(
+                api_key=getattr(get_settings(), "gemini_api_key", "")
+            )
+        except Exception:
+            self.gemini = None
 
     @property
     def platform_name(self) -> str:
@@ -2515,15 +2521,32 @@ class CutshortPlatform(BaseJobPlatform):
             else f"I’m interested in work involving {key_tech_stack}."
         )
         if modal_matches_job and textarea:
-            pitch = (
-                f"Hi {recruiter_name},\n\n"
-                f"I noticed the {actual_title} opening at {clean_company} and wanted to reach out directly.\n\n"
-                f"{intro_line}\n\n"
-                f"{availability_line}\n\n"
-                f"I'd be glad to discuss how my background can support {short_company}'s engineering goals—let me know when you have a few minutes to connect.\n\n"
-                f"Best,\n"
-                f"{applicant_name}{links_block}"
-            )
+            pitch = ""
+            gemini = getattr(self, "gemini", None)
+            if gemini is not None:
+                try:
+                    raw_pitch = gemini.generate_cutshort_pitch(
+                        role_name=actual_title,
+                        job_description=f"{job.description or ''}\n{modal_text[:1500]}".strip(),
+                        company_name=clean_company,
+                        recipient_name=recruiter_name if recruiter_name != "Hiring Team" else "",
+                        key_tech_stack=key_tech_stack,
+                    )
+                    if raw_pitch and len(raw_pitch.strip()) >= 150:
+                        pitch = raw_pitch.strip()
+                        log.info("cutshort.apply.pitch_source", source="gemini", chars=len(pitch))
+                except Exception as exc:
+                    log.debug("cutshort.apply.gemini_pitch_failed", error=str(exc)[:100])
+            if not pitch:
+                pitch = (
+                    f"Hi {recruiter_name},\n\n"
+                    f"I noticed the {actual_title} opening at {clean_company} and wanted to reach out directly.\n\n"
+                    f"{intro_line}\n\n"
+                    f"{availability_line}\n\n"
+                    f"I'd be glad to discuss how my background can support {short_company}'s engineering goals—let me know when you have a few minutes to connect.\n\n"
+                    f"Best,\n"
+                    f"{applicant_name}{links_block}"
+                )
             try:
                 await textarea.scroll_into_view_if_needed(timeout=1000)
                 await textarea.click()

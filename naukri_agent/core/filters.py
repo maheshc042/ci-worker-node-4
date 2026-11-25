@@ -695,6 +695,17 @@ class FilterEngine:
                 f"posted {job.posted_days_ago}d ago > {rules.max_posted_days}d",
             )
 
+        if (
+            rules.max_applicants is not None
+            and job.applicant_count is not None
+            and job.applicant_count > rules.max_applicants
+        ):
+            return FilterDecision(
+                False,
+                SkipReason.FILTER_REJECTED,
+                f"{job.applicant_count}+ applicants > max {rules.max_applicants} (crowded)",
+            )
+
         if rules.min_rating is not None and job.rating is not None and job.rating < rules.min_rating:
             return FilterDecision(
                 False, SkipReason.FILTER_RATING, f"rating {job.rating} < {rules.min_rating}"

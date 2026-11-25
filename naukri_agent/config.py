@@ -591,6 +591,7 @@ class FilterRules(_Model):
     experience: ExperienceRange = Field(default_factory=ExperienceRange)
     min_salary_lpa: float | None = Field(default=None, ge=0)
     max_posted_days: int | None = Field(default=None, ge=0)
+    max_applicants: int | None = Field(default=None, ge=1)
     min_rating: float | None = Field(default=None, ge=0, le=5)
     require_easy_apply: bool = True
     skip_walkin: bool = True
@@ -840,21 +841,21 @@ class LinkedInConfig(_Model):
 class InstahyreConfig(_Model):
     skills: list[str] = Field(
         default_factory=lambda: [
-            "SDET",
             "Python",
-            "Node.js",
-            "React.js",
-            "TypeScript",
             "FastAPI",
-            "Next.js",
             "Generative AI",
-            "JavaScript",
+            "LLMs",
+            "RAG",
             "LangChain",
             "LangGraph",
-            "MLOps",
-            "AWS Bedrock",
-            "API Testing",
-            "Quality Assurance",
+            "React.js",
+            "Node.js",
+            "TypeScript",
+            "Next.js",
+            "PostgreSQL",
+            "AWS",
+            "Docker",
+            "SDET",
         ]
     )
     experience_years: int = Field(default=2, ge=0, le=30)

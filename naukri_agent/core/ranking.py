@@ -519,11 +519,11 @@ class RankingEngine:
         crowd = job.applicant_count
         if crowd is not None:
             if crowd > 100:
-                penalty = 6.0
+                penalty = 12.0
             elif crowd > 50:
-                penalty = 3.0
+                penalty = 6.0
             elif crowd > 25:
-                penalty = 1.0
+                penalty = 2.0
             else:
                 penalty = 0.0
             if penalty:

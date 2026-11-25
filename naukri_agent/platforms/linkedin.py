@@ -131,6 +131,19 @@ def _looks_like_option_dump(text: str) -> bool:
     return months >= 2 or years >= 3
 
 
+def _parse_applicant_count(text: str) -> int | None:
+    """Extract numeric applicant count from a LinkedIn card or detail header."""
+    m_ap = re.search(r"over\s+(\d+)\s+(?:applicants?|people clicked apply)", text or "", re.IGNORECASE)
+    if m_ap:
+        return int(m_ap.group(1)) + 1
+    m_ap = re.search(r"(\d+)\s+(?:applicants?|people clicked apply)\b", text or "", re.IGNORECASE)
+    if m_ap:
+        return int(m_ap.group(1))
+    if re.search(r"be an early applicant", text or "", re.IGNORECASE):
+        return 5
+    return None
+
+
 def _fit_field_length(ans: str, maxlength: int | None) -> str:
     """Cap a fill value to the input's maxlength (pure).
 
@@ -981,16 +994,7 @@ class LinkedInPlatform(BaseJobPlatform):
                     easy_apply = False
                 # Applicant count straight off the card ("57 applicants" -> 57,
                 # "Over 100 applicants" -> 101, "Be an early applicant" -> 5).
-                applicants: int | None = None
-                m_ap = re.search(r"over\s+(\d+)\s+applicants?", card_text, re.IGNORECASE)
-                if m_ap:
-                    applicants = int(m_ap.group(1)) + 1
-                else:
-                    m_ap = re.search(r"(\d+)\s+applicants?\b", card_text, re.IGNORECASE)
-                    if m_ap:
-                        applicants = int(m_ap.group(1))
-                    elif re.search(r"be an early applicant", card_text, re.IGNORECASE):
-                        applicants = 5
+                applicants = _parse_applicant_count(card_text)
                 # Posted age straight off the card ("3 days ago" -> 3). Without
                 # this the 24h plan gate can never fire (unknown never rejects)
                 # and stale jobs sail to apply time — the exact leak behind the
@@ -1477,6 +1481,23 @@ class LinkedInPlatform(BaseJobPlatform):
             job.min_experience = minimum
             job.max_experience = maximum
             job.experience_imputed = False
+
+        # Detail top-card header often reveals "Over 100 applicants" even when
+        # the search card hid the count. Read directly without calling
+        # first_visible (avoids extra polling latency and preserves test mocks).
+        if job.applicant_count is None:
+            try:
+                top_meta = self.page.locator(
+                    ".job-details-jobs-unified-top-card__primary-description-container, "
+                    ".job-details-jobs-unified-top-card__tertiary-description-container, "
+                    ".jobs-unified-top-card__primary-description"
+                ).first
+                if await top_meta.count() > 0:
+                    parsed_count = _parse_applicant_count(await safe_text(top_meta))
+                    if parsed_count is not None:
+                        job.applicant_count = parsed_count
+            except Exception:
+                pass
 
         # Universal family gates on JD-enriched data. The orchestrator ran
         # these on card data (Phase 1), but the description + JD experience

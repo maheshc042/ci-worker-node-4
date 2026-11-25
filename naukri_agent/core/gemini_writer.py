@@ -719,18 +719,21 @@ RULES FOR THE EMAIL:
             return None
         return finalize_email_body(raw, who, role_name=role_name)
 
-    def generate_wellfound_pitch(
+    def _generate_platform_pitch(
         self,
+        platform_label: str,
+        audience_desc: str,
         role_name: str,
         job_description: str = "",
         company_name: str = "",
         recipient_name: str = "",
+        log_tag: str = "gemini.wellfound_pitch_generated",
+        extra_context: str = "",
     ) -> str | None:
         """
-        Generate tailored Wellfound startup pitch note.
-        Targeted at founders/CTOs/tech leads: high-impact proof of building,
-        FastAPI/LangChain/AWS stack alignment, ownership, immediate joiner,
-        crisp 10-minute chat ask. NO CTC, NO phone, NO generic HR bullets.
+        Shared tailored pitch generator for founder/recruiter direct-note platforms
+        (Wellfound & Cutshort): high-impact proof of building, stack alignment,
+        ownership, immediate joiner, crisp 10-minute chat ask.
         """
         if not self.api_key:
             log.debug("gemini.disabled", reason="GEMINI_API_KEY is not set.")
@@ -757,13 +760,15 @@ RULES FOR THE EMAIL:
         else:
             salutation = "Hi,"
 
+        extra_block = f"\nAdditional role focus/stack context: {extra_context}" if extra_context else ""
+
         prompt = f"""
-You are {who.name}, writing a high-impact startup pitch note on Wellfound for the "{clean_role}" role at "{clean_co or 'your company'}".
+You are {who.name}, writing a high-impact startup pitch note on {platform_label} for the "{clean_role}" role at "{clean_co or 'your company'}".
 
 CRITICAL AUDIENCE & CONTEXT:
-The reader is a Startup Founder, CTO, or Engineering Lead reviewing candidate pitches directly on Wellfound.
+The reader is a {audience_desc} reviewing candidate pitches directly on {platform_label}.
 Your candidate profile card (Name, {who.location or 'current'} location, contact info, portfolio links, salary range) is already visible right next to this note.
-Do NOT write a standard recruitment email or HR form letter. Founders want to see:
+Do NOT write a standard recruitment email or HR form letter. Readers want to see:
 1. Proof of what you have built (backend architecture, GenAI pipelines, latency reduction, APIs).
 2. Alignment with their specific product and tech stack.
 3. Fast execution and startup ownership (owning features end-to-end).
@@ -780,21 +785,21 @@ Applicant Verified Facts:
   * Fast Delivery: Comfortable owning features end-to-end, from API design to cloud deployment in fast-paced startup environments.
 - Links: {links_line if links_line else 'none'}
 
-Target Role & Startup Requirements:
+Target Role & Requirements:
 - Role: {clean_role}
 - Company: {clean_co or 'Startup'}
 - Job Description / Requirements:
-{job_description[:2500] if job_description else 'Full-stack and AI software engineering.'}
+{job_description[:2500] if job_description else 'Full-stack and AI software engineering.'}{extra_block}
 
-RULES FOR THE WELLFOUND PITCH:
+RULES FOR THE {platform_label.upper()} PITCH:
 1. Salutation: "{salutation}" — use it EXACTLY.
-2. Opening & Domain Touch (1-2 sentences): State you are applying for the {clean_role} role to help build their product/platform. Explicitly connect your GenAI/backend background to their specific domain from the JD (e.g. spiritual tech platform, semantic search over texts, conversational AI, or personalized content delivery).
+2. Opening & Domain Touch (1-2 sentences): State you are applying for the {clean_role} role to help build their product/platform. Explicitly connect your background to their specific domain and stack from the JD.
 3. Proof of Building & Tech Alignment (3 concise bullet points):
    Highlight concrete engineering achievements matching their stack:
    • Production AI Pipelines: Built RAG systems, vector retrieval workflows, and LLM integrations using LangChain and FastAPI for low-latency, context-rich responses.
    • Scalable Cloud Backends: Engineered and deployed REST APIs and microservices on AWS, handling asynchronous workloads and database integrations.
    • Fast Delivery: Comfortable owning features end-to-end, from data ingestion and API design to cloud deployment in fast-paced startup environments.
-   (Adapt specific tech names to match their requirements, e.g. FastAPI, LangChain, Django, AWS, Postgres, etc.)
+   (Adapt specific tech names from verified skills to match their requirements, e.g. FastAPI, LangChain, Django, React, Node.js, TypeScript, AWS, PostgreSQL, etc.)
 4. Availability (1 sentence): State you are based in {who.location} and available to join immediately (0-day notice).
 5. Call to Action (1 sentence): Ask if they are open to a quick 10-minute chat this week to discuss how you can contribute to {clean_co or 'the team'}'s product roadmap.
 6. Sign-off:
@@ -811,7 +816,50 @@ RULES FOR THE WELLFOUND PITCH:
 8. Length: Concise, high signal, around 90-130 words.
 9. Output ONLY the raw pitch note text. No markdown fences, no subject lines.
 """
-        return self._call_gemini(prompt=prompt, role_name=clean_role, log_tag="gemini.wellfound_pitch_generated")
+        return self._call_gemini(prompt=prompt, role_name=clean_role, log_tag=log_tag)
+
+    def generate_wellfound_pitch(
+        self,
+        role_name: str,
+        job_description: str = "",
+        company_name: str = "",
+        recipient_name: str = "",
+    ) -> str | None:
+        """
+        Generate tailored Wellfound startup pitch note.
+        Targeted at founders/CTOs/tech leads: high-impact proof of building,
+        FastAPI/LangChain/AWS stack alignment, ownership, immediate joiner,
+        crisp 10-minute chat ask. NO CTC, NO phone, NO generic HR bullets.
+        """
+        return self._generate_platform_pitch(
+            platform_label="Wellfound",
+            audience_desc="Startup Founder, CTO, or Engineering Lead",
+            role_name=role_name,
+            job_description=job_description,
+            company_name=company_name,
+            recipient_name=recipient_name,
+            log_tag="gemini.wellfound_pitch_generated",
+        )
+
+    def generate_cutshort_pitch(
+        self,
+        role_name: str,
+        job_description: str = "",
+        company_name: str = "",
+        recipient_name: str = "",
+        key_tech_stack: str = "",
+    ) -> str | None:
+        """Generate tailored Cutshort direct recruiter/founder pitch note."""
+        return self._generate_platform_pitch(
+            platform_label="Cutshort",
+            audience_desc="Startup Recruiter, Hiring Manager, CTO, or Engineering Lead",
+            role_name=role_name,
+            job_description=job_description,
+            company_name=company_name,
+            recipient_name=recipient_name,
+            log_tag="gemini.cutshort_pitch_generated",
+            extra_context=key_tech_stack,
+        )
 
     def _call_gemini(
         self,

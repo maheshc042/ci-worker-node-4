@@ -1049,12 +1049,11 @@ class TestInstahyreUnifiedConfiguration(unittest.TestCase):
         self.engine = FilterEngine(self.unified_profile.filters)
 
     def test_instahyre_search_skills_and_exp(self):
-        """Instahyre configuration must contain the exact 15 skills and 2 years experience."""
+        """Instahyre configuration must contain the exact 15 prioritized skills and 2 years experience."""
         expected_skills = [
-            "SDET", "Python", "Node.js", "React.js", "TypeScript",
-            "FastAPI", "Next.js", "Generative AI", "JavaScript",
-            "LangChain", "LangGraph", "PostgreSQL", "AWS Bedrock",
-            "API Testing", "Quality Assurance",
+            "Python", "FastAPI", "Generative AI", "LLMs", "RAG",
+            "LangChain", "LangGraph", "React.js", "Node.js", "TypeScript",
+            "Next.js", "PostgreSQL", "AWS", "Docker", "SDET",
         ]
         self.assertEqual(self.cfg.instahyre.skills, expected_skills)
         self.assertEqual(self.cfg.instahyre.experience_years, 2)
@@ -1231,12 +1230,13 @@ class TestCutshortUnifiedConfiguration(unittest.TestCase):
             CUTSHORT_FULLSTACK_SKILLS,
             CUTSHORT_UNIFIED_SKILLS,
         )
-        # AI Skills
+        # AI Skills (MLOps excluded so UI filter does not fetch blocked MLOps jobs)
         ai_exact = [s[1] if isinstance(s, tuple) else s for s in CUTSHORT_AI_SKILLS]
+        self.assertNotIn("MLOps", ai_exact)
         for expected in [
             "Python", "Generative AI", "Agentic AI", "Large Language Models (LLM)",
             "Retrieval Augmented Generation (RAG)", "Artificial Intelligence (AI)",
-            "MLOps", "Large Language Models (LLM) tuning", "AWS Bedrock", "FastAPI",
+            "Large Language Models (LLM) tuning", "AWS Bedrock", "FastAPI",
             "LangGraph", "Prompt engineering", "NodeJS (Node.js)", "TypeScript", "Javascript"
         ]:
             self.assertIn(expected, ai_exact)
@@ -1251,11 +1251,12 @@ class TestCutshortUnifiedConfiguration(unittest.TestCase):
 
         # Unified Skills
         unified_exact = [s[1] if isinstance(s, tuple) else s for s in CUTSHORT_UNIFIED_SKILLS]
+        self.assertNotIn("MLOps", unified_exact)
         for expected in [
             "Python", "React.js", "NextJs (Next.js)", "Generative AI", "Javascript",
             "NodeJS (Node.js)", "Agentic AI", "Large Language Models (LLM)", "TypeScript",
             "FastAPI", "Retrieval Augmented Generation (RAG)", "Artificial Intelligence (AI)",
-            "MLOps", "Large Language Models (LLM) tuning", "AWS Bedrock", "LangGraph",
+            "Large Language Models (LLM) tuning", "AWS Bedrock", "LangGraph",
             "Prompt engineering"
         ]:
             self.assertIn(expected, unified_exact)
@@ -1783,6 +1784,49 @@ class TestGeminiPrompt(unittest.TestCase):
         self.assertNotIn("Quick Candidate Snapshot (clean bullet points", prompt)
         self.assertIn("Production AI Pipelines", prompt)
         self.assertIn("10-minute chat", prompt)
+
+    def test_cutshort_pitch_prompt_shape(self):
+        import json
+        from unittest.mock import patch
+
+        from naukri_agent.core.gemini_writer import GeminiWriter
+
+        captured = {}
+
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return json.dumps(
+                    {"candidates": [{"content": {"parts": [{"text": "High impact Cutshort pitch"}]}}]}
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode())
+            return FakeResp()
+
+        writer = GeminiWriter(api_key="test-key", model="test-model")
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = writer.generate_cutshort_pitch(
+                role_name="AI Engineer",
+                job_description="Build FastAPI + LangChain RAG workflows",
+                company_name="RockED",
+                recipient_name="Anushka",
+                key_tech_stack="Python, FastAPI, LangChain",
+            )
+        self.assertEqual(res, "High impact Cutshort pitch")
+        prompt = captured["payload"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("Cutshort", prompt)
+        self.assertIn('Salutation: "Hi Anushka,"', prompt)
+        self.assertIn("Python, FastAPI, LangChain", prompt)
+        self.assertIn("STRICTLY FORBIDDEN", prompt)
+        self.assertNotIn("3.9 LPA", prompt)
 
     def test_ml_role_prompt_shape(self):
         prompt = self._prompt_text(role_name="Machine Learning Engineer", recipient_name="Mohammed")
@@ -5209,6 +5253,48 @@ class TestCompletenessDiscount(unittest.TestCase):
         rate_open, _ = eng._score_rating(self._job())
         rate_good, _ = eng._score_rating(self._job(rating=4.2))
         self.assertLess(rate_open, rate_good)
+
+    def test_linkedin_crowd_cutoff_and_strict_demotion(self):
+        from naukri_agent.platforms.linkedin import _parse_applicant_count
+
+        self.assertEqual(_parse_applicant_count("Over 100 people clicked apply"), 101)
+        self.assertEqual(_parse_applicant_count("Over 100 applicants"), 101)
+        self.assertEqual(_parse_applicant_count("42 applicants"), 42)
+        self.assertEqual(_parse_applicant_count("Be an early applicant"), 5)
+        self.assertIsNone(_parse_applicant_count("Bengaluru · Easy Apply"))
+
+        eng = self._ranker()
+        early, _ = eng._score_freshness(self._job(posted_days_ago=0, applicant_count=15))
+        mid, _ = eng._score_freshness(self._job(posted_days_ago=0, applicant_count=75))
+        crowded, _ = eng._score_freshness(self._job(posted_days_ago=0, applicant_count=101))
+        self.assertEqual(early, 12.0)
+        self.assertEqual(mid, 6.0)
+        self.assertEqual(crowded, 0.0)
+
+        cfg = AgentConfig.load()
+        for prof in cfg.profiles:
+            self.assertIsNone(prof.filters.max_applicants)
+            fe = FilterEngine(prof.filters_for("recommended"))
+            role = "AI Engineer" if "AI" in prof.name else "Full Stack Developer"
+            crowded_job = Job(
+                job_id="li-crowd", title=role, company="BigCo",
+                url="https://www.linkedin.com/jobs/view/1/", platform="linkedin",
+                applicant_count=101, easy_apply=True,
+            )
+            # Active config demotes via ranking instead of hard-rejecting
+            self.assertTrue(fe.evaluate_card(crowded_job).passed)
+
+            strict_rules = prof.filters_for("recommended").model_copy(update={"max_applicants": 100})
+            strict_fe = FilterEngine(strict_rules)
+            d = strict_fe.evaluate_card(crowded_job)
+            self.assertFalse(d.passed, f"{prof.name} should skip >100 applicant posting when max_applicants=100")
+            self.assertIn("crowded", d.detail)
+            early_job = Job(
+                job_id="li-early", title=role, company="StartupCo",
+                url="https://www.linkedin.com/jobs/view/2/", platform="linkedin",
+                applicant_count=50, easy_apply=True,
+            )
+            self.assertTrue(strict_fe.evaluate_card(early_job).passed)
 
 class TestImputationEdges(unittest.TestCase):
     """Tail of the imputation suite: stated numbers skip filling, levels
