@@ -105,7 +105,7 @@ _AVAILABILITY_TIMING_INTENT = re.compile(
 
 _WILLINGNESS_INTENT = re.compile(
     r"\b(?:"
-    r"willing|open\s+(?:to|for)|ready\s+to|comfortable|agree|able\s+to|attend|available\s+for|"
+    r"willing|open\s+(?:to|for)|ready\s+to|comfortable|agree|able\s+to|attend|available\s+(?:for|to)|"
     r"would\s+you|can\s+you|are\s+you\s+willing|are\s+you\s+open|are\s+you\s+ready|are\s+you\s+able|"
     r"are\s+you\s+fine|are\s+you\s+ok(?:ay)?|do\s+you\s+agree|will\s+you|"
     r"does\s+this\s+work(?:\s+for\s+you)?|works?\s+for\s+you|"
@@ -113,7 +113,7 @@ _WILLINGNESS_INTENT = re.compile(
     r"rounds?\s+of\s+(?:technical\s+)?interviews?|technical\s+interviews?|interview\s+rounds?|"
     r"interview\s+process|selection\s+process|hiring\s+process|"
     r"relocate|relocation|"
-    r"work\s+from\s+office|wfo|onsite|on[\s-]site|"
+    r"work\s+from\s+(?:the\s+)?office|wfo|onsite|on[\s-]site|"
     r"hybrid\s+(?:work|working|model|mode|setup|policy)|"
     r"join\s+immediately|immediate\s+joiner|"
     r"take\s+up\s+an?\s+interview|available\s+to\s+(?:take\s+up|attend|give)\s+(?:an?\s+)?interview|"
@@ -1045,15 +1045,19 @@ class AnswerEngine:
         return None
 
     def _resolve_self_rating(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
-        """"Rate yourself 1-10 in X" — 8 for mapped skills with real tenure
-        (strong-but-credible house rule, same as fit-rating), review for
-        unlisted skills. Never lets willingness type "Yes" into a rating box.
+        """"Rate yourself 1-10 / out of 5 in X" — 8 (on 10-point) or 4 (on 5-point)
+        for mapped skills with real tenure (strong-but-credible house rule), review
+        for unlisted skills. Never lets willingness type "Yes" into a rating box.
         """
         if not re.search(r"\brate\b", text):
             return None
         if not re.search(r"\b(?:yourself|your)\b", text):
             return None
-        if not re.search(r"1\s*(?:-|to|/)\s*10|scale\s+of\s+1\s*-\s*10|out\s+of\s+10", text):
+        if re.search(r"1\s*(?:-|to|/)\s*5\b|scale\s+of\s+1\s*-\s*5\b|out\s+of\s+5\b", text):
+            rating = "4"
+        elif re.search(r"1\s*(?:-|to|/)\s*10\b|scale\s+of\s+1\s*-\s*10\b|out\s+of\s+10\b", text):
+            rating = "8"
+        else:
             return None
         for skill, years in (self.experience.skills or {}).items():
             phrase = _normalise(skill)
@@ -1065,9 +1069,9 @@ class AnswerEngine:
                         return None
                 except (TypeError, ValueError):
                     return None
-                fitted = self._fit_to_options("8", question, f"self-rating:{phrase}", "skill-map")
+                fitted = self._fit_to_options(rating, question, f"self-rating:{phrase}", "skill-map")
                 if fitted is not None:
-                    log.info("answers.self_rating", question=question.text[:120], skill=phrase[:40])
+                    log.info("answers.self_rating", question=question.text[:120], skill=phrase[:40], rating=rating)
                 return fitted
         return None
 

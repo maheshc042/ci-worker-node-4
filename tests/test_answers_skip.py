@@ -1556,6 +1556,54 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
             text="Have you run Amazon RDS, Aurora or DynamoDB in production?",
             kind="radio", options=["Yes", "No"],
         )).value, "No")
+        # #936/#938 external video recording gate in chatbot -> skip_detail
+        from naukri_agent.naukri.chatbot import assessment_skip_detail
+        self.assertIsNotNone(assessment_skip_detail(
+            "Required: record a 4-minute video at recruiting.docs-docs.com/apply/?track=engineer then type the email you used there."
+        ))
+        # #937 available to work from the office -> Yes
+        self.assertEqual(bare_engine.resolve(ScreeningQuestion(
+            text="Are you available to work from the office four days per week?",
+            kind="radio", options=["Yes", "No"],
+        )).value, "Yes")
+        # #948/#949 out of 5 self-rating for mapped skills -> "4" (without KB)
+        self.assertEqual(AnswerEngine(
+            kb=[], profile_answers={}, strict=True,
+            experience=ExperienceAnswers(total_years=3.0, skills={"python": 2.0, "generative ai": 2.0}),
+        ).resolve(ScreeningQuestion(
+            text="Rate yourself out of 5 in Python programming, including DSA, debugging and problem-solving, collectively.",
+            kind="text",
+        )).value, "4")
+        self.assertEqual(AnswerEngine(
+            kb=[], profile_answers={}, strict=True,
+            experience=ExperienceAnswers(total_years=3.0, skills={"python": 2.0, "generative ai": 2.0}),
+        ).resolve(ScreeningQuestion(
+            text="Rate yourself out of 5 in Generative AI concepts, including RAG, embeddings, LLMs and agentic workflows.",
+            kind="text",
+        )).value, "4")
+        # Config KB regressions for #939, #944-#947, #950
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Are you Azure Certified in AZ-400", kind="radio", options=["Yes", "No"],
+        )).value, "No")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Are you available for a video or in-person interview?", kind="radio", options=["No", "Yes"],
+        )).value, "Yes")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text='If “Yes” to the previous question, have you subsequently either obtained citizenship, legal permanent resident status or asylum, from a country other than the ones in the previous question?',
+            kind="radio", options=["Yes", "No"],
+        )).value, "No")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="If yes, please provide their name(s), their relationship to you and department(s) they work in (if known):",
+            kind="text",
+        )).value, "N/A")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="If yes, please provide a list/details of the potential conflict of interest:",
+            kind="text",
+        )).value, "N/A")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="Have you implemented Page Object Model (POM)?",
+            kind="text",
+        )).value, "Yes")
 
 
 if __name__ == "__main__":

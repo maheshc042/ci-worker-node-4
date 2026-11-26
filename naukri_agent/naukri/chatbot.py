@@ -47,7 +47,8 @@ log = get_logger(__name__)
 _ASSESSMENT_RE = re.compile(
     r"online assessment|assessment test|proctored|\bautoproctor\b|hackerrank|"
     r"codility|imocha|deselect|take the test|complete the test|aptitude test|"
-    r"coding test|assessment link|test link|assessment:",
+    r"coding test|assessment link|test link|assessment:|"
+    r"record\s+(?:a\s+)?(?:\d+[-\s]*min(?:ute)?\s+)?video\s+(?:at|on|via)\s+\S+",
     re.IGNORECASE,
 )
 

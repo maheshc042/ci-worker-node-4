@@ -1145,6 +1145,12 @@ answers:
   "re:built or run an evaluation dataset, benchmark or regression suite": "Yes"
   "re:run amazon rds, aurora or dynamodb in production": "No"
   "re:part of an on-call rotation or led production incidents": "No"
+  "re:available to work from (?:the )?office": "Yes"
+  "re:azure certified|az-400": "No"
+  "re:available for a (?:video|virtual|online|in[- ]person|telephonic|phone)(?: or in[- ]person)? interview": "Yes"
+  "re:obtained citizenship,? legal permanent resident status or asylum": "No"
+  "re:^if\\s+[\"'“]?yes[\"'”]?\\s*,?\\s*(?:please\\s+)?(?:provide|list|specify|explain|mention|state|describe|share|give)\\b(?!.*how many years)": "N/A"
+  "re:page object model|\\bpom\\b.*(?:implement|used|framework|pattern)": "Yes"
   "apply to h&m 6/7 pages additional questions here you can find details of our privacy notice.*": "Dismiss"
 
 # ---------------------------------------------------------------------------
