@@ -194,3 +194,57 @@ class TestInstahyreEligibility(unittest.TestCase):
         self.assertEqual(instahyre._SKILL_INPUTS[0], '#skills-drop-select-job-search-selectized')
         self.assertNotIn('div.selectize-input input', instahyre._SKILL_INPUTS)
         self.assertNotIn('#companies-selectized', instahyre._SKILL_TAGS)
+
+
+class TestInstahyreVerificationAndApplyHardening(unittest.IsolatedAsyncioTestCase):
+    async def test_verify_waits_for_applied_tab_selected_and_fallback_option(self):
+        platform = object.__new__(instahyre.InstahyrePlatform)
+        platform.page = MagicMock()
+        platform.artifacts = MagicMock(dump_html=AsyncMock(), capture_failure=AsyncMock())
+        platform._find_target_card = AsyncMock(side_effect=[None, MagicMock()])
+
+        applied_tab = MagicMock(wait_for=AsyncMock(), click=AsyncMock())
+        selected_tab = MagicMock(wait_for=AsyncMock(), count=AsyncMock(return_value=1))
+        company_input = MagicMock(fill=AsyncMock(), press_sequentially=AsyncMock())
+        exact_option = MagicMock(wait_for=AsyncMock(side_effect=TimeoutError("no exact")), count=AsyncMock(return_value=0))
+        fallback_option = MagicMock(wait_for=AsyncMock(), count=AsyncMock(return_value=1), click=AsyncMock())
+        selected_row = MagicMock(wait_for=AsyncMock())
+        page_link = MagicMock(count=AsyncMock(return_value=0))
+
+        class _Chain:
+            def __init__(self, target):
+                self._t = target
+                self.first = self
+            def filter(self, **_kw):
+                return self
+            def __getattr__(self, name):
+                return getattr(self._t, name)
+
+        # Toggle between exact and fallback option on sequential `.selectize-dropdown:visible [data-selectable]` lookups
+        dropdown_calls = 0
+        def locate(selector, *_args, **_kwargs):
+            nonlocal dropdown_calls
+            if selector == ".interest_filters .tab":
+                return _Chain(applied_tab)
+            if selector == ".interest_filters .tab.selected":
+                return _Chain(selected_tab)
+            if selector == "#companies-selectized":
+                return _Chain(company_input)
+            if selector == ".selectize-dropdown:visible [data-selectable]":
+                dropdown_calls += 1
+                return _Chain(exact_option if dropdown_calls == 1 else fallback_option)
+            if selector == "div.employer-job-name .company-name":
+                return _Chain(selected_row)
+            return _Chain(page_link)
+
+        page = MagicMock(goto=AsyncMock(), close=AsyncMock(), locator=locate)
+        platform.page.context.new_page = AsyncMock(return_value=page)
+
+        with patch.object(instahyre, "first_visible", new=AsyncMock(return_value=MagicMock())), \
+             patch.object(instahyre, "human_pause", new=AsyncMock()):
+            self.assertTrue(await platform._verify_target_applied(target()))
+
+        selected_tab.wait_for.assert_awaited_once_with(state="visible", timeout=5000)
+        fallback_option.wait_for.assert_awaited_once_with(state="visible", timeout=1500)
+        fallback_option.click.assert_awaited_once()
+        page.close.assert_awaited_once()

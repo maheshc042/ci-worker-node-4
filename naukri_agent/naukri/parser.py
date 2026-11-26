@@ -72,17 +72,17 @@ _FRAMEWORK_MASK_RE = re.compile(
 _SHIFT_MASK_RE = re.compile(r"\b24\s*/\s*7\b")
 
 _EXP_SPAN_RE = re.compile(
-    r"(?:(?:experience|exp|tenure)\s*(?:of|required|is|:)?\s*)?(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:years?|yrs?|\bexp\b)",
+    r"(?:(?:experience|exp|tenure)\s*(?:of|required|is|:)?\s*)?(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:\+)?\s*\)?\s*(?:years?|yrs?|yoe|\bexp\b)",
     re.IGNORECASE,
 )
 
 _EXP_SPAN_RE_ALT = re.compile(
-    r"(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)?\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)",
+    r"(?:years?|yrs?|yoe)\s*(?:of)?\s*(?:experience|exp)?\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 
 _EXP_PLUS_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?)\b",
+    r"(\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?|yoe)\b",
     re.IGNORECASE,
 )
 

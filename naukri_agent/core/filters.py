@@ -283,6 +283,18 @@ class FilterEngine:
         stated bands can newly reject.
         """
         rules = self.rules
+        if job.min_experience is None and job.max_experience is None and job.title:
+            m_title_exp = re.search(
+                r"(?<![.\d])(\d+(?:\.\d+)?)\s*(?:-|–|—|to|\+)\s*(\d+(?:\.\d+)?)?\s*\)?\s*(?:years?|yrs?|yoe|y\b)",
+                job.title,
+                re.IGNORECASE,
+            )
+            if m_title_exp:
+                lo = float(m_title_exp.group(1))
+                hi = float(m_title_exp.group(2)) if m_title_exp.group(2) else (lo + 5.0 if "+" in m_title_exp.group(0) else lo)
+                if lo <= 30 and hi <= 30:
+                    job.min_experience = lo
+                    job.max_experience = hi
         # 7. Dedicated AI/ML Recruiter Reality Gate
         # Candidate has 3y total software experience with 2y commercial AI.
         # Recruiters for DEDICATED AI/ML titles requiring > 2.0 years will
@@ -404,7 +416,7 @@ class FilterEngine:
                     is_override = True
                 elif hit in ("infrastructure engineer", "infrastructure") and _contains_any(title, ["cloud", "azure", "aws", "gcp", "devops", "platform", "ai"]):
                     is_override = True
-                elif hit == "lead" and any(term in title for term in ("software engineer", "developer", "backend", "ai", "full stack", "fullstack", "tech lead")) and not any(term in title for term in ("lead qa", "test lead", "lead auditor", "team lead", "sales lead", "project lead")):
+                elif hit == "lead" and _contains_any(title, ["software engineer", "developer", "backend", "ai", "full stack", "fullstack", "tech lead"]) and not _contains_any(title, ["lead qa", "test lead", "lead auditor", "team lead", "sales lead", "project lead"]):
                     is_override = True
                 elif hit in ("security engineer", "security specialist", "security analyst") and _contains_any(title, ["ai", "agentic", "automation", "generative ai", "genai", "llm"]):
                     is_override = True

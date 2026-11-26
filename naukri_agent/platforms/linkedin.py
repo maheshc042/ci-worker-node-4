@@ -1034,7 +1034,7 @@ class LinkedInPlatform(BaseJobPlatform):
                             posted_days = n
                 min_exp, max_exp = None, None
                 exp_imputed = False
-                exp_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to|\+)\s*(\d+(?:\.\d+)?)?\s*(?:yrs|years|yr)", f"{title} {card_text}", re.IGNORECASE)
+                exp_match = re.search(r"(?<![.\d])(\d+(?:\.\d+)?)\s*(?:-|–|—|to|\+)\s*(\d+(?:\.\d+)?)?\s*\)?\s*(?:years?|yrs?|yoe|y\b)", f"{title} {card_text}", re.IGNORECASE)
                 if exp_match:
                     min_exp = float(exp_match.group(1))
                     if exp_match.group(2):
@@ -2061,10 +2061,15 @@ class LinkedInPlatform(BaseJobPlatform):
         if not target_resume_stem:
             log.warning("linkedin.apply.no_resume_configured", profile=profile_name)
 
-        resume_cards = await modal.locator("div[data-test-document-item], .jobs-document-upload-redesign-card, div.jobs-document-upload-redesign-card__container").all()
+        _doc_card_sel = (
+            "div[data-test-document-item], .jobs-document-upload-redesign-card, "
+            "div.jobs-document-upload-redesign-card__container, "
+            "div[class*='document']:has-text('.pdf'), label:has-text('.pdf')"
+        )
+        resume_cards = await modal.locator(_doc_card_sel).all()
         card_selected = False
-        native_resumes = modal.locator("input[type='radio'][aria-label$='.pdf' i]")
-        native_target = modal.get_by_role("radio", name=re.compile(rf"^{re.escape(target_resume_stem)}\.pdf$", re.I))
+        native_resumes = modal.locator("input[type='radio'][aria-label*='.pdf' i], [role='radio'][aria-label*='.pdf' i]")
+        native_target = modal.get_by_role("radio", name=re.compile(rf"(?:^|\b){re.escape(target_resume_stem)}(?:\.pdf)?(?![\w])", re.I)).first if target_resume_stem else modal.locator("__never__")
         if target_resume_stem and await native_target.count() == 1:
             try:
                 await native_target.check(timeout=3000)
@@ -2072,7 +2077,12 @@ class LinkedInPlatform(BaseJobPlatform):
                 radio_id = await native_target.get_attribute("id")
                 if radio_id:
                     await modal.locator(f"label[for='{radio_id}']").click(timeout=3000)
-            card_selected = await native_target.is_checked()
+                else:
+                    await native_target.click(timeout=3000)
+            try:
+                card_selected = await native_target.is_checked()
+            except Exception:
+                card_selected = (await native_target.get_attribute("aria-checked") or "").lower() == "true"
         for card in (resume_cards if target_resume_stem and not card_selected else []):
             card_text = (await safe_text(card)).lower()
             is_selected = await self._resume_card_selected(card)
@@ -2088,26 +2098,57 @@ class LinkedInPlatform(BaseJobPlatform):
                 card_selected = await self._resume_card_selected(card)
                 break
 
-        # Fallback: if no matching card was found/selected, check for file upload input
+        # Fallback: if no matching card was found/selected, check for file upload input or Upload button
+        upload_btn = await first_visible(
+            modal,
+            ["button:has-text('Upload resume')", "label:has-text('Upload resume')"],
+            timeout_ms=400,
+        )
         if target_resume_file and not card_selected:
-            file_inp = modal.locator("input[type='file']").first
-            if await file_inp.count() > 0:
-                try:
-                    from ..config import PROJECT_ROOT
-                    abs_resume = PROJECT_ROOT / target_resume_file
-                    if abs_resume.exists():
+            try:
+                from ..config import PROJECT_ROOT
+                abs_resume = PROJECT_ROOT / target_resume_file
+                if abs_resume.exists():
+                    file_inp = modal.locator("input[type='file']").first
+                    if await file_inp.count() == 0:
+                        file_inp = self.page.locator("input[type='file']").first
+                    if await file_inp.count() > 0:
                         await file_inp.set_input_files(str(abs_resume))
-                        await human_pause(1000, 2000)
+                        await human_pause(1500, 2500)
                         log.info("linkedin.apply.resume_uploaded_from_disk", file=target_resume_file)
-                except Exception as exc:
-                    log.warning("linkedin.apply.resume_upload_failed", error=str(exc))
+                    elif upload_btn is not None:
+                        async with self.page.expect_file_chooser(timeout=4000) as fc_info:
+                            await upload_btn.click()
+                        fc = await fc_info.value
+                        await fc.set_files(str(abs_resume))
+                        await human_pause(1500, 2500)
+                        log.info("linkedin.apply.resume_uploaded_via_chooser", file=target_resume_file)
+            except Exception as exc:
+                log.warning("linkedin.apply.resume_upload_failed", error=str(exc))
 
         # Re-read after selection/upload; clicks and an upload call alone do
         # not establish that the intended document was retained.
-        refreshed = await modal.locator("div[data-test-document-item], .jobs-document-upload-redesign-card, div.jobs-document-upload-redesign-card__container").all()
-        resume_ui_present = resume_cards or refreshed or await native_resumes.count() or await modal.locator("input[type='file']").count()
+        refreshed = await modal.locator(_doc_card_sel).all()
+        resume_ui_present = (
+            resume_cards
+            or refreshed
+            or await native_resumes.count()
+            or await modal.locator("input[type='file']").count()
+            or upload_btn is not None
+        )
         if resume_ui_present:
-            card_selected = bool(target_resume_stem and await native_target.count() == 1 and await native_target.is_checked())
+            try:
+                card_selected = bool(
+                    target_resume_stem
+                    and await native_target.count() == 1
+                    and (
+                        await native_target.is_checked()
+                        if (await native_target.get_attribute("role") or "").lower() != "radio"
+                        else (await native_target.get_attribute("aria-checked") or "").lower() == "true"
+                    )
+                )
+            except Exception:
+                card_selected = False
             for card in refreshed:
                 if self._resume_name_matches(await safe_text(card), target_resume_stem) and await self._resume_card_selected(card):
                     card_selected = True

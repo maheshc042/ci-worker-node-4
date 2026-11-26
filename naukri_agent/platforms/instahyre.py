@@ -861,6 +861,7 @@ class InstahyrePlatform(BaseJobPlatform):
         max_scrape = max(250, int(target_applies * 2))
         self._current_profile = profile
         self._current_view = "search"
+        self._feed_recovered = False
 
         try:
             await self.page.goto(feed_url, wait_until="domcontentloaded")
@@ -1102,6 +1103,13 @@ class InstahyrePlatform(BaseJobPlatform):
             )
             await tab.wait_for(state="visible", timeout=8000)
             await tab.click(timeout=4000)
+            try:
+                await verification.locator(".interest_filters .tab.selected").filter(
+                    has_text=re.compile(r"^\s*Applied jobs\b")
+                ).wait_for(state="visible", timeout=5000)
+                await human_pause(500, 900)
+            except Exception:
+                pass
             company_input = verification.locator("#companies-selectized")
             base_company = re.sub(r"\s*\([^)]*\)", "", job.company).strip()
             paren_match = re.search(r"\(([^)]+)\)", job.company)
@@ -1136,6 +1144,7 @@ class InstahyrePlatform(BaseJobPlatform):
                         has_text=re.compile(re.escape(term), re.I)
                     )
                     try:
+                        await fallback_option.first.wait_for(state="visible", timeout=1500)
                         if await fallback_option.count() >= 1:
                             matched_option = fallback_option.first
                             break
@@ -1250,6 +1259,21 @@ class InstahyrePlatform(BaseJobPlatform):
                 return await self._find_target_card(job)
 
             card = await _find_card_on_current_view()
+
+            if not card and await pagination_div.count() == 0 and await self.page.locator("div.employer-row").count() == 0 and self._current_profile and not getattr(self, "_feed_recovered", False):
+                # Recover once if a transient network/XHR failure wiped the feed between fetch and apply.
+                self._feed_recovered = True
+                log.warning("instahyre.apply.feed_empty_recovering", job_id=job.job_id)
+                try:
+                    await self.page.goto("https://www.instahyre.com/candidate/opportunities/", wait_until="domcontentloaded")
+                    await human_pause(2000, 3000)
+                    await self._dismiss_modals()
+                    await asyncio.wait_for(self._apply_ui_filters(self._current_profile), timeout=180)
+                    if target_page > 1:
+                        await self._switch_to_page(target_page)
+                    card = await _find_card_on_current_view()
+                except Exception as exc:
+                    log.warning("instahyre.apply.feed_recover_failed", job_id=job.job_id, error=str(exc)[:120])
 
             # Dynamic pagination scan, bounded to pages ACTUALLY rendered
             # during fetch. Reading page numbers off the control is
@@ -1412,6 +1436,7 @@ class InstahyrePlatform(BaseJobPlatform):
         try:
             await apply_btn.scroll_into_view_if_needed()
             await apply_btn.click(timeout=4000)
+            await human_pause(1500, 2200)
         except Exception as exc:
             log.warning("instahyre.apply.click_uncertain", job_id=job.job_id, error=str(exc)[:120])
 

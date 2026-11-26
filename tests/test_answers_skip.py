@@ -1605,6 +1605,47 @@ class TestRun818ResolversAndCutshort(unittest.TestCase):
             kind="text",
         )).value, "Yes")
 
+        # Diagnostics #846-#850 regressions:
+        # 1. Text box + "Skip this question" chip must resolve real answer (CCTC? / ECTC?), NOT skip!
+        res_cctc = cfg_engine.resolve(ScreeningQuestion(text="CCTC?", kind="text", options=["Skip this question"]))
+        self.assertIsNotNone(res_cctc)
+        self.assertEqual(res_cctc.value, "4")
+        res_ectc = cfg_engine.resolve(ScreeningQuestion(text="ECTC?", kind="text", options=["Skip this question"]))
+        self.assertIsNotNone(res_ectc)
+        self.assertEqual(res_ectc.value, "7")
+        # 2. Current Variable Compensation -> 0 (not Current CTC 4!)
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(text="Current Variable Compensation", kind="text")).value, "0")
+        # 3. English proficiency must NOT fuzzy-match Hindi ("Conversational")
+        eng_prof_engine = AnswerEngine(kb=[("what is your level of proficiency in hindi?*", "Conversational")], profile_answers={}, strict=True)
+        self.assertIsNone(eng_prof_engine.resolve(ScreeningQuestion(
+            text="What is your level of proficiency in English?*", kind="radio", options=["Beginner", "Conversational", "Fluent"]
+        )))
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="What is your level of proficiency in English?*", kind="radio", options=["Beginner", "Conversational", "Fluent"]
+        )).value, "Fluent")
+        # 4. "Are you based out of Mumbai?" -> No
+        self.assertEqual(bare_engine.resolve(ScreeningQuestion(
+            text="Are you based out of Mumbai?", kind="radio", options=["Yes", "No"]
+        )).value, "No")
+        # 5. Title experience gate catches "(5-7) YOE" and "6-9 Y" when card/JD had no parsed numbers
+        from naukri_agent.config import ExperienceRange
+        rules = FilterRules(experience=ExperienceRange(min_years=0, max_years=3.5))
+        fe = FilterEngine(rules)
+        v_phonepe = fe.evaluate_card(Job("p1", "Software Engineer - Backend (5-7) YOE, Core", "PhonePe", "https://linkedin.com"))
+        self.assertFalse(v_phonepe.passed)
+        self.assertEqual(v_phonepe.reason, SkipReason.FILTER_EXPERIENCE)
+        v_mlops = fe.evaluate_card(Job("p2", "Senior MLOps Engineer [DevOps] || 6-9 Y || Bangalore [Hybrid]", "Accedepro", "https://linkedin.com"))
+        self.assertFalse(v_mlops.passed)
+        self.assertEqual(v_mlops.reason, SkipReason.FILTER_EXPERIENCE)
+        # 6. Extra KB/skill-map items from #846-#848
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(text="Country Code", kind="text")).value, "+91")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(text="What Certification you have", kind="text")).value, "None")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(text="Are you bearing Gulf Experience ?", kind="radio", options=["Yes", "No"])).value, "No")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(text="Rel Exp in Prometheus, Grafana, Datadog?", kind="text")).value, "0")
+        self.assertEqual(cfg_engine.resolve(ScreeningQuestion(
+            text="If you have previously worked at LinkedIn or Microsoft, please provide your approver's name", kind="text"
+        )).value, "N/A")
+
 
 if __name__ == "__main__":
     unittest.main()

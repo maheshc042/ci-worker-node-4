@@ -475,7 +475,7 @@ class AnswerEngine:
         # Stage 0: pure skip-only options (e.g. Databricks/Azure with only "Skip this question")
         _skip_only = {"skip", "skip this", "skip question", "skip this question",
                       "prefer not to answer", "prefer not to say"}
-        if question.options and all(_normalise(opt) in _skip_only for opt in question.options):
+        if question.kind != "text" and question.options and all(_normalise(opt) in _skip_only for opt in question.options):
             log.info("answers.skip_only_option_direct", question=question.text[:120], option=question.options[0][:60])
             return ResolvedAnswer(question.options[0], "intent:skip_only", "option-match-skip")
 
@@ -978,11 +978,24 @@ class AnswerEngine:
 
         _LOCATION_TOKENS = frozenset({"location", "city", "residence", "residing", "place", "address", "state", "country"})
         _ORG_TOKENS = frozenset({"organization", "organisation", "company", "employer", "firm", "workplace"})
+        _SPOKEN_LANGUAGES = frozenset({
+            "english", "hindi", "kannada", "tamil", "telugu", "marathi", "malayalam",
+            "bengali", "gujarati", "punjabi", "odia", "urdu", "french", "german",
+            "spanish", "japanese", "mandarin", "chinese",
+        })
         q_toks = _tokenise(text)
         e_toks = set(best_entry.tokens)
         if (q_toks & _LOCATION_TOKENS and e_toks & _ORG_TOKENS) or (q_toks & _ORG_TOKENS and e_toks & _LOCATION_TOKENS):
             log.info(
                 "answers.fuzzy_rejected_domain_mismatch",
+                question=question.text[:120],
+                matched_pattern=best_entry.pattern[:80],
+                ratio=round(best_ratio, 3),
+            )
+            return None
+        if (q_toks & _SPOKEN_LANGUAGES) and (e_toks & _SPOKEN_LANGUAGES) and not (q_toks & e_toks & _SPOKEN_LANGUAGES):
+            log.info(
+                "answers.fuzzy_rejected_language_mismatch",
                 question=question.text[:120],
                 matched_pattern=best_entry.pattern[:80],
                 ratio=round(best_ratio, 3),
@@ -1512,7 +1525,7 @@ class AnswerEngine:
         (run 569 #73). Free-text variants ("which city...?") still get the
         configured home city, never a bare No."""
         if not re.search(
-            r"\bbased\s+in\b|\bcurren\w*\s+(?:based|located|residing|living)\b|"
+            r"\bbased\s+(?:in|out\s+of)\b|\bcurren\w*\s+(?:based|located|residing|living)\b|"
             r"\bresiding\s+in\b|\blocated\s+in\b|\blive\s+in\b|\bstaying\s+in\b|"
             r"\bcurren\w*\s+in\b",
             text,
@@ -1629,7 +1642,7 @@ class AnswerEngine:
         abort every otherwise-eligible application.
         """
         if not re.search(
-            r"\b(?:ctc|salary|salaries|\bpay\b|package|packages|lakh|lakhs|lpa|compensation|stipend|ectc)\b",
+            r"\b(?:ctc|cctc|ectc|salary|salaries|\bpay\b|package|packages|lakh|lakhs|lpa|compensation|stipend)\b",
             text,
         ):
             return None
@@ -1665,9 +1678,11 @@ class AnswerEngine:
                 return self._fit_to_options("Yes", question, "intent:ctc_consent", "intent-map")
 
         norm = text.lower()
-        if any(m in norm for m in ("expected", "expectation", "looking for", "desired", "asking", "demand")):
+        if any(m in norm for m in ("variable", "bonus", "incentive")) and "fixed" not in norm and "+" not in norm:
+            want = "variable"
+        elif any(m in norm for m in ("expected", "expectation", "looking for", "desired", "asking", "demand", "ectc")):
             want = "expected"
-        elif any(m in norm for m in ("current", "present", "existing", "drawn", "in hand", "fixed")):
+        elif any(m in norm for m in ("current", "present", "existing", "drawn", "in hand", "fixed", "cctc")):
             want = "current"
         else:
             want = "expected"
@@ -1911,6 +1926,8 @@ class AnswerEngine:
         _skip_only = {"skip", "skip this", "skip question", "skip this question",
                       "prefer not to answer", "prefer not to say"}
         if options and all(_normalise(opt) in _skip_only for opt in options):
+            if question.kind == "text":
+                return ResolvedAnswer(answer, pattern, source)
             log.info("answers.skip_only_option", question=question.text[:120],
                      option=options[0][:60])
             return ResolvedAnswer(options[0], pattern, "option-match-skip")

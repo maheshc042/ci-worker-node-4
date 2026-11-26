@@ -53,6 +53,12 @@ _ASSESSMENT_RE = re.compile(
 )
 
 
+_SKIP_ONLY_LABELS = frozenset({
+    "skip", "skip this", "skip question", "skip this question",
+    "prefer not to answer", "prefer not to say",
+})
+
+
 def assessment_skip_detail(text: str) -> str | None:
     """Detail string when a question demands a proctored test, else None."""
     if text and _ASSESSMENT_RE.search(text):
@@ -158,6 +164,9 @@ class ChatbotHandler:
 
             chips = await self._option_texts(S.CHATBOT_CHIPS, scope=scope)
             if chips:
+                if all(" ".join(c.lower().split()) in _SKIP_ONLY_LABELS for c in chips):
+                    if await first_visible(scope, S.CHATBOT_TEXT_INPUT, timeout_ms=200):
+                        return "text", chips
                 return "radio", chips
 
             dropdown = await first_visible(scope, S.CHATBOT_DROPDOWN, timeout_ms=300)
@@ -863,6 +872,15 @@ class ChatbotHandler:
                     log.info("chatbot.tenure_shortfall_skip", question=question.text[:180], detail=shortfall[:150])
                     await self.close()
                     return result
+                if (
+                    question.kind == "text"
+                    and question.options
+                    and all(" ".join(o.lower().split()) in _SKIP_ONLY_LABELS for o in question.options)
+                    and await self._answer_option(question.options[0], "radio")
+                ):
+                    result.answered += 1
+                    log.info("chatbot.text_fallback_skip_chip", question=question.text[:120], option=question.options[0])
+                    continue
                 result.unanswered.append(question)
                 if on_unanswered is not None:
                     await on_unanswered(question)

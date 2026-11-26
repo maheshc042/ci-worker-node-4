@@ -380,3 +380,8 @@ class TestLinkedInReceiptScope(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res.value, "Yes")
         self.assertEqual(platform._screening_review, [])
+
+    def test_resume_name_matching_blocks_ai_vs_fullstack_collision(self):
+        self.assertTrue(linkedin.LinkedInPlatform._resume_name_matches("CV_Mahesh_Chitakoti_2026.pdf Uploaded 2026-11-20", "CV_Mahesh_Chitakoti_2026"))
+        self.assertFalse(linkedin.LinkedInPlatform._resume_name_matches("CV_Mahesh_Chitakoti_2026_1_.pdf Uploaded 2026-11-20", "CV_Mahesh_Chitakoti_2026"))
+        self.assertTrue(linkedin.LinkedInPlatform._resume_name_matches("CV_Mahesh_Chitakoti_2026_1_.pdf Uploaded 2026-11-20", "CV_Mahesh_Chitakoti_2026_1_"))

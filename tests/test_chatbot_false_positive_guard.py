@@ -433,6 +433,45 @@ class TestChatbotFalsePositiveGuard(unittest.IsolatedAsyncioTestCase):
         submit_btn.click.assert_called_once()
         send_icon.click.assert_not_called()
 
+    async def test_skip_chip_with_visible_text_input_classifies_as_text(self):
+        """When Naukri renders a text box alongside a single 'Skip this question' chip
+        (e.g. CCTC? / ECTC?), _classify_input must return kind='text' so real KB/comp
+        answers are typed instead of short-circuiting to 'Skip this question'."""
+        page = MagicMock()
+        handler = cb_mod.ChatbotHandler(
+            page, MagicMock(), RunPolicy(dry_run=True, side_effects_enabled=False)
+        )
+        text_box = MagicMock()
+        with (
+            patch.object(
+                handler,
+                "_option_texts",
+                new=AsyncMock(side_effect=[[], [], ["Skip this question"]]),
+            ),
+            patch.object(cb_mod, "first_visible", new=AsyncMock(return_value=text_box)),
+        ):
+            kind, opts = await handler._classify_input(scope=MagicMock())
+        self.assertEqual(kind, "text")
+        self.assertEqual(opts, ["Skip this question"])
+
+    async def test_naukri_api_match_score_circuit_breaker(self):
+        """After 5 consecutive failures, batch_match_scores stops immediately
+        instead of timing out across 180+ jobs."""
+        from naukri_agent.naukri.naukri_api import NaukriApiClient
+
+        client = NaukriApiClient("tok", timeout_s=1.0, max_concurrent=3)
+        calls = 0
+
+        async def _fail(_jid):
+            nonlocal calls
+            calls += 1
+            return None
+
+        with patch.object(client, "_fetch_score", side_effect=_fail):
+            res = await client.batch_match_scores([f"job-{i}" for i in range(60)])
+        self.assertEqual(res, {})
+        self.assertLessEqual(calls, 6)
+
 if __name__ == "__main__":
     unittest.main()
 

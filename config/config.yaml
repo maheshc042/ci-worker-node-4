@@ -1149,7 +1149,12 @@ answers:
   "re:azure certified|az-400": "No"
   "re:available for a (?:video|virtual|online|in[- ]person|telephonic|phone)(?: or in[- ]person)? interview": "Yes"
   "re:obtained citizenship,? legal permanent resident status or asylum": "No"
-  "re:^if\\s+[\"'“]?yes[\"'”]?\\s*,?\\s*(?:please\\s+)?(?:provide|list|specify|explain|mention|state|describe|share|give)\\b(?!.*how many years)": "N/A"
+  "re:^if\\s+(?:you have (?:previously |ever )?worked|[\"'“]?yes[\"'”]?\\s*,?\\s*(?:please\\s+)?(?:provide|list|specify|explain|mention|state|describe|share|give))\\b(?!.*how many years)": "N/A"
+  "re:what is your level of proficiency in english|proficiency in english": "Fluent"
+  "re:^country code\\??$": "+91"
+  "re:^what certification you have\\??$|do you hold any certifications": "None"
+  "re:gulf experience": "No"
+  "re:debugging automation failures and framework issues": "Yes"
   "re:page object model|\\bpom\\b.*(?:implement|used|framework|pattern)": "Yes"
   "apply to h&m 6/7 pages additional questions here you can find details of our privacy notice.*": "Dismiss"
 
@@ -1353,6 +1358,9 @@ experience:
     kubernetes: 0
     k8s: 0
     terraform: 0
+    prometheus: 0
+    grafana: 0
+    datadog: 0
     ansible: 0
     jenkins: 0
     kafka: 0
@@ -1635,6 +1643,7 @@ profiles:
       instahyre: 25
     resume_label: "Full Stack Engineer"
     resume_file: "resumes/CV_Mahesh_Chitakoti_2026_1_.pdf"
+    min_rank_score: 50
 
     # Primary skills required: AT LEAST ONE of core_skills MUST match in every job
     # Explicit title keywords for scoring (so it doesn't divide by 50)
@@ -1783,6 +1792,7 @@ profiles:
       instahyre: 25
     resume_label: "AI / Python Engineer"
     resume_file: "resumes/CV_Mahesh_Chitakoti_2026.pdf"
+    min_rank_score: 50
 
     # Explicit title keywords for scoring (so it doesn't divide by 33)
     # AI-application and backend first, plus the adjacent software families this

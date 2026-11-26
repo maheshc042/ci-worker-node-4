@@ -136,7 +136,9 @@ class NaukriApiClient:
     ) -> dict[str, MatchScoreResult]:
         """
         Fetch match scores for multiple jobs concurrently (rate-limited by the
-        semaphore set at construction time).
+        semaphore set at construction time). Stops early after consecutive
+        failures so a degraded/blocked internal API cannot stall a run for
+        minutes.
 
         Returns a mapping of job_id → result for jobs that returned a valid
         score. Jobs that errored are simply absent from the dict; the caller
@@ -145,13 +147,26 @@ class NaukriApiClient:
         if not job_ids:
             return {}
 
-        tasks = [self._fetch_score(job_id) for job_id in job_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
-
         scores: dict[str, MatchScoreResult] = {}
-        for job_id, result in zip(job_ids, results):
-            if result is not None:
-                scores[job_id] = result
+        consecutive_failures = 0
+        chunk_size = max(1, self._semaphore._value)
+        for i in range(0, len(job_ids), chunk_size):
+            batch = job_ids[i:i + chunk_size]
+            results = await asyncio.gather(*(self._fetch_score(jid) for jid in batch), return_exceptions=False)
+            for job_id, result in zip(batch, results):
+                if result is not None:
+                    scores[job_id] = result
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+            if consecutive_failures >= 5:
+                log.info(
+                    "naukri_api.circuit_open",
+                    checked=i + len(batch),
+                    total=len(job_ids),
+                    consecutive_failures=consecutive_failures,
+                )
+                break
         return scores
 
     # -------------------------------------------------------------- internal
