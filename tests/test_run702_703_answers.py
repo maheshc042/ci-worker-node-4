@@ -362,3 +362,109 @@ class TestArchivedMandatoryRequirements(unittest.TestCase):
         # AI file with size indicator
         self.assertTrue(_resume_name_matches("CV_Mahesh_Chitakoti_2026.pdf (1.1 MB)", ai_path))
         self.assertFalse(_resume_name_matches("CV_Mahesh_Chitakoti_2026.pdf (1.1 MB)", fs_path))
+
+    def test_run857_858_review_questions_and_declarative_bullets_resolved(self):
+        config = AgentConfig.load()
+        ai_profile = config.active_profiles(account="primary")[0]
+        fs_profile = config.active_profiles(account="secondary")[0]
+
+        def _engine(profile):
+            merged_exp = config.experience_for(profile)
+            return AnswerEngine([], profile_answers={**config.answers, **profile.answers}, experience=merged_exp)
+
+        fs_engine = _engine(fs_profile)
+        ai_engine = _engine(ai_profile)
+
+        # #971 (exp in IQVIA / Healthcare -> No via KB and _resolve_skill_absence)
+        self.assertEqual(
+            ai_engine.resolve(ScreeningQuestion(
+                "Do you have exp in IQVIA Prescription Data and Medical Claims Data or Healthcare?", "text"
+            )).value,
+            "No",
+        )
+        # #973, #974, #979 (Full Stack)
+        self.assertEqual(
+            fs_engine.resolve(ScreeningQuestion("How many modules or features have you built from scratch, not just maintained?", "text")).value,
+            "5",
+        )
+        self.assertEqual(
+            fs_engine.resolve(ScreeningQuestion("How much experience do you have in network protocols?", "text")).value,
+            "1",
+        )
+        self.assertEqual(
+            fs_engine.resolve(ScreeningQuestion("Have you worked on large-scale/complex web applications ?", "radio", ["Yes", "No"])).value,
+            "Yes",
+        )
+        # #975-#978 declarative bullet radio questions (via engine skill map + unclaimed_yes)
+        for q_text in (
+            "•\tStrong proficiency in Python",
+            "•\tExperience with Flask and/or Django",
+            "•\tREST API development",
+            "•\tStrong knowledge of SQL",
+        ):
+            res = fs_engine.resolve(ScreeningQuestion(q_text, "radio", ["Yes", "No"]))
+            self.assertIsNotNone(res, q_text)
+            self.assertEqual(res.value, "Yes", q_text)
+
+        # #980-#998 (Input Zero BMC Helix vs AI agent / MCP questions)
+        for q_text in (
+            "Practical understanding of the BMC Helix platform.",
+            "Exposure to BMC Helix ITSM, Digital Workplace, or related modules.",
+        ):
+            self.assertEqual(ai_engine.resolve(ScreeningQuestion(q_text, "radio", ["Yes", "No"])).value, "No")
+        for q_text in (
+            "Working knowledge of the BMC Helix application stack and architecture.",
+            "Understanding of BMC Helix APIs, workflows, customization, and integration capabilities.",
+            "Ability to develop and integrate applications within the BMC Helix ecosystem.",
+        ):
+            self.assertEqual(ai_engine.resolve(ScreeningQuestion(q_text, "text")).value, "No")
+
+        for q_text in (
+            "Ability to build functional AI agents, integrations, and production-ready applications.",
+            "Strong debugging capabilities.",
+            "Exposure to LangChain, LangGraph, or similar AI agent frameworks.",
+            "Familiarity with JSON, OAuth, API authentication, cloud platforms, version control, and enterprise integration patterns.",
+        ):
+            self.assertEqual(ai_engine.resolve(ScreeningQuestion(q_text, "radio", ["Yes", "No"])).value, "Yes")
+
+        for q_text in (
+            "Ability to independently use AI coding assistants for application development, debugging, and optimization.",
+            "Ability to connect MCP servers with enterprise applications.",
+            "Practical understanding of Large Language Models (LLMs) and AI agent architecture.",
+            "Hands-on exposure to AI agents, function calling, tool calling, and agent-based automation.",
+            "Knowledge of integrating AI capabilities with enterprise applications.",
+            "Strong application development fundamentals.",
+            "Ability to build, test, debug, deploy, and maintain applications.",
+            "Ability to connect multiple systems through APIs, MCP servers, and automation workflows.",
+            "Experience collaborating with internal technical teams and working directly with enterprise users or clients, including translating business requirements into technical solutions.",
+            "Ability to independently build and configure MCP servers.",
+        ):
+            self.assertEqual(ai_engine.resolve(ScreeningQuestion(q_text, "text")).value, "Yes")
+
+        # #999, #1000 (Spydra AI & ML Python Full Stack), #1001 (Software Backend/Database Role)
+        self.assertEqual(
+            ai_engine.resolve(ScreeningQuestion(
+                "How many years of full-stack development do you have with Python frameworks (Django / FastAPI / Flask)?", "text"
+            )).value,
+            "2",
+        )
+        self.assertEqual(
+            ai_engine.resolve(ScreeningQuestion(
+                "How many LLM-based features (chatbot, RAG, document Q&A, agents) have you shipped to production?", "text"
+            )).value,
+            "3",
+        )
+        self.assertEqual(
+            fs_engine.resolve(ScreeningQuestion(
+                "What is your role as a Software Backend / Database & Automation Developer ?", "text"
+            )).value,
+            "Backend, Database & Automation Software Developer",
+        )
+        # Known unsupported bullet resolves honestly to No; truly unlisted skill still routes to review (None)
+        self.assertEqual(
+            fs_engine.resolve(ScreeningQuestion("•\tStrong proficiency in Cobol", "radio", ["Yes", "No"])).value,
+            "No",
+        )
+        self.assertIsNone(
+            fs_engine.resolve(ScreeningQuestion("•\tStrong proficiency in Underwater Basketweaving", "radio", ["Yes", "No"]))
+        )

@@ -1384,6 +1384,27 @@ class AnswerEngine:
             r"\b(?:having|do\s+you\s+have)\s+knowledge\s+(?:about|of|in)\b",
             text,
         ):
+            # Also evaluate declarative binary Yes/No skill bullets (e.g. "• Strong proficiency in Python")
+            opts = list(question.options or [])
+            has_yes = any(self._polarity(_normalise(o)) is True for o in opts)
+            has_no = any(self._polarity(_normalise(o)) is False for o in opts)
+            stripped = text.lstrip("•-*·▪▸ ").strip()
+            if (
+                question.kind in {"radio", "select"}
+                and has_yes
+                and has_no
+                and not re.search(r"\b(?:years?|yrs?|months?|mos?|when|where|which|what)\b", stripped)
+                and (
+                    text.startswith(("•", "·", "▪", "▸"))
+                    or re.search(
+                        r"\b(?:strong\s+(?:proficiency|knowledge|understanding|capabilities)|"
+                        r"experience\s+with|rest\s+api\s+development|"
+                        r"practical\s+understanding|exposure\s+to|familiarity\s+with)\b",
+                        stripped,
+                    )
+                )
+            ):
+                return self._resolve_declarative_binary(stripped, question)
             return None
         frag = ((m.group(1) if m else text) or "").strip()
         if not frag or len(frag) > 200:
@@ -1410,6 +1431,47 @@ class AnswerEngine:
             if fitted is not None:
                 log.info("answers.experienced_no", question=question.text[:120])
             return fitted
+        return None
+
+    def _resolve_declarative_binary(
+        self, stripped: str, question: ScreeningQuestion
+    ) -> ResolvedAnswer | None:
+        """Resolve binary Yes/No requirement statements against claimed/zero/unclaimed skills."""
+        pos_hit: str | None = None
+        zero_hit: str | None = None
+
+        for skill, years in (self.experience.skills or {}).items():
+            phrase = _normalise(skill)
+            if not phrase or not _contains_word(stripped, phrase):
+                continue
+            try:
+                skill_years = float(years)
+            except (TypeError, ValueError):
+                continue
+            if skill_years > 0:
+                pos_hit = pos_hit or phrase
+            else:
+                zero_hit = zero_hit or phrase
+
+        if not zero_hit:
+            for item in (getattr(self.experience, "unclaimed_no", None) or ()):
+                phrase = _normalise(item)
+                if phrase and _contains_word(stripped, phrase):
+                    zero_hit = phrase
+                    break
+
+        if not pos_hit:
+            for item in (getattr(self.experience, "unclaimed_yes", None) or ()):
+                phrase = _normalise(item)
+                if phrase and _contains_word(stripped, phrase):
+                    pos_hit = phrase
+                    break
+
+        is_disjunction = bool(re.search(r"\b(?:and\s*/\s*or|or)\b|/", stripped))
+        if zero_hit and not (is_disjunction and pos_hit):
+            return self._fit_to_options("No", question, f"declarative:zero:{zero_hit}", "skill-map")
+        if pos_hit:
+            return self._fit_to_options("Yes", question, f"declarative:yes:{pos_hit}", "skill-map")
         return None
 
     def _resolve_tenure_comparison(self, text: str, question: ScreeningQuestion) -> ResolvedAnswer | None:
@@ -1579,7 +1641,7 @@ class AnswerEngine:
                 if pair[0] not in generic
             ]
             if specific:
-                if not re.search(r"\bor\b", text) and any(
+                if not re.search(r"\bor\b|/", text) and any(
                     _contains_word(text, skill)
                     and not any(_contains_word(phrase, skill) for phrase, _ in specific)
                     for skill in config.listed_skills
@@ -1778,18 +1840,18 @@ class AnswerEngine:
         """
         m = re.search(
             r"\b(?:do\s+you\s+have|have\s+you(?:\s+got)?)\b[^?]{0,24}?"
-            r"\b(?:experience|knowledge|expertise|skills?)\s+"
+            r"\b(?:experience|exp|knowledge|expertise|skills?)\s+"
             r"(?:in|with|of|using)\s+(.+?)\s*\??$",
             text,
         ) or re.search(
             r"\b(?:do\s+you\s+have|have\s+you(?:\s+got)?)\b[^?]{0,24}?"
-            r"\b(.+?)\s+(?:experience|knowledge|expertise|skills?)\b",
+            r"\b(.+?)\s+(?:experience|exp|knowledge|expertise|skills?)\b",
             text,
         )
         if not m:
             return None
         skill = (m.group(1) or "").strip()
-        if not skill or len(skill) > 40:
+        if not skill or len(skill) > 100:
             return None
 
         frag = " ".join(t for t in _tokenise(skill) if t not in self._SKILL_FILLER)

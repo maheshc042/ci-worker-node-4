@@ -1157,6 +1157,29 @@ answers:
   "re:debugging automation failures and framework issues": "Yes"
   "re:page object model|\\bpom\\b.*(?:implement|used|framework|pattern)": "Yes"
   "apply to h&m 6/7 pages additional questions here you can find details of our privacy notice.*": "Dismiss"
+  # Run 857/858 / Questions #971-#1001 trained 2026-11-27
+  "re:iqvia|medical claims data": "No"
+  "re:how many modules or features have you built from scratch": "5"
+  "re:how (?:much|many years of) experience do you have in network protocols": "1"
+  "re:worked on large[- ]scale/?complex web applications": "Yes"
+  "re:bmc helix": "No"
+  "re:ability to build functional ai agents": "Yes"
+  "re:strong debugging capabilities": "Yes"
+  "re:exposure to langchain,? langgraph": "Yes"
+  "re:familiarity with json,? oauth,? api authentication": "Yes"
+  "re:ability to independently use ai coding assistants": "Yes"
+  "re:ability to connect mcp servers with enterprise": "Yes"
+  "re:practical understanding of large language models.*ai agent": "Yes"
+  "re:hands-on exposure to ai agents,? function calling,? tool calling": "Yes"
+  "re:knowledge of integrating ai capabilities with enterprise": "Yes"
+  "re:strong application development fundamentals": "Yes"
+  "re:ability to build,? test,? debug,? deploy,? and maintain applications": "Yes"
+  "re:ability to connect multiple systems through apis,? mcp servers": "Yes"
+  "re:experience collaborating with internal technical teams.*translating business requirements": "Yes"
+  "re:ability to independently build and configure mcp servers": "Yes"
+  "re:full-stack development.*with python frameworks": "2"
+  "re:how many llm-based features.*shipped to production": "3"
+  "re:what is your role as a software backend\\s*/\\s*database.*automation": "Backend, Database & Automation Software Developer"
 
 # ---------------------------------------------------------------------------
 # Skill -> years map. This answers the open-ended "how many years of X?" family
@@ -1379,6 +1402,12 @@ experience:
     power automate: 0
     rpa: 0
     selenium: 0
+    django: 1
+    web applications: 3
+    network protocols: 1
+    bmc helix: 0
+    bmc helix itsm: 0
+    iqvia: 0
 
   # --- Hybrid unclaimed-skill policy (user-approved) ------------------------
   # When a screening question names a skill that is NOT in `skills` above and
